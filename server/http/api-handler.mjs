@@ -254,6 +254,26 @@ export function createApiHandler(runtime) {
         else json(res, 200, updated)
         return true
       }
+      const sessionPermissionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/permission$/)
+      if (req.method === 'PUT' && sessionPermissionMatch) {
+        const body = await bodyJson(req)
+        const updated = await runtime.setSessionPermission(decodeURIComponent(sessionPermissionMatch[1]), body.mode)
+        if (!updated) json(res, 404, { error: '会话不存在。' })
+        else json(res, 200, updated)
+        return true
+      }
+      const sessionApprovalMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/approvals\/([^/]+)$/)
+      if (req.method === 'POST' && sessionApprovalMatch) {
+        const body = await bodyJson(req)
+        const resolved = runtime.resolveToolApproval(
+          decodeURIComponent(sessionApprovalMatch[1]),
+          decodeURIComponent(sessionApprovalMatch[2]),
+          Boolean(body.approved),
+        )
+        if (!resolved) json(res, 404, { error: '授权请求不存在或已经处理。' })
+        else json(res, 200, { resolved: true, approved: Boolean(body.approved) })
+        return true
+      }
       const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/)
       if (req.method === 'PATCH' && sessionMatch) {
         const id = decodeURIComponent(sessionMatch[1])

@@ -380,7 +380,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
   const updateSessionState = useCallback((id, update) => {
     if (!id) return
     const current = sessionStatesRef.current
-    const previous = current[id] || { messages: [], tools: [], streaming: false, error: '', loaded: false }
+    const previous = current[id] || { messages: [], tools: [], approvals: [], streaming: false, error: '', loaded: false }
     const next = typeof update === 'function' ? update(previous) : { ...previous, ...update }
     const states = { ...current, [id]: next }
     sessionStatesRef.current = states
@@ -402,8 +402,10 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
         error: data.error || '',
         model: data.model || current.model,
         cwd: data.cwd || current.cwd,
+        permissionMode: data.permissionMode || current.permissionMode,
+        approvals: data.approvals || [],
       }))
-      setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd } : session))
+      setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode } : session))
     } catch (caught) {
       updateSessionState(id, { recovering: false, loading: false, error: caught.message })
     }
@@ -446,7 +448,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
       setError('')
       const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: '新会话' }) })
       setActiveId(created.id)
-      updateSessionState(created.id, { messages: [], tools: [], streaming: false, error: '', loaded: true })
+      updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', streaming: false, error: '', loaded: true })
       setTiledSessionIds((current) => current.includes(created.id) ? current : [...current, created.id])
       setMode('focus')
       await refreshSessions(created.id)
@@ -536,7 +538,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
     const userMessage = { id: `user-${Date.now()}`, role: 'user', text: prompt, attachments: attachments.map(({ id, kind, name, mimeType, size, data }) => ({ id, kind, name, mimeType, size, data: kind === 'image' ? data : undefined })) }
     const agentId = `agent-${Date.now()}`
     let responseText = ''
-    updateSessionState(sessionId, (current) => ({ ...current, messages: [...current.messages, userMessage, { id: agentId, role: 'agent', text: '', streaming: true }], tools: [], error: '', streaming: true, loaded: true }))
+    updateSessionState(sessionId, (current) => ({ ...current, messages: [...current.messages, userMessage, { id: agentId, role: 'agent', text: '', streaming: true }], tools: [], approvals: [], error: '', streaming: true, loaded: true }))
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -546,8 +548,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
       await consumeEventStream(response, (event, data) => {
         if (event === 'meta') {
           setModel(data.model)
-          updateSessionState(sessionId, { model: data.model, cwd: data.cwd })
-          if (data.cwd) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd } : session))
+          updateSessionState(sessionId, { model: data.model, cwd: data.cwd, permissionMode: data.permissionMode })
+          if (data.cwd || data.permissionMode) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode } : session))
         } else if (event === 'text_delta') {
           responseText += data.delta || ''
           updateSessionState(sessionId, (current) => ({ ...current, messages: current.messages.map((item) => item.id === agentId ? { ...item, text: item.text + data.delta } : item) }))
@@ -559,6 +561,10 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
             error: data.error ? data.message || `${data.name} 执行失败` : current.error,
             tools: current.tools.map((item) => item.id === data.id ? { ...item, status: data.error ? 'error' : 'done', message: data.message || '' } : item),
           }))
+        } else if (event === 'permission_request') {
+          updateSessionState(sessionId, (current) => ({ ...current, approvals: [...(current.approvals || []).filter((item) => item.id !== data.id), data] }))
+        } else if (event === 'permission_resolved') {
+          updateSessionState(sessionId, (current) => ({ ...current, approvals: (current.approvals || []).filter((item) => item.id !== data.id) }))
         } else if (event === 'generated_asset') {
           updateSessionState(sessionId, (current) => ({
             ...current,
@@ -611,6 +617,33 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
       notify(`已切换至 ${selected.label}`)
     } catch (caught) {
       updateSessionState(sessionId, { switchingModel: false, error: caught.message })
+    }
+  }
+
+  const switchSessionPermission = async (sessionId, permissionMode) => {
+    if (!sessionId) return
+    updateSessionState(sessionId, { switchingPermission: true, error: '' })
+    try {
+      const updated = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/permission`, {
+        method: 'PUT', body: JSON.stringify({ mode: permissionMode }),
+      })
+      updateSessionState(sessionId, { permissionMode: updated.permissionMode, switchingPermission: false })
+      setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, permissionMode: updated.permissionMode } : session))
+      notify(`权限模式已切换为${updated.permissionMode === 'ask' ? '询问' : updated.permissionMode === 'ignore' ? '忽略' : '自动'}`)
+    } catch (caught) {
+      updateSessionState(sessionId, { switchingPermission: false, error: caught.message })
+    }
+  }
+
+  const resolveToolApproval = async (sessionId, approvalId, approved) => {
+    try {
+      await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`, {
+        method: 'POST', body: JSON.stringify({ approved }),
+      })
+      updateSessionState(sessionId, (current) => ({ ...current, approvals: (current.approvals || []).filter((item) => item.id !== approvalId) }))
+    } catch (caught) {
+      updateSessionState(sessionId, { error: caught.message })
+      throw caught
     }
   }
 
@@ -675,7 +708,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
     tiledSessionIds.includes(session.id) && `${session.name} ${session.firstMessage}`.toLowerCase().includes(query.toLowerCase()),
   ), [remoteSessions, query, tiledSessionIds])
   const activeSession = remoteSessions.find((session) => session.id === activeId)
-  const activeState = sessionStates[activeId] || { messages: [], tools: [], streaming: false, error: '', loading: false, switchingModel: false, switchingCwd: false }
+  const activeState = sessionStates[activeId] || { messages: [], tools: [], approvals: [], streaming: false, error: '', loading: false, switchingModel: false, switchingCwd: false, switchingPermission: false }
 
   useEffect(() => {
     document.title = activeSession?.name ? `${activeSession.name} · Pi Coder` : 'Pi Coder'
@@ -691,16 +724,16 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
       </Panel>
       {loading ? <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在启动 Agent</h2><p>加载模型目录与历史会话…</p></Panel> : mode === 'grid' ? (
         <div className="session-grid">
-          {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
+          {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} permissionMode={sessionStates[session.id]?.permissionMode || session.permissionMode || 'auto'} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(session.id, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(session.id, approvalId, approved)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
         </div>
-      ) : <FocusSession session={activeSession} messages={activeState.messages} model={activeState.model || activeSession?.model || model} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} streaming={activeState.streaming} tools={activeState.tools} error={activeState.error || error} pendingAsset={pendingAsset} onAssetConsumed={onAssetConsumed} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} />}
+      ) : <FocusSession session={activeSession} messages={activeState.messages} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} onAssetConsumed={onAssetConsumed} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} />}
     </div>
     {workspaceSession && <WorkspacePicker session={workspaceSession} onClose={() => setWorkspaceSession(null)} onSelect={(cwd) => switchSessionCwd(workspaceSession, cwd)} />}
     </>
   )
 }
 
-function SessionCard({ session, state, model, availableModels, onModelChange, onWorkspace, onOpen, onRename, onSend, onAbort }) {
+function SessionCard({ session, state, model, permissionMode, availableModels, onModelChange, onPermissionChange, onApproval, onWorkspace, onOpen, onRename, onSend, onAbort }) {
   const [value, setValue] = useState('')
   const selection = useAttachmentSelection()
   const liveRef = useRef(null)
@@ -726,9 +759,10 @@ function SessionCard({ session, state, model, availableModels, onModelChange, on
         {state?.error && <div className="mini-session-error"><AlertTriangle size={11} />{state.error}</div>}
       </div>
       <form className="mini-composer-shell" onSubmit={submit}>
+        <ToolApproval approvals={state?.approvals || EMPTY_LIST} onResolve={onApproval} compact />
         <AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} compact />
         {selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}
-        <div className="mini-composer"><button type="button" className="attach-trigger" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={14} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><input value={value} onChange={(event) => setValue(event.target.value)} placeholder={streaming ? 'Agent 正在运行…' : '输入 prompt 或添加附件...'} disabled={streaming} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || state?.switchingModel} compact />{streaming ? <button type="button" className="send-mini stop" onClick={onAbort}><Square size={12} /></button> : <button className="send-mini" disabled={!value.trim() && !selection.attachments.length}><Send size={13} /></button>}</div>
+        <div className="mini-composer"><button type="button" className="attach-trigger" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={14} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><input value={value} onChange={(event) => setValue(event.target.value)} placeholder={streaming ? 'Agent 正在运行…' : '输入 prompt 或添加附件...'} disabled={streaming} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || state?.switchingModel} compact /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={state?.switchingPermission} compact />{streaming ? <button type="button" className="send-mini stop" onClick={onAbort}><Square size={12} /></button> : <button className="send-mini" disabled={!value.trim() && !selection.attachments.length}><Send size={13} /></button>}</div>
       </form>
     </Panel>
   )
@@ -745,6 +779,28 @@ function SessionModelSelect({ value, models, onChange, disabled, compact = false
       <ChevronDown size={11} />
     </label>
   )
+}
+
+const PERMISSION_OPTIONS = [
+  ['ask', '询问', '敏感工具执行前需要确认'],
+  ['auto', '自动', '自动执行，危险操作仍会询问'],
+  ['ignore', '忽略', '跳过额外审批，仅受已启用工具限制'],
+]
+
+function PermissionModeSelect({ value, onChange, disabled, compact = false }) {
+  const current = PERMISSION_OPTIONS.find((item) => item[0] === value) || PERMISSION_OPTIONS[1]
+  return <label className={`permission-mode-select ${compact ? 'compact' : ''}`} title={current[2]}><ShieldCheck size={compact ? 10 : 13} /><select value={current[0]} onChange={(event) => onChange(event.target.value)} disabled={disabled} aria-label="工具权限模式">{PERMISSION_OPTIONS.map(([mode, label, description]) => <option value={mode} title={description} key={mode}>{label}</option>)}</select><ChevronDown size={10} /></label>
+}
+
+function ToolApproval({ approvals, onResolve, compact = false }) {
+  const [resolving, setResolving] = useState(false)
+  const approval = approvals[0]
+  if (!approval) return null
+  const resolve = async (approved) => {
+    setResolving(true)
+    try { await onResolve(approval.id, approved) } finally { setResolving(false) }
+  }
+  return <div className={`tool-approval ${compact ? 'compact' : ''}`}><div><ShieldCheck size={compact ? 12 : 15} /><span><strong>{approval.toolName} 请求授权</strong><small>{approval.reason}{approvals.length > 1 ? ` · 另有 ${approvals.length - 1} 项等待` : ''}</small></span></div>{!compact && <details><summary>查看调用参数</summary><pre>{JSON.stringify(approval.args, null, 2)}</pre></details>}<div className="tool-approval-actions"><button type="button" className="button secondary" disabled={resolving} onClick={() => resolve(false)}>拒绝</button><button type="button" className="button primary" disabled={resolving} onClick={() => resolve(true)}>{resolving ? <RefreshCw className="spin" size={12} /> : <Check size={12} />}允许</button></div></div>
 }
 
 function WorkspacePicker({ session, onClose, onSelect }) {
@@ -806,7 +862,7 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, model, cwd, availableModels, switchingModel, switchingCwd, streaming, tools, error, pendingAsset, onAssetConsumed, onModelChange, onWorkspace, onRename, onSend, onAbort }) {
+function FocusSession({ session, messages, model, permissionMode, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, approvals, error, pendingAsset, onAssetConsumed, onModelChange, onPermissionChange, onApproval, onWorkspace, onRename, onSend, onAbort }) {
   const [value, setValue] = useState('')
   const selection = useAttachmentSelection()
   const addSelectedAttachments = selection.addAttachments
@@ -837,7 +893,7 @@ function FocusSession({ session, messages, model, cwd, availableModels, switchin
         {tools.length > 0 && <div className="tool-trace"><strong>工具执行</strong>{tools.map((tool) => <span key={tool.id} className={tool.status}><Wrench size={12} />{tool.name}<em>{tool.status === 'running' ? '运行中' : tool.status === 'done' ? '完成' : '失败'}</em></span>)}</div>}
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
-      <form className="focus-composer-shell" onSubmit={submit}><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 150)}px` }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={streaming ? 'Agent 正在运行，可停止后继续输入' : '输入消息，Shift + Enter 换行'} disabled={streaming} /><button className="send-button" disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={16} /></button></div></form>
+      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 150)}px` }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={streaming ? 'Agent 正在运行，可停止后继续输入' : '输入消息，Shift + Enter 换行'} disabled={streaming} /><button className="send-button" disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={16} /></button></div></form>
     </Panel>
   )
 }

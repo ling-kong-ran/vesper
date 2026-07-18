@@ -12,6 +12,7 @@ import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
 import { ChannelService } from '../services/channels/channel-service.mjs'
 import { NotificationSettingsService } from '../services/notification-settings-service.mjs'
 import { ScheduleService } from '../services/schedule-service.mjs'
+import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, SessionPermissionService } from '../services/session-permission-service.mjs'
 import { ToolPluginService } from '../services/tool-plugin-service.mjs'
 import { extractConversationMemories } from '../services/memory/conversation-memory.mjs'
 import { LocalMemoryRuntime } from '../services/memory/local-memory-runtime.mjs'
@@ -228,6 +229,9 @@ export class AgentRuntimeService {
     this.modelRuntime = null
     this.settingsManager = null
     this.sessionMeta = {}
+    this.permissions = new SessionPermissionService({
+      getMode: (sessionId) => this.sessionMeta[sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
+    })
     this.sessionMetaWrite = Promise.resolve()
     this.usageLedger = { days: {} }
     this.usageWrite = Promise.resolve()
@@ -260,7 +264,10 @@ export class AgentRuntimeService {
   }
 
   async disposeSessions() {
-    for (const value of this.sessions.values()) value.session.dispose()
+    for (const [id, value] of this.sessions) {
+      this.permissions.resolveSession(id, false, 'Agent Runtime 正在重新加载，工具未执行。')
+      value.session.dispose()
+    }
     this.sessions.clear()
   }
 
@@ -515,6 +522,7 @@ export class AgentRuntimeService {
         created: session.created.toISOString(),
         modified: session.modified.toISOString(),
         streaming: Boolean(active?.session.isStreaming),
+        permissionMode: this.sessionMeta[session.id]?.permissionMode || DEFAULT_PERMISSION_MODE,
       }
     })
     const persistedIds = new Set(result.map((session) => session.id))
@@ -530,6 +538,7 @@ export class AgentRuntimeService {
         created: value.created,
         modified: value.modified,
         streaming: Boolean(value.session.isStreaming),
+        permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
       })
     }
     return result
@@ -549,6 +558,7 @@ export class AgentRuntimeService {
       cwd: value.cwd || this.cwd,
       created: new Date().toISOString(),
       modified: new Date().toISOString(),
+      permissionMode: this.sessionMeta[value.session.sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
     }
   }
 
@@ -600,6 +610,8 @@ export class AgentRuntimeService {
       error: live?.error || '',
       model: active?.session.model ? `${active.session.model.provider}/${active.session.model.id}` : '',
       cwd: active?.cwd || this.sessionMeta[id]?.cwd || this.cwd,
+      permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
+      approvals: this.permissions.getPending(id),
     }
   }
 
@@ -647,6 +659,20 @@ export class AgentRuntimeService {
       provider: model.provider,
       modelId: model.id,
     }
+  }
+
+  async setSessionPermission(id, mode) {
+    const permissionMode = String(mode || '')
+    if (!PERMISSION_MODES.has(permissionMode)) throw new Error('权限模式无效。')
+    if (!this.sessions.has(id) && !(await this.findSessionInfo(id))) return null
+    this.sessionMeta[id] = { ...(this.sessionMeta[id] || {}), permissionMode }
+    await this.saveSessionMeta()
+    if (permissionMode !== 'ask') this.permissions.resolveSession(id, true, `权限模式已切换为${permissionMode === 'ignore' ? '忽略' : '自动'}。`)
+    return { id, permissionMode }
+  }
+
+  resolveToolApproval(sessionId, approvalId, approved) {
+    return this.permissions.resolve(sessionId, approvalId, approved)
   }
 
   async setSessionCwd(id, input) {
@@ -741,6 +767,7 @@ export class AgentRuntimeService {
     }
     runtimeValue = value
     runtimeSession = session
+    this.permissions.install(session, { sessionId: session.sessionId, cwd: effectiveCwd })
     this.sessions.set(session.sessionId, value)
     return value
   }
@@ -775,6 +802,7 @@ export class AgentRuntimeService {
       model: `${session.model.provider}/${session.model.id}`,
       thinkingLevel: session.thinkingLevel,
       cwd: value.cwd,
+      permissionMode: this.sessionMeta[session.sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
     })
 
     const toolArgs = new Map()
@@ -813,6 +841,7 @@ export class AgentRuntimeService {
       }
     })
 
+    this.permissions.attachEmitter(session.sessionId, send)
     try {
       const safeAttachments = Array.isArray(attachments) ? attachments.slice(0, 8) : []
       await this.archiveAttachments(session.sessionId, value.name, safeAttachments)
@@ -875,6 +904,7 @@ export class AgentRuntimeService {
       throw error
     } finally {
       unsubscribe()
+      this.permissions.detachEmitter(session.sessionId, send)
       live.streaming = false
       const timer = setTimeout(() => { if (this.liveSessions.get(session.sessionId) === live) this.liveSessions.delete(session.sessionId) }, 60_000)
       timer.unref?.()
@@ -947,11 +977,13 @@ export class AgentRuntimeService {
   async abortSession(id) {
     const value = this.sessions.get(id)
     if (!value) return false
+    this.permissions.resolveSession(id, false, '会话已停止，工具未执行。')
     await value.session.abort()
     return true
   }
 
   async deleteSession(id) {
+    this.permissions.resolveSession(id, false, '会话已删除，工具未执行。')
     const active = this.sessions.get(id)
     let sessionFile = active?.session.sessionFile
     if (active) {
@@ -1130,6 +1162,7 @@ export class AgentRuntimeService {
   async dispose() {
     await this.schedules.dispose()
     await this.channels.dispose()
+    this.permissions.dispose()
     await this.disposeSessions()
     this.memory.dispose()
   }
