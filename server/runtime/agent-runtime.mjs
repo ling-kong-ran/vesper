@@ -17,6 +17,7 @@ import { inferModelKind, VisualGenerationService } from '../services/visual-gene
 import { assetMessageAttachment, attachGeneratedAssets } from '../services/session-assets.mjs'
 import { forceNextToolCall, isVisualGenerationRequest } from '../services/visual-tool-routing.mjs'
 import { createAppTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry.mjs'
+import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
 
 const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter']
 const PROVIDER_LABELS = {
@@ -699,6 +700,9 @@ export class AgentRuntimeService {
     const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only' })
     const effectiveCwd = await resolveDirectory(this.sessionMeta[sessionManager.getSessionId()]?.cwd, sessionManager.getCwd() || this.cwd)
     const enabledTools = toolsFromConfig(appConfig)
+    const platformBashTool = enabledTools.includes('bash')
+      ? createWindowsUtf8BashTool(effectiveCwd)
+      : null
     let runtimeValue = null
     let runtimeSession = null
     const { session, modelFallbackMessage } = await createAgentSession({
@@ -708,14 +712,17 @@ export class AgentRuntimeService {
       settingsManager: this.settingsManager,
       sessionManager,
       tools: enabledTools,
-      customTools: createAppTools({
-        cwd: effectiveCwd,
-        enabledTools,
-        visualGenerationService: this.visualGeneration,
-        onGeneratedFile: ({ path }) => runtimeValue && runtimeSession
-          ? this.recordGeneratedFile(runtimeSession.sessionId, runtimeValue, path)
-          : undefined,
-      }),
+      customTools: [
+        ...createAppTools({
+          cwd: effectiveCwd,
+          enabledTools,
+          visualGenerationService: this.visualGeneration,
+          onGeneratedFile: ({ path }) => runtimeValue && runtimeSession
+            ? this.recordGeneratedFile(runtimeSession.sessionId, runtimeValue, path)
+            : undefined,
+        }),
+        ...(platformBashTool ? [platformBashTool] : []),
+      ],
     })
     const now = new Date().toISOString()
     const value = {
