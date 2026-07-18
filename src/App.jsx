@@ -788,8 +788,18 @@ const PERMISSION_OPTIONS = [
 ]
 
 function PermissionModeSelect({ value, onChange, disabled, compact = false }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef(null)
   const current = PERMISSION_OPTIONS.find((item) => item[0] === value) || PERMISSION_OPTIONS[1]
-  return <label className={`permission-mode-select ${compact ? 'compact' : ''}`} title={current[2]}><ShieldCheck size={compact ? 10 : 13} /><select value={current[0]} onChange={(event) => onChange(event.target.value)} disabled={disabled} aria-label="工具权限模式">{PERMISSION_OPTIONS.map(([mode, label, description]) => <option value={mode} title={description} key={mode}>{label}</option>)}</select><ChevronDown size={10} /></label>
+  useEffect(() => {
+    if (!open) return undefined
+    const close = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false) }
+    const escape = (event) => { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', escape)
+    return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape) }
+  }, [open])
+  return <div ref={rootRef} className={`permission-mode-select ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}><button type="button" className="permission-mode-trigger" title={current[2]} disabled={disabled} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((visible) => !visible)}><ShieldCheck size={compact ? 11 : 14} /><span>{current[1]}</span><ChevronDown size={10} /></button>{open && <div className="permission-mode-menu" role="menu">{PERMISSION_OPTIONS.map(([mode, label, description]) => <button type="button" role="menuitemradio" aria-checked={mode === current[0]} className={mode === current[0] ? 'active' : ''} onClick={() => { onChange(mode); setOpen(false) }} key={mode}><span className={`permission-level level-${mode}`}><ShieldCheck size={13} /></span><span><strong>{label}</strong><small>{description}</small></span>{mode === current[0] && <Check size={13} />}</button>)}</div>}</div>
 }
 
 function ToolApproval({ approvals, onResolve, compact = false }) {

@@ -161,10 +161,12 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .session-model-select.compact select { font-size: 9px; }
 .session-model-select svg { position: absolute; right: 6px; flex: none; pointer-events: none; }
 .session-model-select:has(select:disabled) { cursor: not-allowed; opacity: .55; }
-.permission-mode-select { position: relative; display: grid; min-width: 78px; height: 30px; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 4px; border-radius: 6px; background: #f1f5f9; color: #475569; padding: 0 6px; }
-.permission-mode-select.compact { min-width: 58px; height: 22px; gap: 2px; padding: 0 4px; }
-.permission-mode-select select { width: 100%; height: 100%; appearance: none; border: 0; outline: 0; background: transparent; color: inherit; padding: 0; font-size: 9px; font-weight: 700; }
-.permission-mode-select.compact select { font-size: 8px; }.permission-mode-select > svg:last-child { pointer-events: none; }.permission-mode-select:has(select:disabled) { opacity: .55; }
+.permission-mode-select { position: relative; min-width: 78px; height: 30px; color: #475569; }.permission-mode-select.compact { min-width: 58px; height: 22px; }
+.permission-mode-trigger { display: grid; width: 100%; height: 100%; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 7px; background: #f1f5f9; color: inherit; padding: 0 7px; font-size: 9px; font-weight: 700; }.permission-mode-trigger:hover,.permission-mode-select.open .permission-mode-trigger { border-color: #bfdbfe; background: #eff6ff; color: var(--blue); }.permission-mode-trigger:disabled { cursor: not-allowed; opacity: .55; }
+.permission-mode-select.compact .permission-mode-trigger { gap: 3px; border-radius: 5px; padding: 0 4px; font-size: 8px; }
+.permission-mode-menu { position: absolute; z-index: 35; right: 0; bottom: calc(100% + 8px); width: 250px; overflow: hidden; border: 1px solid var(--stroke); border-radius: 10px; background: white; padding: 5px; box-shadow: 0 18px 42px -18px rgba(15,23,42,.48); }
+.permission-mode-menu > button { display: grid; width: 100%; min-height: 48px; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 8px; border: 0; border-radius: 7px; background: transparent; color: var(--text); padding: 6px 7px; text-align: left; }.permission-mode-menu > button:hover,.permission-mode-menu > button.active { background: #eff6ff; }.permission-mode-menu > button > span:nth-child(2) { display: flex; min-width: 0; flex-direction: column; gap: 2px; }.permission-mode-menu strong { font-size: 9px; }.permission-mode-menu small { color: var(--muted); font-size: 7px; line-height: 1.4; }.permission-mode-menu > button > svg { color: var(--blue); }
+.permission-level { display: grid; width: 27px; height: 27px; place-items: center; border-radius: 7px; background: #f1f5f9; color: #64748b; }.permission-level.level-auto { background: #dbeafe; color: #2563eb; }.permission-level.level-ignore { background: #fee2e2; color: #dc2626; }
 .send-mini { display: grid; width: 22px; height: 22px; place-items: center; border: 0; border-radius: 5px; background: var(--blue); color: white; }
 .send-mini.stop { background: var(--danger); }
 .send-mini:disabled, .send-button:disabled { opacity: .38; }
@@ -190,9 +192,9 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .chat-error { display: flex; width: min(960px,100%); align-items: center; gap: 7px; margin: 8px auto; border-radius: 8px; background: #fef2f2; color: #b91c1c; padding: 9px 11px; font-size: 11px; }
 .focus-composer-shell { display: flex; width: min(960px,calc(100% - 48px)); flex: none; flex-direction: column; gap: 7px; margin: 0 auto; padding: 10px 0 16px; }
 .focus-composer { display: grid; min-height: 118px; grid-template-columns: 38px auto auto minmax(0,1fr) 38px; grid-template-rows: minmax(64px,1fr) 38px; gap: 7px; align-items: end; border: 1px solid #cbd5e1; border-radius: 14px; background: white; padding: 7px; box-shadow: 0 14px 34px -24px rgba(15,23,42,.55); }
-.focus-composer button, .focus-composer select { height: 38px; border: 0; border-radius: 9px; background: #f4f7fa; font-size: 10px; }
+.focus-composer > button { height: 38px; border: 0; border-radius: 9px; background: #f4f7fa; font-size: 10px; }
 .focus-composer > .attach-trigger { grid-column: 1; grid-row: 2; }.focus-composer .session-model-select { max-width: 190px; height: 38px; grid-column: 2; grid-row: 2; border-radius: 9px; }
-.focus-composer .permission-mode-select { height: 38px; grid-column: 3; grid-row: 2; border-radius: 9px; }
+.focus-composer .permission-mode-select { height: 38px; grid-column: 3; grid-row: 2; }.focus-composer .permission-mode-trigger { border-radius: 9px; }
 .focus-composer textarea { width: 100%; min-width: 0; min-height: 64px; max-height: 220px; grid-column: 1/-1; grid-row: 1; align-self: start; resize: none; overflow-y: auto; border: 0; outline: 0; background: transparent; padding: 5px 6px; color: var(--text); font-size: 14px; line-height: 1.5; }
 .focus-composer .send-button { display: grid; grid-column: 5; grid-row: 2; place-items: center; background: var(--blue); color: white; }
 .tool-approval { display: grid; grid-template-columns: minmax(0,1fr) auto; align-items: center; gap: 8px; border: 1px solid #fde68a; border-radius: 9px; background: #fffbeb; color: #92400e; padding: 9px 10px; }
