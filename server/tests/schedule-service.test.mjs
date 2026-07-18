@@ -15,6 +15,8 @@ async function waitFor(predicate, timeoutMs = 1500) {
 
 test('next run calculation supports daily, weekly and monthly schedules', () => {
   const from = new Date('2026-07-18T10:00:00.000Z')
+  assert.equal(calculateNextRun({ frequency: 'interval', intervalValue: 30, intervalUnit: 'minutes' }, from), '2026-07-18T10:30:00.000Z')
+  assert.equal(calculateNextRun({ frequency: 'interval', intervalValue: 6, intervalUnit: 'hours' }, from), '2026-07-18T16:00:00.000Z')
   assert.equal(calculateNextRun({ frequency: 'daily', time: '09:00', timezone: 'UTC' }, from), '2026-07-19T09:00:00.000Z')
   assert.equal(calculateNextRun({ frequency: 'weekly', dayOfWeek: 0, time: '09:00', timezone: 'UTC' }, from), '2026-07-19T09:00:00.000Z')
   assert.equal(calculateNextRun({ frequency: 'monthly', dayOfMonth: 1, time: '09:00', timezone: 'UTC' }, from), '2026-08-01T09:00:00.000Z')

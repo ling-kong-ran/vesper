@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
 import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
 
-const FREQUENCIES = new Set(['daily', 'weekly', 'monthly'])
+const FREQUENCIES = new Set(['interval', 'daily', 'weekly', 'monthly'])
+const INTERVAL_UNITS = new Set(['minutes', 'hours', 'days'])
+const INTERVAL_MS = { minutes: 60_000, hours: 60 * 60_000, days: 24 * 60 * 60_000 }
 const NOTIFICATION_TARGETS = new Set(['browser', 'feishu', 'weixin'])
 
 function defaultState() {
@@ -38,6 +40,11 @@ function daysInMonth(year, month) {
 }
 
 export function calculateNextRun(task, from = new Date()) {
+  if (task.frequency === 'interval') {
+    const unit = INTERVAL_UNITS.has(task.intervalUnit) ? task.intervalUnit : 'hours'
+    const value = Math.min(10_000, Math.max(1, Number(task.intervalValue) || 1))
+    return new Date(from.getTime() + value * INTERVAL_MS[unit]).toISOString()
+  }
   const [hour, minute] = String(task.time || '09:00').split(':').map(Number)
   const current = zonedParts(from, task.timezone)
   let date = { year: current.year, month: current.month, day: current.day }
@@ -71,6 +78,8 @@ function normalizeStoredTask(task, cwd) {
     prompt: String(task.prompt || '').slice(0, 100_000),
     enabled: task.enabled !== false,
     frequency,
+    intervalValue: Math.min(10_000, Math.max(1, Number(task.intervalValue) || 1)),
+    intervalUnit: INTERVAL_UNITS.has(task.intervalUnit) ? task.intervalUnit : 'hours',
     time,
     timezone,
     dayOfWeek: Math.min(6, Math.max(0, Number.isInteger(Number(task.dayOfWeek)) ? Number(task.dayOfWeek) : 1)),
@@ -210,7 +219,7 @@ export class ScheduleService {
     task.lastRunAt = run.startedAt
     task.lastStatus = 'running'
     task.lastError = ''
-    if (trigger === 'scheduled') task.nextRunAt = calculateNextRun(task, new Date(Date.now() + 60_000))
+    if (trigger === 'scheduled') task.nextRunAt = calculateNextRun(task, new Date())
     await this.save()
     void this.execute(task, run)
   }
