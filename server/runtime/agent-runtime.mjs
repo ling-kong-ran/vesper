@@ -22,7 +22,7 @@ import { forceNextToolCall, isVisualGenerationRequest } from '../services/visual
 import { createAppTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry.mjs'
 import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
 
-const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter']
+const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'moonshotai-cn', 'zai-coding-cn']
 const PROVIDER_LABELS = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
@@ -30,6 +30,12 @@ const PROVIDER_LABELS = {
   deepseek: 'DeepSeek',
   xai: 'xAI',
   openrouter: 'OpenRouter',
+  'moonshotai-cn': 'Kimi',
+  'zai-coding-cn': 'GLM',
+}
+const PROVIDER_DEFAULT_BASE_URLS = {
+  'moonshotai-cn': 'https://api.moonshot.cn/v1',
+  'zai-coding-cn': 'https://open.bigmodel.cn/api/paas/v4',
 }
 const ATTACHMENT_MARKER = '\n\n---\n附件上下文（由 Pi Coder 注入）：\n'
 const MAX_EXTRACTED_CHARS = 400_000
@@ -173,6 +179,20 @@ function modelRank(provider, model) {
   if (provider === 'anthropic' && /claude-(opus|sonnet)-4/.test(id)) return 100
   if (provider === 'google' && /gemini-(3|2\.5)/.test(id)) return 100
   if (provider === 'deepseek' && /reasoner|chat/.test(id)) return 90
+  if (provider === 'moonshotai-cn') {
+    if (id === 'kimi-k3') return 120
+    if (id.includes('k2.7-code-highspeed')) return 115
+    if (id.includes('k2.7-code')) return 110
+    if (id.includes('k2.6')) return 100
+    if (id.includes('k2.5')) return 90
+  }
+  if (provider === 'zai-coding-cn') {
+    if (id === 'glm-5.2') return 120
+    if (id === 'glm-5.1') return 110
+    if (id.includes('glm-5-turbo')) return 105
+    if (id === 'glm-4.7') return 100
+    if (id.includes('glm-4.7-flash')) return 90
+  }
   return model.reasoning ? 50 : 10
 }
 
@@ -1187,12 +1207,12 @@ export class AgentRuntimeService {
       const overlayModels = Array.isArray(overlay.models) ? overlay.models : []
       return {
         id,
-        name: runtimeProvider?.name || PROVIDER_LABELS[id] || id,
+        name: PROVIDER_LABELS[id] || runtimeProvider?.name || id,
         configured: Boolean(credentials[id]) || this.modelRuntime.hasConfiguredAuth(id),
         enabled: !disabledProviders.has(id),
         custom: !KNOWN_PROVIDERS.includes(id),
         api: overlay.api || this.modelRuntime.getModels(id)[0]?.api || 'openai-responses',
-        baseUrl: overlay.baseUrl || '',
+        baseUrl: overlay.baseUrl || PROVIDER_DEFAULT_BASE_URLS[id] || '',
         organization: overlay.headers?.['OpenAI-Organization'] || '',
         models: this.modelRuntime.getModels(id).map((model) => {
           const definition = overlayModels.find((item) => item.id === model.id)
