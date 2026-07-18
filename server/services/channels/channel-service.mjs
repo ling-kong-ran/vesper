@@ -7,6 +7,7 @@ import { WeixinGateway } from './weixin-gateway.mjs'
 import { WeixinOnboardingService } from './weixin-onboarding.mjs'
 
 const PLATFORMS = new Set(['feishu', 'weixin'])
+const TEMPLATE_PLATFORMS = new Set(['feishu', 'weixin', 'browser'])
 const TEXT_EXTENSIONS = new Set(['.txt', '.md', '.json', '.js', '.jsx', '.ts', '.tsx', '.css', '.html', '.xml', '.yaml', '.yml', '.csv', '.log', '.py', '.java', '.go', '.rs', '.sh', '.ps1', '.toml', '.sql'])
 const DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.odt', '.odp', '.ods', '.rtf', '.epub'])
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
@@ -307,7 +308,7 @@ export class ChannelService {
   }
 
   async updateTemplate(event, platform, input) {
-    if (!NOTIFICATION_EVENTS[event] || !PLATFORMS.has(platform)) throw new Error('通知模板类型不存在。')
+    if (!NOTIFICATION_EVENTS[event] || !TEMPLATE_PLATFORMS.has(platform)) throw new Error('通知模板类型不存在。')
     const template = this.state.templates[event]
     if (Object.hasOwn(input || {}, 'enabled')) template.enabled = Boolean(input.enabled)
     if (Object.hasOwn(input || {}, 'content')) {
@@ -319,17 +320,25 @@ export class ChannelService {
     return this.getState()
   }
 
-  async notify(event, data) {
+  renderNotification(event, platform, data) {
+    const definition = NOTIFICATION_EVENTS[event]
+    const variant = this.state.templates[event]?.channels?.[platform]
+    if (!definition || !variant) throw new Error('通知模板不存在。')
+    return { title: definition.name, content: renderNotificationTemplate(variant.content, data) }
+  }
+
+  async notify(event, data, { platforms } = {}) {
     const template = this.state.templates[event]
     if (!template?.enabled) return []
+    const selected = platforms ? new Set(platforms) : PLATFORMS
     const results = []
     for (const platform of PLATFORMS) {
+      if (!selected.has(platform)) continue
       const connection = this.state.connections[platform]
       if (!connection?.enabled) continue
-      const variant = template.channels[platform]
       const scope = this.latestScope(platform)
       if (!scope) continue
-      const content = renderNotificationTemplate(variant.content, data)
+      const { content } = this.renderNotification(event, platform, data)
       results.push(this.gateways[platform].sendToPeer(scope.peerId, platform === 'feishu' ? { markdown: content } : { text: content }, scope))
     }
     return Promise.allSettled(results)
@@ -340,7 +349,7 @@ export class ChannelService {
     if (!variant) throw new Error('通知模板不存在。')
     const scope = this.latestScope(platform)
     if (!scope) throw new Error('该渠道还没有可接收通知的历史会话。')
-    const content = renderNotificationTemplate(variant.content, sampleNotificationData())
+    const content = this.renderNotification(event, platform, sampleNotificationData()).content
     await this.gateways[platform].sendToPeer(scope.peerId, platform === 'feishu' ? { markdown: content } : { text: content }, scope)
     return { sent: 1, preview: content }
   }

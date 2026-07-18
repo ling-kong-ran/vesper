@@ -11,6 +11,7 @@ import {
 import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
 import { ChannelService } from '../services/channels/channel-service.mjs'
 import { NotificationSettingsService } from '../services/notification-settings-service.mjs'
+import { ScheduleService } from '../services/schedule-service.mjs'
 import { ToolPluginService } from '../services/tool-plugin-service.mjs'
 import { inferModelKind, VisualGenerationService } from '../services/visual-generation/index.mjs'
 import { assetMessageAttachment, attachGeneratedAssets } from '../services/session-assets.mjs'
@@ -208,7 +209,16 @@ export class AgentRuntimeService {
         validateDirectory: (input) => resolveDirectory(input, this.cwd),
       },
     })
-    this.notificationSettings = new NotificationSettingsService({ path: this.appConfigPath, channels: this.channels })
+    this.notificationSettings = new NotificationSettingsService({ path: this.appConfigPath, browserEventsPath: join(dataDir, 'pi-coder-browser-notifications.json'), channels: this.channels })
+    this.schedules = new ScheduleService({
+      path: join(dataDir, 'pi-coder-schedules.json'),
+      cwd,
+      agent: {
+        prompt: (input) => this.promptFromChannel({ sessionId: '', ...input }),
+        validateDirectory: (input) => resolveDirectory(input, this.cwd),
+      },
+      notifications: this.notificationSettings,
+    })
     this.sessions = new Map()
     this.modelRuntime = null
     this.settingsManager = null
@@ -231,6 +241,7 @@ export class AgentRuntimeService {
     this.settingsManager = SettingsManager.create(this.cwd, this.dataDir)
     await this.reloadModelRuntime()
     await this.channels.init()
+    await this.schedules.init()
   }
 
   async reloadModelRuntime() {
@@ -961,11 +972,49 @@ export class AgentRuntimeService {
     return this.notificationSettings.testTemplate(event, platform)
   }
 
+  getBrowserNotificationEvents(after) {
+    return this.notificationSettings.getBrowserEvents(after)
+  }
+
+  async getSchedules() {
+    const config = await this.getConfig()
+    const notificationSettings = await this.notificationSettings.getState()
+    return {
+      ...this.schedules.getState(),
+      models: config.providers.filter((provider) => provider.enabled && provider.configured).flatMap((provider) => provider.models.filter((model) => model.kind === 'chat').map((model) => ({ provider: provider.id, model: model.id, label: `${provider.name} / ${model.name}` }))),
+      notificationTargets: {
+        browser: { enabled: notificationSettings.browser.enabled },
+        feishu: { enabled: Boolean(notificationSettings.connections.feishu?.enabled) },
+        weixin: { enabled: Boolean(notificationSettings.connections.weixin?.enabled) },
+      },
+    }
+  }
+
+  async createSchedule(input) {
+    const task = await this.schedules.create(input)
+    return { task, state: await this.getSchedules() }
+  }
+
+  async updateSchedule(id, input) {
+    const task = await this.schedules.update(id, input)
+    return task ? { task, state: await this.getSchedules() } : null
+  }
+
+  deleteSchedule(id) {
+    return this.schedules.remove(id)
+  }
+
+  async runSchedule(id) {
+    const task = await this.schedules.runNow(id)
+    return task ? { started: true, task } : null
+  }
+
   notifyChannels(event, data) {
     return this.notificationSettings.notify(event, data)
   }
 
   async dispose() {
+    await this.schedules.dispose()
     await this.channels.dispose()
     await this.disposeSessions()
   }

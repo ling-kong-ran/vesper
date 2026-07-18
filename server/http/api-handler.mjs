@@ -20,18 +20,50 @@ export function createApiHandler(runtime) {
         json(res, 200, await runtime.updateBrowserNotifications(await bodyJson(req)))
         return true
       }
-      const notificationTemplateTestMatch = url.pathname.match(/^\/api\/settings\/notifications\/templates\/([^/]+)\/(feishu|weixin)\/test$/)
+      if (req.method === 'GET' && url.pathname === '/api/settings/notifications/browser/events') {
+        json(res, 200, await runtime.getBrowserNotificationEvents(url.searchParams.get('after') || ''))
+        return true
+      }
+      const notificationTemplateTestMatch = url.pathname.match(/^\/api\/settings\/notifications\/templates\/([^/]+)\/(feishu|weixin|browser)\/test$/)
       if (req.method === 'POST' && notificationTemplateTestMatch) {
         json(res, 200, await runtime.testNotificationTemplate(decodeURIComponent(notificationTemplateTestMatch[1]), notificationTemplateTestMatch[2]))
         return true
       }
-      const notificationTemplateMatch = url.pathname.match(/^\/api\/settings\/notifications\/templates\/([^/]+)\/(feishu|weixin)$/)
+      const notificationTemplateMatch = url.pathname.match(/^\/api\/settings\/notifications\/templates\/([^/]+)\/(feishu|weixin|browser)$/)
       if (req.method === 'PUT' && notificationTemplateMatch) {
         json(res, 200, await runtime.saveNotificationTemplate(decodeURIComponent(notificationTemplateMatch[1]), notificationTemplateMatch[2], await bodyJson(req)))
         return true
       }
       if (req.method === 'GET' && url.pathname === '/api/usage/today') {
         json(res, 200, await runtime.getTodayUsage())
+        return true
+      }
+      if (req.method === 'GET' && url.pathname === '/api/schedules') {
+        json(res, 200, await runtime.getSchedules())
+        return true
+      }
+      if (req.method === 'POST' && url.pathname === '/api/schedules') {
+        json(res, 201, await runtime.createSchedule(await bodyJson(req)))
+        return true
+      }
+      const scheduleRunMatch = url.pathname.match(/^\/api\/schedules\/([^/]+)\/run$/)
+      if (req.method === 'POST' && scheduleRunMatch) {
+        const result = await runtime.runSchedule(decodeURIComponent(scheduleRunMatch[1]))
+        if (!result) json(res, 404, { error: '定时任务不存在。' })
+        else json(res, 202, result)
+        return true
+      }
+      const scheduleMatch = url.pathname.match(/^\/api\/schedules\/([^/]+)$/)
+      if (req.method === 'PATCH' && scheduleMatch) {
+        const result = await runtime.updateSchedule(decodeURIComponent(scheduleMatch[1]), await bodyJson(req))
+        if (!result) json(res, 404, { error: '定时任务不存在。' })
+        else json(res, 200, result)
+        return true
+      }
+      if (req.method === 'DELETE' && scheduleMatch) {
+        const deleted = await runtime.deleteSchedule(decodeURIComponent(scheduleMatch[1]))
+        if (!deleted) json(res, 404, { error: '定时任务不存在。' })
+        else json(res, 200, { deleted: true })
         return true
       }
       if (req.method === 'GET' && url.pathname === '/api/directories') {

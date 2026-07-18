@@ -57,6 +57,7 @@ import { useAttachmentSelection } from './features/chat/attachments.js'
 import { PluginsPage } from './features/plugins/PluginsPage.jsx'
 import { ChannelsPage } from './features/channels/ChannelsPage.jsx'
 import { NotificationSettings } from './features/config/NotificationSettings.jsx'
+import { SchedulesPage } from './features/schedules/SchedulesPage.jsx'
 import { apiJson, consumeEventStream } from './lib/api.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 
@@ -93,6 +94,13 @@ function readStoredArray(key) {
   }
 }
 
+function renderNotificationContent(content, data) {
+  return String(content || '').replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, path) => {
+    const value = path.split('.').reduce((current, key) => current?.[key], data)
+    return value == null ? `{{${path}}}` : String(value)
+  })
+}
+
 function App() {
   const initialPage = window.location.hash.slice(1)
   const [page, setPage] = useState(PAGE_META[initialPage] ? initialPage : 'chat')
@@ -107,11 +115,13 @@ function App() {
   const [assetUploadSignal, setAssetUploadSignal] = useState(0)
   const [pluginSaveSignal, setPluginSaveSignal] = useState(0)
   const [channelCreateSignal, setChannelCreateSignal] = useState(0)
+  const [scheduleCreateSignal, setScheduleCreateSignal] = useState(0)
   const [pendingAsset, setPendingAsset] = useState(null)
   const [usage, setUsage] = useState(null)
   const [pluginStats, setPluginStats] = useState(null)
   const [startupReady, setStartupReady] = useState(false)
-  const [browserNotificationsEnabled, setBrowserNotificationsEnabled] = useState(false)
+  const [notificationSettings, setNotificationSettings] = useState({ browser: { enabled: false }, templates: [] })
+  const browserEventCursor = useRef('')
 
   const refreshUsage = useCallback(async () => {
     try {
@@ -144,12 +154,19 @@ function App() {
     notify.timer = window.setTimeout(() => setToast(''), 2400)
   }
 
-  const browserNotify = useCallback((title, body) => {
-    if (!browserNotificationsEnabled || !('Notification' in window) || window.Notification.permission !== 'granted') return
-    if (document.visibilityState === 'visible' && document.hasFocus()) return
+  const showBrowserNotification = useCallback((title, body, { force = false } = {}) => {
+    if (!notificationSettings.browser?.enabled || !('Notification' in window) || window.Notification.permission !== 'granted') return
+    if (!force && document.visibilityState === 'visible' && document.hasFocus()) return
     const item = new window.Notification(title, { body, tag: `pi-coder-${title}` })
     item.onclick = () => { window.focus(); item.close() }
-  }, [browserNotificationsEnabled])
+  }, [notificationSettings.browser?.enabled])
+
+  const browserNotify = useCallback((event, data, options) => {
+    const template = notificationSettings.templates?.find((item) => item.id === event)
+    const content = template?.channels?.browser?.content
+    if (!template?.enabled || !content) return
+    showBrowserNotification(template.name, renderNotificationContent(content, data), options)
+  }, [notificationSettings.templates, showBrowserNotification])
 
   const navigate = (next) => {
     setPage(next)
@@ -202,9 +219,24 @@ function App() {
 
   useEffect(() => {
     apiJson('/api/settings/notifications')
-      .then((data) => setBrowserNotificationsEnabled(Boolean(data.browser?.enabled)))
+      .then(setNotificationSettings)
       .catch(() => {})
   }, [])
+
+  useEffect(() => {
+    let active = true
+    const poll = async () => {
+      try {
+        const result = await apiJson(`/api/settings/notifications/browser/events?after=${encodeURIComponent(browserEventCursor.current)}`)
+        if (!active) return
+        for (const event of result.events || []) showBrowserNotification(event.title, event.body, { force: true })
+        browserEventCursor.current = result.latestId || browserEventCursor.current
+      } catch {}
+    }
+    poll()
+    const timer = window.setInterval(poll, 3000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [showBrowserNotification])
 
   const activeMeta = page === 'chat' && chatMode === 'focus'
     ? ['对话', '聚集模式 · 单会话工作台']
@@ -233,6 +265,7 @@ function App() {
               else if (page === 'assets') setAssetUploadSignal((value) => value + 1)
               else if (page === 'plugins') setPluginSaveSignal((value) => value + 1)
               else if (page === 'channels') setChannelCreateSignal((value) => value + 1)
+              else if (page === 'schedules') setScheduleCreateSignal((value) => value + 1)
               else if (page === 'workflows') navigate('workflowCreate')
               else if (page === 'workflowCreate') notify('工作流已发布')
               else setModal(page)
@@ -243,8 +276,8 @@ function App() {
             {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} createSignal={chatCreateSignal} onUsageChange={refreshUsage} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} />}
             {page === 'assets' && <AssetsPage query={query} notify={notify} createSignal={assetUploadSignal} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} />}
             {page === 'channels' && <ChannelsPage notify={notify} createSignal={channelCreateSignal} />}
-            {page === 'schedules' && <SchedulesPage notify={notify} />}
-            {page === 'config' && <ConfigPage notify={notify} createSignal={configCreateSignal} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setBrowserNotificationsEnabled} />}
+            {page === 'schedules' && <SchedulesPage notify={notify} createSignal={scheduleCreateSignal} openNotificationSettings={() => { setConfigSection('notifications'); navigate('config') }} />}
+            {page === 'config' && <ConfigPage notify={notify} createSignal={configCreateSignal} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} />}
             {page === 'plugins' && <PluginsPage query={query} notify={notify} saveSignal={pluginSaveSignal} onStatusChange={setPluginStats} />}
             {page === 'memory' && <MemoryPage notify={notify} />}
             {page === 'mcp' && <McpPage notify={notify} />}
@@ -460,6 +493,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
     setError('')
     const userMessage = { id: `user-${Date.now()}`, role: 'user', text: prompt, attachments: attachments.map(({ id, kind, name, mimeType, size, data }) => ({ id, kind, name, mimeType, size, data: kind === 'image' ? data : undefined })) }
     const agentId = `agent-${Date.now()}`
+    let responseText = ''
     updateSessionState(sessionId, (current) => ({ ...current, messages: [...current.messages, userMessage, { id: agentId, role: 'agent', text: '', streaming: true }], tools: [], error: '', streaming: true, loaded: true }))
     try {
       const response = await fetch('/api/chat', {
@@ -473,6 +507,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
           updateSessionState(sessionId, { model: data.model, cwd: data.cwd })
           if (data.cwd) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd } : session))
         } else if (event === 'text_delta') {
+          responseText += data.delta || ''
           updateSessionState(sessionId, (current) => ({ ...current, messages: current.messages.map((item) => item.id === agentId ? { ...item, text: item.text + data.delta } : item) }))
         } else if (event === 'tool_start') {
           updateSessionState(sessionId, (current) => ({ ...current, tools: [...current.tools, { id: data.id, name: data.name, status: 'running' }] }))
@@ -500,10 +535,9 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
       updateSessionState(sessionId, (current) => ({ ...current, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false } : item) }))
       const sessions = await refreshSessions()
       const completed = sessions.find((session) => session.id === sessionId)
-      browserNotify?.('Agent 任务已完成', completed?.name || 'Pi Coder 已完成回复')
+      browserNotify?.('chat.completed', { chat: { title: completed?.name || 'Pi Coder 对话', summary: responseText.trim().slice(0, 260) || 'Agent 已完成回复。', model: sessionStatesRef.current[sessionId]?.model || model } })
     } catch (caught) {
       updateSessionState(sessionId, (current) => ({ ...current, error: caught.message, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || caught.message } : item) }))
-      browserNotify?.('Agent 任务执行失败', caught.message)
     } finally {
       updateSessionState(sessionId, { streaming: false })
       onUsageChange?.()
@@ -857,17 +891,6 @@ function AssetLinkModal({ onClose, onCreated }) {
     catch (caught) { setError(caught.message) } finally { setSaving(false) }
   }
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal" onSubmit={submit}><div className="card-head"><div><h2>添加链接资产</h2><p>链接可以归档、打开，也可以作为上下文加入对话。</p></div><button type="button" className="icon-button" onClick={onClose}><X size={17} /></button></div><label className="field-label">名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如 OpenAI API 文档" /></label><label className="field-label">URL<input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/docs" /></label>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>取消</button><button className="button primary" disabled={saving || !url.trim()}>{saving ? <RefreshCw className="spin" size={14} /> : <Plus size={14} />}{saving ? '添加中…' : '添加链接'}</button></div></form></div>
-}
-
-function SchedulesPage({ notify }) {
-  const tasks = [['每日代码巡检', '检查 main 分支新增 TODO 与失败测试', '明天 09:00', true], ['周报生成', '汇总本周 session 产物和完成事项', '周五 18:00', true], ['Provider 账单检查', '拉取各模型厂商额度与异常消费', '每 6 小时', false], ['资产清理建议', '找出 30 天未使用的大文件', '每月 1 日', true]]
-  const [selected, setSelected] = useState(0)
-  return (
-    <div className="split-list-detail">
-      <Panel className="selection-list"><SectionTitle title="任务队列" />{tasks.map((t, i) => <button className={`selection-item ${selected === i ? 'active' : ''}`} onClick={() => setSelected(i)} key={t[0]}><div><strong>{t[0]}</strong><Badge tone={t[3] ? 'green' : 'gray'}>{t[3] ? '启用' : '暂停'}</Badge></div><p>{t[1]}</p><small>{t[2]}</small></button>)}</Panel>
-      <div className="detail-stack"><Panel><div className="card-head"><h2>{tasks[selected][0]}</h2><button className="button dark" onClick={() => notify('任务已加入运行队列')}><Play size={14} />立即运行</button></div><label className="field-label">Prompt<textarea defaultValue="检查 main 分支新增 TODO、失败测试、未处理异常日志，并生成需要人工介入的事项清单。" /></label><div className="form-grid three"><SelectLabel label="频率" options={['每天', '每周', '每月']} /><InputLabel label="时间" value="09:00" /><SelectLabel label="时区" options={['Asia/Hong_Kong', 'UTC']} /></div><div className="tag-field"><span>通知渠道</span><Badge>微信研发群</Badge><Badge>飞书 On-call</Badge><Badge tone="gray">仅失败时</Badge></div><label className="field-label">通知模板<input defaultValue="{{task.name}} 执行完成，结果：{{summary}}" /></label><div className="form-footer"><span>上次通知：今天 09:02 · 微信研发群 / 飞书 On-call</span><button className="button dark" onClick={() => notify('测试通知已发送')}>测试发送</button></div></Panel><Panel><SectionTitle title="最近执行" />{[['今天 09:00 · 生成 4 条待办', '耗时 2m 18s'], ['昨天 09:00 · 无新增风险', '耗时 1m 42s'], ['7月15日 09:00 · Provider 超时后重试成功', '重试 1 次']].map((x, i) => <div className="activity-row" key={i}><CheckCircle2 size={15} /><span><strong>{x[0]}</strong><small>{x[1]}</small></span></div>)}</Panel></div>
-    </div>
-  )
 }
 
 function configDraft(data, provider, preferredModel) {

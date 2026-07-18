@@ -1,4 +1,10 @@
 export const NOTIFICATION_EVENTS = {
+  'chat.completed': {
+    name: '对话完成',
+    description: '对话页面中的 Agent 完成回复后发送',
+    variables: ['chat.title', 'chat.summary', 'chat.model'],
+    defaultContent: '💬 对话「{{chat.title}}」已完成\n\n{{chat.summary}}\n\n模型：{{chat.model}}',
+  },
   'schedule.completed': {
     name: '定时任务完成',
     description: '定时任务正常完成后发送',
@@ -26,6 +32,7 @@ export const NOTIFICATION_EVENTS = {
 }
 
 const SAMPLE_DATA = {
+  chat: { title: '修复渠道通知', summary: '实现已完成，测试和构建均已通过。', model: 'openai/gpt-5.4' },
   task: { name: '每日代码巡检', summary: '发现 2 个待处理问题，报告已归档。', duration: '2 分 18 秒', nextRun: '明天 09:00', error: '测试进程超时' },
   workflow: { name: '发布前检查', summary: '测试、构建和安全检查均已通过。', duration: '6 分 42 秒', runId: 'run_20260718_001', node: '端到端测试', error: '浏览器启动失败' },
 }
@@ -47,6 +54,7 @@ export function defaultTemplates() {
     channels: {
       feishu: { content: definition.defaultContent },
       weixin: { content: definition.defaultContent },
+      browser: { content: definition.defaultContent },
     },
   }]))
 }
@@ -57,7 +65,7 @@ export function normalizeTemplates(input) {
     const stored = input?.[event]
     if (!stored || typeof stored !== 'object') continue
     defaults[event].enabled = stored.enabled !== false
-    for (const platform of ['feishu', 'weixin']) {
+    for (const platform of ['feishu', 'weixin', 'browser']) {
       const variant = stored.channels?.[platform]
       if (!variant || typeof variant !== 'object') continue
       if (String(variant.content || '').trim()) defaults[event].channels[platform].content = String(variant.content).slice(0, 12_000)
