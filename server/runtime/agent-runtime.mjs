@@ -11,6 +11,7 @@ import {
 import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
 import { ChannelService } from '../services/channels/channel-service.mjs'
 import { NotificationSettingsService } from '../services/notification-settings-service.mjs'
+import { migrateKimiCodeProvider } from '../services/provider-migrations.mjs'
 import { ScheduleService } from '../services/schedule-service.mjs'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, SessionPermissionService } from '../services/session-permission-service.mjs'
 import { ToolPluginService } from '../services/tool-plugin-service.mjs'
@@ -22,7 +23,7 @@ import { forceNextToolCall, isVisualGenerationRequest } from '../services/visual
 import { createAppTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry.mjs'
 import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
 
-const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'moonshotai-cn', 'zai-coding-cn']
+const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'kimi-coding', 'zai-coding-cn']
 const PROVIDER_LABELS = {
   openai: 'OpenAI',
   anthropic: 'Anthropic',
@@ -30,11 +31,11 @@ const PROVIDER_LABELS = {
   deepseek: 'DeepSeek',
   xai: 'xAI',
   openrouter: 'OpenRouter',
-  'moonshotai-cn': 'Kimi',
+  'kimi-coding': 'Kimi Code',
   'zai-coding-cn': 'GLM',
 }
 const PROVIDER_DEFAULT_BASE_URLS = {
-  'moonshotai-cn': 'https://api.moonshot.cn/v1',
+  'kimi-coding': 'https://api.kimi.com/coding/',
   'zai-coding-cn': 'https://open.bigmodel.cn/api/paas/v4',
 }
 const ATTACHMENT_MARKER = '\n\n---\n附件上下文（由 Pi Coder 注入）：\n'
@@ -179,12 +180,11 @@ function modelRank(provider, model) {
   if (provider === 'anthropic' && /claude-(opus|sonnet)-4/.test(id)) return 100
   if (provider === 'google' && /gemini-(3|2\.5)/.test(id)) return 100
   if (provider === 'deepseek' && /reasoner|chat/.test(id)) return 90
-  if (provider === 'moonshotai-cn') {
-    if (id === 'kimi-k3') return 120
-    if (id.includes('k2.7-code-highspeed')) return 115
-    if (id.includes('k2.7-code')) return 110
-    if (id.includes('k2.6')) return 100
-    if (id.includes('k2.5')) return 90
+  if (provider === 'kimi-coding') {
+    if (id === 'k3') return 120
+    if (id === 'kimi-for-coding-highspeed') return 115
+    if (id === 'kimi-for-coding' || id === 'k2p7') return 110
+    if (id.includes('k2-thinking')) return 100
   }
   if (provider === 'zai-coding-cn') {
     if (id === 'glm-5.2') return 120
@@ -212,6 +212,7 @@ export class AgentRuntimeService {
     this.sessionDir = join(dataDir, 'sessions')
     this.authPath = join(dataDir, 'auth.json')
     this.modelsPath = join(dataDir, 'models.json')
+    this.settingsPath = join(dataDir, 'settings.json')
     this.appConfigPath = join(dataDir, 'pi-coder.json')
     this.toolPlugins = new ToolPluginService(this.appConfigPath)
     this.visualGeneration = new VisualGenerationService({
@@ -267,6 +268,12 @@ export class AgentRuntimeService {
     this.usageLedger.days ||= {}
     this.assetIndex = await readJson(this.assetIndexPath, { assets: [] })
     this.assetIndex.assets = Array.isArray(this.assetIndex.assets) ? this.assetIndex.assets : []
+    await migrateKimiCodeProvider({
+      authPath: this.authPath,
+      modelsPath: this.modelsPath,
+      settingsPath: this.settingsPath,
+      appConfigPath: this.appConfigPath,
+    })
     this.settingsManager = SettingsManager.create(this.cwd, this.dataDir)
     await this.toolPlugins.ensureDefaultTools(['memory_search', 'memory_remember'], 'memoryToolsV1')
     await this.reloadModelRuntime()

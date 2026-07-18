@@ -1101,7 +1101,7 @@ function ConfigPage({ notify, createSignal, section, setSection, onBrowserNotifi
   const selectedModel = selectedProvider.models.find((item) => item.id === draft.model)
   const chatModels = selectedProvider.models.filter((item) => item.kind === 'chat')
   const visualModels = selectedProvider.models.filter((item) => item.kind !== 'chat')
-  const providerIcons = { openai: Bot, anthropic: Brain, google: Sparkles, deepseek: Code2, xai: Zap, openrouter: Network, 'moonshotai-cn': Sparkles, 'zai-coding-cn': Brain }
+  const providerIcons = { openai: Bot, anthropic: Brain, google: Sparkles, deepseek: Code2, xai: Zap, openrouter: Network, 'kimi-coding': Sparkles, 'zai-coding-cn': Brain }
   return (
     <>
     <div className="config-subnav"><button className={section === 'models' ? 'active' : ''} onClick={() => setSection('models')}>模型配置</button><button className={section === 'notifications' ? 'active' : ''} onClick={() => setSection('notifications')}>通知设置</button></div>
