@@ -74,6 +74,47 @@ export function createApiHandler(runtime) {
         json(res, 200, { assets: await runtime.listAssets({ query: url.searchParams.get('query'), kind: url.searchParams.get('kind'), sessionId: url.searchParams.get('sessionId') }) })
         return true
       }
+      if (req.method === 'GET' && url.pathname === '/api/memory') {
+        json(res, 200, runtime.getMemoryDashboard({
+          query: url.searchParams.get('query') || '',
+          spaceId: url.searchParams.get('spaceId') || '',
+        }))
+        return true
+      }
+      if (req.method === 'POST' && url.pathname === '/api/memory/spaces') {
+        json(res, 201, runtime.createMemorySpace(await bodyJson(req)))
+        return true
+      }
+      const memorySpaceMatch = url.pathname.match(/^\/api\/memory\/spaces\/([^/]+)$/)
+      if (req.method === 'PATCH' && memorySpaceMatch) {
+        const updated = runtime.updateMemorySpace(decodeURIComponent(memorySpaceMatch[1]), await bodyJson(req))
+        if (!updated) json(res, 404, { error: '记忆空间不存在。' })
+        else json(res, 200, updated)
+        return true
+      }
+      if (req.method === 'DELETE' && memorySpaceMatch) {
+        const deleted = runtime.deleteMemorySpace(decodeURIComponent(memorySpaceMatch[1]))
+        if (!deleted) json(res, 404, { error: '记忆空间不存在。' })
+        else json(res, 200, { deleted: true })
+        return true
+      }
+      if (req.method === 'POST' && url.pathname === '/api/memory/nodes') {
+        json(res, 201, runtime.createMemory(await bodyJson(req)))
+        return true
+      }
+      const memoryNodeMatch = url.pathname.match(/^\/api\/memory\/nodes\/([^/]+)$/)
+      if (req.method === 'PATCH' && memoryNodeMatch) {
+        const updated = runtime.updateMemory(decodeURIComponent(memoryNodeMatch[1]), await bodyJson(req))
+        if (!updated) json(res, 404, { error: '记忆节点不存在。' })
+        else json(res, 200, updated)
+        return true
+      }
+      if (req.method === 'DELETE' && memoryNodeMatch) {
+        const deleted = runtime.deleteMemory(decodeURIComponent(memoryNodeMatch[1]))
+        if (!deleted) json(res, 404, { error: '记忆节点不存在。' })
+        else json(res, 200, { deleted: true })
+        return true
+      }
       if (req.method === 'GET' && url.pathname === '/api/channels') {
         json(res, 200, await runtime.getChannels())
         return true

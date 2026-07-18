@@ -6,6 +6,18 @@ export class ToolPluginService {
     this.configPath = configPath
   }
 
+  async ensureDefaultTools(toolIds, migrationKey) {
+    const appConfig = await readJson(this.configPath, { toolMode: 'read-only' })
+    if (appConfig[migrationKey]) return
+    const enabledTools = [...new Set([...toolsFromConfig(appConfig), ...sanitizeEnabledTools(toolIds)])]
+    await writeJsonAtomic(this.configPath, {
+      ...appConfig,
+      toolMode: presetFromTools(enabledTools),
+      enabledTools,
+      [migrationKey]: true,
+    })
+  }
+
   async getState() {
     const appConfig = await readJson(this.configPath, { toolMode: 'read-only' })
     const enabledTools = toolsFromConfig(appConfig)

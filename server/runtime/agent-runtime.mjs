@@ -13,6 +13,8 @@ import { ChannelService } from '../services/channels/channel-service.mjs'
 import { NotificationSettingsService } from '../services/notification-settings-service.mjs'
 import { ScheduleService } from '../services/schedule-service.mjs'
 import { ToolPluginService } from '../services/tool-plugin-service.mjs'
+import { extractConversationMemories } from '../services/memory/conversation-memory.mjs'
+import { LocalMemoryRuntime } from '../services/memory/local-memory-runtime.mjs'
 import { inferModelKind, VisualGenerationService } from '../services/visual-generation/index.mjs'
 import { assetMessageAttachment, attachGeneratedAssets } from '../services/session-assets.mjs'
 import { forceNextToolCall, isVisualGenerationRequest } from '../services/visual-tool-routing.mjs'
@@ -201,6 +203,7 @@ export class AgentRuntimeService {
     this.usagePath = join(dataDir, 'pi-coder-usage.json')
     this.assetsDir = join(dataDir, 'pi-coder-assets')
     this.assetIndexPath = join(dataDir, 'pi-coder-assets.json')
+    this.memory = new LocalMemoryRuntime({ path: join(dataDir, 'pi-coder-memory.sqlite'), cwd })
     this.channels = new ChannelService({
       path: join(dataDir, 'pi-coder-channels.json'),
       cwd,
@@ -241,7 +244,9 @@ export class AgentRuntimeService {
     this.assetIndex = await readJson(this.assetIndexPath, { assets: [] })
     this.assetIndex.assets = Array.isArray(this.assetIndex.assets) ? this.assetIndex.assets : []
     this.settingsManager = SettingsManager.create(this.cwd, this.dataDir)
+    await this.toolPlugins.ensureDefaultTools(['memory_search', 'memory_remember'], 'memoryToolsV1')
     await this.reloadModelRuntime()
+    await this.memory.init()
     await this.channels.init()
     await this.schedules.init()
   }
@@ -716,6 +721,7 @@ export class AgentRuntimeService {
         ...createAppTools({
           cwd: effectiveCwd,
           enabledTools,
+          memoryRuntime: this.memory,
           visualGenerationService: this.visualGeneration,
           onGeneratedFile: ({ path }) => runtimeValue && runtimeSession
             ? this.recordGeneratedFile(runtimeSession.sessionId, runtimeValue, path)
@@ -812,6 +818,7 @@ export class AgentRuntimeService {
       await this.archiveAttachments(session.sessionId, value.name, safeAttachments)
       const images = []
       const contexts = []
+      const memoryContext = await this.memory.relevantContext(message, value.cwd)
       for (const attachment of safeAttachments) {
         const name = safeAttachmentName(attachment.name)
         if (attachment.kind === 'image') {
@@ -835,13 +842,17 @@ export class AgentRuntimeService {
         : null
       const shouldForceVisualTool = isVisualGenerationRequest(message) && session.getActiveToolNames().includes('generate_visual')
       const restorePayloadHandler = shouldForceVisualTool ? forceNextToolCall(session.agent, 'generate_visual') : () => {}
+      const originalSystemPrompt = session.agent.state.systemPrompt
+      if (memoryContext.text) session.agent.state.systemPrompt = `${originalSystemPrompt}\n\n${memoryContext.text}`
       try {
         await session.prompt(prompt, { images })
       } finally {
+        session.agent.state.systemPrompt = originalSystemPrompt
         restorePayloadHandler()
       }
       const last = [...session.messages].reverse().find((item) => item.role === 'assistant')
       if (last?.errorMessage) throw new Error(last.errorMessage)
+      const assistantText = textFromContent(last?.content)
       if (titlePromise) {
         const generatedTitle = await titlePromise
         if (generatedTitle && !this.sessionMeta[session.sessionId]?.manual && generatedTitle !== value.name) {
@@ -852,6 +863,13 @@ export class AgentRuntimeService {
         }
       }
       send('done', { sessionId: session.sessionId })
+      void this.captureConversationMemory({
+        sessionId: session.sessionId,
+        cwd: value.cwd,
+        model: session.model,
+        user: message,
+        assistant: assistantText,
+      }).catch(() => {})
     } catch (error) {
       live.error = error instanceof Error ? error.message : String(error)
       throw error
@@ -881,6 +899,49 @@ export class AgentRuntimeService {
     if (sessionId) await this.recordUsage(localDayKey(result.timestamp || Date.now()), `title:${sessionId}`, result.usage)
     if (result.errorMessage) return fallback
     return cleanSessionTitle(textFromContent(result.content)) || fallback
+  }
+
+  async captureConversationMemory({ sessionId, cwd, model, user, assistant }) {
+    const result = await extractConversationMemories({ modelRuntime: this.modelRuntime, model, user, assistant })
+    if (result.usage) await this.recordUsage(localDayKey(result.timestamp || Date.now()), `memory:${sessionId}:${result.timestamp || Date.now()}`, result.usage)
+    if (!result.memories.length) return []
+    const projectSpaceId = await this.memory.ensureWorkspaceSpace(cwd)
+    return result.memories.map((item) => this.memory.remember({
+      ...item,
+      spaceId: item.scope === 'global' ? 'global' : projectSpaceId,
+      cwd,
+      sessionId,
+      sourceType: 'conversation',
+      sourceId: sessionId,
+    }))
+  }
+
+  getMemoryDashboard(input) {
+    return this.memory.getDashboard(input)
+  }
+
+  createMemorySpace(input) {
+    return this.memory.createSpace(input)
+  }
+
+  updateMemorySpace(id, input) {
+    return this.memory.updateSpace(id, input)
+  }
+
+  deleteMemorySpace(id) {
+    return this.memory.deleteSpace(id)
+  }
+
+  createMemory(input) {
+    return this.memory.remember({ ...input, sourceType: input.sourceType || 'manual' })
+  }
+
+  updateMemory(id, input) {
+    return this.memory.updateMemory(id, input)
+  }
+
+  deleteMemory(id) {
+    return this.memory.forget(id)
   }
 
   async abortSession(id) {
@@ -1070,6 +1131,7 @@ export class AgentRuntimeService {
     await this.schedules.dispose()
     await this.channels.dispose()
     await this.disposeSessions()
+    this.memory.dispose()
   }
 
   async savePlugins(input) {

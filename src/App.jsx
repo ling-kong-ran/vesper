@@ -57,6 +57,7 @@ import { useAttachmentSelection } from './features/chat/attachments.js'
 import { PluginsPage } from './features/plugins/PluginsPage.jsx'
 import { ChannelsPage } from './features/channels/ChannelsPage.jsx'
 import { NotificationSettings } from './features/config/NotificationSettings.jsx'
+import { MemoryPage } from './features/memory/MemoryPage.jsx'
 import { SchedulesPage } from './features/schedules/SchedulesPage.jsx'
 import { apiJson, consumeEventStream } from './lib/api.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
@@ -116,6 +117,7 @@ function App() {
   const [pluginSaveSignal, setPluginSaveSignal] = useState(0)
   const [channelCreateSignal, setChannelCreateSignal] = useState(0)
   const [scheduleCreateSignal, setScheduleCreateSignal] = useState(0)
+  const [memoryCreateSignal, setMemoryCreateSignal] = useState(0)
   const [pendingAsset, setPendingAsset] = useState(null)
   const [usage, setUsage] = useState(null)
   const [pluginStats, setPluginStats] = useState(null)
@@ -266,6 +268,7 @@ function App() {
               else if (page === 'plugins') setPluginSaveSignal((value) => value + 1)
               else if (page === 'channels') setChannelCreateSignal((value) => value + 1)
               else if (page === 'schedules') setScheduleCreateSignal((value) => value + 1)
+              else if (page === 'memory') setMemoryCreateSignal((value) => value + 1)
               else if (page === 'workflows') navigate('workflowCreate')
               else if (page === 'workflowCreate') notify('工作流已发布')
               else setModal(page)
@@ -279,7 +282,7 @@ function App() {
             {page === 'schedules' && <SchedulesPage notify={notify} createSignal={scheduleCreateSignal} openNotificationSettings={() => { setConfigSection('notifications'); navigate('config') }} />}
             {page === 'config' && <ConfigPage notify={notify} createSignal={configCreateSignal} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} />}
             {page === 'plugins' && <PluginsPage query={query} notify={notify} saveSignal={pluginSaveSignal} onStatusChange={setPluginStats} />}
-            {page === 'memory' && <MemoryPage notify={notify} />}
+            {page === 'memory' && <MemoryPage query={query} notify={notify} createSignal={memoryCreateSignal} />}
             {page === 'mcp' && <McpPage notify={notify} />}
             {page === 'skills' && <SkillsPage notify={notify} />}
             {page === 'workflows' && <WorkflowsPage navigate={navigate} notify={notify} />}
@@ -1098,14 +1101,6 @@ function ProviderModelModal({ provider, onClose, onCreated }) {
     } catch (caught) { setError(caught.message) } finally { setSaving(false) }
   }
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal" onSubmit={submit}><div className="card-head"><div><h2>添加模型</h2><p>添加到 {provider.name}，可单独覆盖 Base URL。</p></div><button type="button" className="icon-button" onClick={onClose}><X size={17} /></button></div><div className="form-grid"><label className="field-label">模型 ID<input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="gpt-5.4-mini、gpt-image-1 或 sora-2" /></label><label className="field-label">显示名称<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="留空使用模型 ID" /></label></div><label className="field-label">模型 Base URL<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="可选；留空继承 Provider Base URL" /></label><label className="field-label">API 协议<span className="select-wrap"><select value={draft.api} onChange={(event) => setDraft({ ...draft, api: event.target.value })}>{PROVIDER_APIS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">模型用途<span className="select-wrap"><select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}><option value="auto">自动识别</option><option value="chat">对话</option><option value="image">图像生成</option><option value="video">视频生成</option></select><ChevronDown size={13} /></span></label>{draft.kind !== 'image' && draft.kind !== 'video' && <div className="modal-toggle-row"><span><strong>推理模型</strong><small>启用 reasoning effort / thinking level</small></span><Toggle value={draft.reasoning} onChange={(reasoning) => setDraft({ ...draft, reasoning })} /></div>}{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>取消</button><button className="button primary" disabled={saving || !draft.id.trim()}>{saving ? <RefreshCw className="spin" size={14} /> : <Plus size={14} />}{saving ? '添加中…' : '添加模型'}</button></div></form></div>
-}
-
-function MemoryPage({ notify }) {
-  const [selected, setSelected] = useState('Runtime Core')
-  const nodes = ['Runtime Core', 'Tool Registry', 'Provider Adapter', 'Memory Store', 'Policy Guard', 'runtime.md', 'tools.json', 'delete risk']
-  return (
-    <div className="memory-layout"><Panel className="wiki-panel"><SectionTitle title="Wiki 空间" />{[['Agent Runtime', '24 nodes'], ['Provider 适配层', '18 nodes'], ['插件权限', '32 nodes'], ['资产归档', '11 nodes'], ['通知渠道', '9 nodes'], ['任务调度', '14 nodes']].map((x, i) => <button className={i === 0 ? 'active' : ''} key={x[0]}><span>{x[0]}</span><small>{x[1]}</small><ChevronRight size={13} /></button>)}<div className="legend"><strong>图谱类型</strong><span><i className="dot blue" />概念节点</span><span><i className="dot green" />文件节点</span><span><i className="dot red" />风险节点</span></div></Panel><Panel className="graph-panel"><div className="graph-toolbar"><button><Plus size={14} /></button><button>−</button><button><RefreshCw size={13} /></button></div><svg viewBox="0 0 600 420" aria-hidden="true"><path d="M300 202 L138 104 M300 202 L465 103 M300 202 L150 322 M300 202 L470 315 M300 202 L300 62 M138 104 L65 230 M465 103 L540 220" /></svg>{nodes.map((n, i) => <button onClick={() => setSelected(n)} className={`graph-node node-${i} ${selected === n ? 'active' : ''}`} key={n}>{n}</button>)}</Panel><div className="detail-stack"><Panel><SectionTitle title="选中节点" /><h2>{selected}</h2><p className="muted-copy">Agent runtime 的核心记忆节点，关联工具注册、模型 provider 和执行策略。</p><div className="button-row"><button className="button primary" onClick={() => notify('节点已进入编辑状态')}><Pencil size={14} />编辑</button><button className="button danger"><Trash2 size={14} />删除</button></div></Panel><Panel><SectionTitle title="关联文件" />{['runtime.md', 'tools.json', 'policy.yaml', 'migration-notes.md'].map((f) => <div className="file-row" key={f}><FileCode2 size={15} /><span><strong>{f}</strong><small>/memory/{f}</small></span><button>查看</button><button><Pencil size={13} /></button><button className="danger"><Trash2 size={13} /></button></div>)}</Panel></div></div>
-  )
 }
 
 function McpPage({ notify }) {
