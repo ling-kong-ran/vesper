@@ -198,7 +198,15 @@ export class AgentRuntimeService {
     this.usagePath = join(dataDir, 'pi-coder-usage.json')
     this.assetsDir = join(dataDir, 'pi-coder-assets')
     this.assetIndexPath = join(dataDir, 'pi-coder-assets.json')
-    this.channels = new ChannelService({ path: join(dataDir, 'pi-coder-channels.json') })
+    this.channels = new ChannelService({
+      path: join(dataDir, 'pi-coder-channels.json'),
+      cwd,
+      agent: {
+        prompt: (input) => this.promptFromChannel(input),
+        abort: (sessionId) => this.abortSession(sessionId),
+        validateDirectory: (input) => resolveDirectory(input, this.cwd),
+      },
+    })
     this.sessions = new Map()
     this.modelRuntime = null
     this.settingsManager = null
@@ -218,9 +226,9 @@ export class AgentRuntimeService {
     this.usageLedger.days ||= {}
     this.assetIndex = await readJson(this.assetIndexPath, { assets: [] })
     this.assetIndex.assets = Array.isArray(this.assetIndex.assets) ? this.assetIndex.assets : []
-    await this.channels.init()
     this.settingsManager = SettingsManager.create(this.cwd, this.dataDir)
     await this.reloadModelRuntime()
+    await this.channels.init()
   }
 
   async reloadModelRuntime() {
@@ -784,10 +792,6 @@ export class AgentRuntimeService {
         }
       }
       send('done', { sessionId: session.sessionId })
-      void this.channels.notify('agent.completed', { name: value.name })
-    } catch (error) {
-      void this.channels.notify('agent.failed', { name: value.name, error: error instanceof Error ? error.message : String(error) })
-      throw error
     } finally {
       unsubscribe()
     }
@@ -855,24 +859,76 @@ export class AgentRuntimeService {
     return this.toolPlugins.getState()
   }
 
+  async promptFromChannel({ sessionId, message, attachments = [], cwd, title }) {
+    let id = String(sessionId || '')
+    if (id && !this.sessions.has(id) && !(await this.findSessionInfo(id))) id = ''
+    if (!id) {
+      const created = await this.createSession(title || '飞书会话')
+      id = created.id
+      if (cwd) await this.setSessionCwd(id, cwd)
+    }
+    let actualId = id
+    let text = ''
+    const assetIds = new Set()
+    await this.streamPrompt({
+      sessionId: id,
+      message,
+      attachments,
+      send: (event, data) => {
+        if ((event === 'meta' || event === 'done') && data?.sessionId) actualId = data.sessionId
+        if (event === 'text_delta') text += data?.delta || ''
+        if (event === 'generated_asset' && data?.id) assetIds.add(data.id)
+      },
+    })
+    if (!text.trim()) {
+      const messages = await this.getSessionMessages(actualId)
+      text = [...messages].reverse().find((item) => item.role === 'agent')?.text || ''
+    }
+    const runtime = this.sessions.get(actualId)
+    const assets = [...assetIds].map((assetId) => this.assetIndex.assets.find((asset) => asset.id === assetId)).filter(Boolean).map((asset) => ({
+      id: asset.id,
+      name: asset.name,
+      path: asset.filePath,
+      mimeType: asset.mimeType,
+    })).filter((asset) => asset.path)
+    return { sessionId: actualId, text: text.trim(), cwd: runtime?.cwd || this.sessionMeta[actualId]?.cwd || this.cwd, assets }
+  }
+
   getChannels() {
     return this.channels.getState()
   }
 
-  createChannel(input) {
-    return this.channels.create(input)
+  startChannelOnboarding() {
+    return this.channels.startOnboarding()
   }
 
-  updateChannel(id, input) {
-    return this.channels.update(id, input)
+  getChannelOnboarding(id) {
+    return this.channels.getOnboarding(id)
   }
 
-  deleteChannel(id) {
-    return this.channels.delete(id)
+  cancelChannelOnboarding(id) {
+    return this.channels.cancelOnboarding(id)
   }
 
-  testChannel(id, input) {
-    return this.channels.test(id, input)
+  updateChannel(input) {
+    return this.channels.update(input)
+  }
+
+  reconnectChannel() {
+    return this.channels.connect().then(() => this.channels.getState())
+  }
+
+  deleteChannel() {
+    return this.channels.remove()
+  }
+
+  resetChannelScope(chatId) {
+    return this.channels.resetScope(chatId)
+  }
+
+  async dispose() {
+    await this.channels.dispose()
+    await this.disposeSessions()
   }
 
   async savePlugins(input) {

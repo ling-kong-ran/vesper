@@ -1,110 +1,70 @@
-import { createHmac, randomUUID } from 'node:crypto'
+import { extname } from 'node:path'
 import { readJson, writeJsonAtomic } from '../../storage/json-file.mjs'
+import { FeishuGateway } from './feishu-gateway.mjs'
+import { FeishuOnboardingService } from './feishu-onboarding.mjs'
 
-const CHANNEL_TYPES = new Set(['feishu', 'wecom'])
-const CHANNEL_EVENTS = new Set(['agent.completed', 'agent.failed'])
-const OFFICIAL_DOCS = {
-  feishu: 'https://open.feishu.cn/document/client-docs/bot-v3/add-custom-bot',
-  wecom: 'https://developer.work.weixin.qq.com/document/path/91770',
+const TEXT_EXTENSIONS = new Set(['.txt', '.md', '.json', '.js', '.jsx', '.ts', '.tsx', '.css', '.html', '.xml', '.yaml', '.yml', '.csv', '.log', '.py', '.java', '.go', '.rs', '.sh', '.ps1', '.toml', '.sql'])
+const DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.odt', '.odp', '.ods', '.rtf', '.epub'])
+const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
+
+function defaultState() {
+  return { version: 2, connection: null, scopes: {} }
 }
 
-function cleanName(value, fallback) {
-  return String(value || fallback || '').trim().slice(0, 80)
+function maskAppId(value) {
+  const id = String(value || '')
+  return id.length > 10 ? `${id.slice(0, 7)}••••${id.slice(-4)}` : id
 }
 
-function validateWebhook(type, input) {
-  let url
-  try {
-    url = new URL(String(input || '').trim())
-  } catch {
-    throw new Error('Webhook URL 格式不正确。')
-  }
-  if (url.protocol !== 'https:' || url.username || url.password) throw new Error('Webhook 必须使用无账号信息的 HTTPS 地址。')
-  if (type === 'feishu') {
-    const officialHost = url.hostname === 'open.feishu.cn' || url.hostname === 'open.larksuite.com'
-    if (!officialHost || !url.pathname.startsWith('/open-apis/bot/v2/hook/')) throw new Error('请粘贴飞书官方自定义机器人的 Webhook 地址。')
-  } else if (type === 'wecom') {
-    if (url.hostname !== 'qyapi.weixin.qq.com' || url.pathname !== '/cgi-bin/webhook/send' || !url.searchParams.get('key')) {
-      throw new Error('请粘贴企业微信官方消息推送 Webhook 地址。')
-    }
-  }
-  return url.toString()
-}
-
-function webhookPreview(value) {
-  if (!value) return ''
-  const url = new URL(value)
-  if (url.searchParams.has('key')) url.searchParams.set('key', '••••••••')
-  else {
-    const parts = url.pathname.split('/')
-    parts[parts.length - 1] = '••••••••'
-    url.pathname = parts.join('/')
-  }
-  return url.toString()
-}
-
-function publicChannel(channel) {
+function publicScope(chatId, scope) {
   return {
-    id: channel.id,
-    type: channel.type,
-    name: channel.name,
-    enabled: channel.enabled,
-    mode: 'webhook',
-    events: channel.events,
-    webhookConfigured: Boolean(channel.webhookUrl),
-    webhookPreview: webhookPreview(channel.webhookUrl),
-    signingSecretConfigured: Boolean(channel.signingSecret),
-    createdAt: channel.createdAt,
-    updatedAt: channel.updatedAt,
-    lastTest: channel.lastTest || null,
+    chatId,
+    chatType: scope.chatType || 'group',
+    sessionId: scope.sessionId || '',
+    title: scope.title || chatId,
+    senderName: scope.senderName || '',
+    cwd: scope.cwd || '',
+    lastMessage: scope.lastMessage || '',
+    updatedAt: scope.updatedAt || null,
   }
 }
 
-function eventList(input, fallback = []) {
-  if (!Array.isArray(input)) return fallback
-  return [...new Set(input.filter((event) => CHANNEL_EVENTS.has(event)))]
-}
-
-function feishuPayload(text, secret) {
-  const payload = { msg_type: 'text', content: { text } }
-  if (!secret) return payload
-  const timestamp = Math.floor(Date.now() / 1000).toString()
-  return {
-    timestamp,
-    sign: createHmac('sha256', `${timestamp}\n${secret}`).update('').digest('base64'),
-    ...payload,
+function attachmentFromResource(resource) {
+  const extension = extname(resource.name || '').toLowerCase()
+  if (resource.type === 'image' || IMAGE_EXTENSIONS.has(extension)) {
+    const mimeType = extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : extension === '.webp' ? 'image/webp' : extension === '.gif' ? 'image/gif' : 'image/png'
+    return { kind: 'image', name: resource.name, mimeType, size: resource.buffer.length, data: resource.buffer.toString('base64') }
   }
-}
-
-function responseError(type, data) {
-  if (type === 'feishu') {
-    const code = Number(data?.code ?? data?.StatusCode ?? 0)
-    if (code !== 0) return data?.msg || data?.StatusMessage || `飞书返回错误码 ${code}`
-  } else {
-    const code = Number(data?.errcode ?? 0)
-    if (code !== 0) return data?.errmsg || `企业微信返回错误码 ${code}`
-  }
-  return ''
+  if (TEXT_EXTENSIONS.has(extension)) return { kind: 'text', name: resource.name, size: resource.buffer.length, text: resource.buffer.toString('utf8') }
+  if (DOCUMENT_EXTENSIONS.has(extension)) return { kind: 'document', name: resource.name, size: resource.buffer.length, extension, data: resource.buffer.toString('base64') }
+  return null
 }
 
 export class ChannelService {
-  constructor({ path, fetchImpl = globalThis.fetch }) {
+  constructor({ path, cwd, agent, gatewayFactory, onboardingFactory }) {
     this.path = path
-    this.fetchImpl = fetchImpl
-    this.state = { version: 1, channels: [] }
+    this.cwd = cwd
+    this.agent = agent
+    this.state = defaultState()
     this.writeQueue = Promise.resolve()
+    this.chatQueues = new Map()
+    this.gateway = gatewayFactory
+      ? gatewayFactory({ onMessage: (message) => this.enqueue(message) })
+      : new FeishuGateway({ onMessage: (message) => this.enqueue(message) })
+    this.onboarding = onboardingFactory
+      ? onboardingFactory({ onCompleted: (credentials) => this.completeOnboarding(credentials) })
+      : new FeishuOnboardingService({ onCompleted: (credentials) => this.completeOnboarding(credentials) })
   }
 
   async init() {
-    const stored = await readJson(this.path, { version: 1, channels: [] })
-    this.state = {
-      version: 1,
-      channels: Array.isArray(stored?.channels) ? stored.channels.filter((item) => CHANNEL_TYPES.has(item?.type)).map((item) => ({
-        ...item,
-        enabled: item.enabled !== false,
-        events: eventList(item.events, []),
-      })) : [],
+    const stored = await readJson(this.path, defaultState())
+    if (stored?.version === 2) {
+      this.state = { version: 2, connection: stored.connection || null, scopes: stored.scopes && typeof stored.scopes === 'object' ? stored.scopes : {} }
+    } else {
+      this.state = defaultState()
+      await this.save()
     }
+    if (this.state.connection?.enabled) void this.connect().catch(() => {})
   }
 
   save() {
@@ -114,119 +74,174 @@ export class ChannelService {
   }
 
   getState() {
+    const connection = this.state.connection
+    const live = this.gateway.getStatus()
     return {
-      channels: this.state.channels.map(publicChannel),
-      capabilities: {
-        feishu: {
-          quickConnect: false,
-          reason: '飞书官方自定义机器人需在目标群内添加；扫码登录不能直接创建可用的群机器人。',
-          docsUrl: OFFICIAL_DOCS.feishu,
-        },
-        wecom: {
-          quickConnect: false,
-          reason: '企业微信官方消息推送需由群成员在目标群内创建。',
-          docsUrl: OFFICIAL_DOCS.wecom,
-        },
-      },
+      providers: [{
+        type: 'feishu',
+        name: '飞书应用机器人',
+        description: '扫码创建应用，通过 WebSocket 长连接双向收发消息',
+        connected: live.state === 'connected',
+        status: live.state,
+      }],
+      connection: connection ? {
+        id: 'feishu',
+        type: 'feishu',
+        name: connection.name || live.bot?.name || 'Pi Coder Agent',
+        enabled: connection.enabled !== false,
+        appId: maskAppId(connection.appId),
+        domain: connection.domain || 'feishu',
+        accessMode: connection.accessMode || 'owner',
+        defaultCwd: connection.defaultCwd || this.cwd,
+        ownerConfigured: Boolean(connection.ownerOpenId),
+        bot: live.bot,
+        status: live.state,
+        lastError: live.lastError || '',
+        connectedAt: live.connectedAt,
+        reconnectAttempts: live.reconnectAttempts || 0,
+      } : null,
+      scopes: Object.entries(this.state.scopes).map(([chatId, scope]) => publicScope(chatId, scope)).sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0)),
     }
   }
 
-  async create(input) {
-    const type = String(input?.type || '')
-    if (!CHANNEL_TYPES.has(type)) throw new Error('暂不支持这个渠道类型。')
-    const webhookUrl = validateWebhook(type, input?.webhookUrl)
-    const now = new Date().toISOString()
-    const channel = {
-      id: randomUUID(),
-      type,
-      name: cleanName(input?.name, type === 'feishu' ? '飞书通知群' : '企业微信群通知'),
-      enabled: input?.enabled !== false,
-      events: eventList(input?.events, ['agent.completed', 'agent.failed']),
-      webhookUrl,
-      signingSecret: type === 'feishu' ? String(input?.signingSecret || '').trim() : '',
-      createdAt: now,
-      updatedAt: now,
-      lastTest: null,
+  startOnboarding() {
+    return this.onboarding.start()
+  }
+
+  getOnboarding(id) {
+    return this.onboarding.get(id)
+  }
+
+  cancelOnboarding(id) {
+    return this.onboarding.cancel(id)
+  }
+
+  async completeOnboarding(credentials) {
+    this.state.connection = {
+      name: 'Pi Coder Agent',
+      appId: credentials.appId,
+      appSecret: credentials.appSecret,
+      ownerOpenId: credentials.ownerOpenId || '',
+      domain: credentials.domain || 'feishu',
+      accessMode: 'owner',
+      defaultCwd: this.cwd,
+      enabled: true,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     }
-    this.state.channels.unshift(channel)
+    this.state.scopes = {}
     await this.save()
-    return publicChannel(channel)
+    const status = await this.connect()
+    if (status.bot?.name) {
+      this.state.connection.name = status.bot.name
+      await this.save()
+    }
+    return this.getState()
   }
 
-  async update(id, input) {
-    const channel = this.state.channels.find((item) => item.id === id)
-    if (!channel) return null
-    if (Object.hasOwn(input || {}, 'name')) channel.name = cleanName(input.name, channel.name)
-    if (Object.hasOwn(input || {}, 'enabled')) channel.enabled = Boolean(input.enabled)
-    if (Object.hasOwn(input || {}, 'events')) channel.events = eventList(input.events, channel.events)
-    if (String(input?.webhookUrl || '').trim()) {
-      channel.webhookUrl = validateWebhook(channel.type, input.webhookUrl)
-      channel.lastTest = null
-    }
-    if (channel.type === 'feishu') {
-      if (input?.clearSigningSecret) channel.signingSecret = ''
-      else if (String(input?.signingSecret || '').trim()) channel.signingSecret = String(input.signingSecret).trim()
-    }
-    channel.updatedAt = new Date().toISOString()
+  async connect() {
+    const connection = this.state.connection
+    if (!connection?.appId || !connection?.appSecret) throw new Error('请先扫码创建飞书机器人。')
+    if (connection.enabled === false) return this.gateway.getStatus()
+    return this.gateway.connect(connection)
+  }
+
+  async update(input) {
+    if (!this.state.connection) throw new Error('飞书机器人尚未创建。')
+    if (Object.hasOwn(input || {}, 'enabled')) this.state.connection.enabled = Boolean(input.enabled)
+    if (Object.hasOwn(input || {}, 'accessMode')) this.state.connection.accessMode = input.accessMode === 'tenant' ? 'tenant' : 'owner'
+    if (Object.hasOwn(input || {}, 'defaultCwd')) this.state.connection.defaultCwd = await this.agent.validateDirectory(input.defaultCwd)
+    this.state.connection.updatedAt = new Date().toISOString()
     await this.save()
-    return publicChannel(channel)
+    if (this.state.connection.enabled) await this.connect()
+    else await this.gateway.disconnect()
+    return this.getState()
   }
 
-  async delete(id) {
-    const index = this.state.channels.findIndex((item) => item.id === id)
-    if (index < 0) return false
-    this.state.channels.splice(index, 1)
+  async remove() {
+    await this.gateway.disconnect()
+    this.state = defaultState()
     await this.save()
     return true
   }
 
-  async send(channel, text) {
-    const payload = channel.type === 'feishu'
-      ? feishuPayload(text, channel.signingSecret)
-      : { msgtype: 'text', text: { content: text } }
-    let response
+  async resetScope(chatId) {
+    if (!this.state.scopes[chatId]) return false
+    delete this.state.scopes[chatId]
+    await this.save()
+    return true
+  }
+
+  enqueue(message) {
+    const previous = this.chatQueues.get(message.chatId) || Promise.resolve()
+    const next = previous.catch(() => {}).then(() => this.handleMessage(message))
+    this.chatQueues.set(message.chatId, next)
+    next.finally(() => { if (this.chatQueues.get(message.chatId) === next) this.chatQueues.delete(message.chatId) }).catch(() => {})
+  }
+
+  async handleMessage(message) {
+    const connection = this.state.connection
+    if (!connection?.enabled) return
+    if (connection.accessMode !== 'tenant' && (!connection.ownerOpenId || message.senderId !== connection.ownerOpenId)) {
+      await this.gateway.send(message, { text: connection.ownerOpenId ? '当前机器人仅允许扫码创建者使用。' : '未获取到创建者身份，请在渠道页重新扫码绑定或切换访问范围。' })
+      return
+    }
+    const command = message.content.trim().toLowerCase()
+    if (command === '/new' || command === '/reset') {
+      await this.resetScope(message.chatId)
+      await this.gateway.send(message, { text: '已开始新的 Pi Coder 会话。' })
+      return
+    }
+    const scope = this.state.scopes[message.chatId] || {}
+    if (command === '/status') {
+      await this.gateway.send(message, { text: scope.sessionId ? `会话：${scope.sessionId}\n工作目录：${scope.cwd || connection.defaultCwd}` : '当前聊天还没有绑定 Pi Coder 会话。' })
+      return
+    }
+    if (command === '/stop') {
+      const stopped = scope.sessionId ? await this.agent.abort(scope.sessionId) : false
+      await this.gateway.send(message, { text: stopped ? '已停止当前任务。' : '当前没有运行中的任务。' })
+      return
+    }
+
     try {
-      response = await this.fetchImpl(channel.webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json; charset=utf-8' },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(12_000),
+      const resources = await this.gateway.downloadResources(message.resources)
+      const attachments = resources.map(attachmentFromResource).filter(Boolean)
+      const prompt = message.content.trim() || (attachments.length ? '请分析这些附件。' : '')
+      if (!prompt) return
+      const result = await this.agent.prompt({
+        sessionId: scope.sessionId || '',
+        message: prompt,
+        attachments,
+        cwd: scope.cwd || connection.defaultCwd || this.cwd,
+        title: `飞书 · ${message.senderName || (message.chatType === 'p2p' ? '私聊' : '群聊')}`,
       })
-    } catch (error) {
-      throw new Error(`无法连接渠道：${error instanceof Error ? error.message : String(error)}`)
-    }
-    const raw = await response.text()
-    let data = {}
-    try { data = raw ? JSON.parse(raw) : {} } catch { data = {} }
-    if (!response.ok) throw new Error(`渠道请求失败（HTTP ${response.status}）`)
-    const platformError = responseError(channel.type, data)
-    if (platformError) throw new Error(platformError)
-    return data
-  }
-
-  async test(id, input = {}) {
-    const channel = this.state.channels.find((item) => item.id === id)
-    if (!channel) return null
-    const text = String(input.message || '✅ Pi Coder 渠道连接成功，这是一条测试消息。').trim().slice(0, 1000)
-    try {
-      await this.send(channel, text)
-      channel.lastTest = { ok: true, at: new Date().toISOString(), message: '连接正常' }
+      this.state.scopes[message.chatId] = {
+        ...scope,
+        sessionId: result.sessionId,
+        chatType: message.chatType,
+        senderName: message.senderName || '',
+        title: message.senderName || (message.chatType === 'p2p' ? '飞书私聊' : '飞书群聊'),
+        cwd: result.cwd || scope.cwd || connection.defaultCwd || this.cwd,
+        lastMessage: prompt.slice(0, 120),
+        updatedAt: new Date().toISOString(),
+      }
       await this.save()
-      return publicChannel(channel)
+      await this.gateway.send(message, { markdown: result.text || '任务已完成。' })
+      for (const asset of result.assets || []) {
+        const input = asset.mimeType?.startsWith('image/')
+          ? { image: { source: asset.path } }
+          : asset.mimeType?.startsWith('video/')
+            ? { video: { source: asset.path } }
+            : { file: { source: asset.path, fileName: asset.name } }
+        await this.gateway.sendToChat(message.chatId, input)
+      }
     } catch (error) {
-      channel.lastTest = { ok: false, at: new Date().toISOString(), message: error instanceof Error ? error.message : String(error) }
-      await this.save()
-      throw error
+      await this.gateway.send(message, { text: `执行失败：${error instanceof Error ? error.message : String(error)}` }).catch(() => {})
     }
   }
 
-  async notify(event, details = {}) {
-    if (!CHANNEL_EVENTS.has(event)) return []
-    const title = cleanName(details.name, '未命名会话')
-    const text = event === 'agent.completed'
-      ? `✅ Pi Coder 会话已完成\n${title}`
-      : `❌ Pi Coder 会话执行失败\n${title}${details.error ? `\n${String(details.error).slice(0, 500)}` : ''}`
-    const targets = this.state.channels.filter((channel) => channel.enabled && channel.events.includes(event))
-    return Promise.allSettled(targets.map((channel) => this.send(channel, text)))
+  async dispose() {
+    this.onboarding.dispose()
+    await this.gateway.disconnect()
   }
 }

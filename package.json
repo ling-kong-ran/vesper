@@ -13,10 +13,12 @@
   },
   "dependencies": {
     "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@larksuiteoapi/node-sdk": "^1.71.1",
     "@tailwindcss/vite": "^4.3.3",
     "lucide-react": "^1.24.0",
     "officeparser": "^7.3.0",
     "openai": "^6.26.0",
+    "qrcode": "^1.5.4",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "react-markdown": "^10.1.0",

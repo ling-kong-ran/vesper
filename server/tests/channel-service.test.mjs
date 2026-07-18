@@ -1,92 +1,107 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { ChannelService } from '../services/channels/channel-service.mjs'
+import { FeishuOnboardingService } from '../services/channels/feishu-onboarding.mjs'
 
-function response(data, status = 200) {
-  return {
-    ok: status >= 200 && status < 300,
-    status,
-    text: async () => JSON.stringify(data),
+class FakeGateway {
+  constructor({ onMessage }) {
+    this.onMessage = onMessage
+    this.sent = []
+    this.status = { state: 'idle', lastError: '', bot: null }
   }
+  getStatus() { return this.status }
+  async connect(config) {
+    this.config = config
+    this.status = { state: 'connected', lastError: '', connectedAt: new Date().toISOString(), bot: { name: 'Pi Coder Agent', openId: 'bot' } }
+    return this.status
+  }
+  async disconnect() { this.status = { state: 'idle', lastError: '', bot: null } }
+  async send(message, input) { this.sent.push({ chatId: message.chatId, input, replyTo: message.messageId }) }
+  async sendToChat(chatId, input) { this.sent.push({ chatId, input }) }
+  async downloadResources() { return [] }
 }
 
-async function fixture(fetchImpl) {
+async function fixture(agent = {}) {
   const directory = await mkdtemp(join(tmpdir(), 'pi-coder-channels-'))
   const path = join(directory, 'channels.json')
-  const service = new ChannelService({ path, fetchImpl })
+  let gateway
+  const service = new ChannelService({
+    path,
+    cwd: directory,
+    agent: {
+      prompt: agent.prompt || (async () => ({ sessionId: 'session-1', text: 'Agent 回复', cwd: directory, assets: [] })),
+      abort: agent.abort || (async () => true),
+      validateDirectory: agent.validateDirectory || (async (value) => value || directory),
+    },
+    gatewayFactory: (options) => { gateway = new FakeGateway(options); return gateway },
+    onboardingFactory: ({ onCompleted }) => ({ start: () => onCompleted, get: () => null, cancel: () => false, dispose: () => {} }),
+  })
   await service.init()
-  return { directory, path, service }
+  return { directory, path, service, gateway }
 }
 
-test('channel responses mask webhook and signing secret', async (t) => {
-  const { directory, path, service } = await fixture(async () => response({ code: 0 }))
+test('legacy one-way webhook configuration is discarded during migration', async (t) => {
+  const { directory, path, service } = await fixture()
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const created = await service.create({
-    type: 'feishu',
-    name: '研发群',
-    webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/private-token',
-    signingSecret: 'private-secret',
-  })
-  assert.equal(created.webhookConfigured, true)
-  assert.equal(created.signingSecretConfigured, true)
-  assert.doesNotMatch(JSON.stringify(created), /private-token|private-secret/)
-  const stored = await readFile(path, 'utf8')
-  assert.match(stored, /private-token/)
-  assert.match(stored, /private-secret/)
+  await writeFile(path, JSON.stringify({ version: 1, channels: [{ type: 'feishu', webhookUrl: 'https://secret' }] }))
+  await service.init()
+  assert.equal(service.getState().connection, null)
+  assert.doesNotMatch(await readFile(path, 'utf8'), /webhookUrl|secret/)
 })
 
-test('Feishu test sends an official signed webhook payload', async (t) => {
-  let request
-  const { directory, service } = await fixture(async (url, options) => {
-    request = { url, options }
-    return response({ code: 0, msg: 'success' })
-  })
+test('QR onboarding stores credentials privately and establishes WebSocket state', async (t) => {
+  const { directory, path, service, gateway } = await fixture()
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const channel = await service.create({
-    type: 'feishu',
-    webhookUrl: 'https://open.feishu.cn/open-apis/bot/v2/hook/token',
-    signingSecret: 'secret',
-  })
-  const tested = await service.test(channel.id)
-  const payload = JSON.parse(request.options.body)
-  assert.equal(request.url, 'https://open.feishu.cn/open-apis/bot/v2/hook/token')
-  assert.equal(payload.msg_type, 'text')
-  assert.equal(typeof payload.timestamp, 'string')
-  assert.equal(typeof payload.sign, 'string')
-  assert.equal(tested.lastTest.ok, true)
+  await service.completeOnboarding({ appId: 'cli_1234567890', appSecret: 'private-secret', ownerOpenId: 'owner', domain: 'feishu' })
+  const state = service.getState()
+  assert.equal(state.connection.status, 'connected')
+  assert.equal(state.connection.ownerConfigured, true)
+  assert.doesNotMatch(JSON.stringify(state), /private-secret/)
+  assert.equal(gateway.config.appId, 'cli_1234567890')
+  assert.match(await readFile(path, 'utf8'), /private-secret/)
 })
 
-test('WeCom webhook validation blocks non-official hosts and sends the official shape', async (t) => {
-  let payload
-  const { directory, service } = await fixture(async (_url, options) => {
-    payload = JSON.parse(options.body)
-    return response({ errcode: 0, errmsg: 'ok' })
-  })
+test('inbound Feishu messages run the agent and bind each chat to a Pi session', async (t) => {
+  let promptInput
+  const { directory, service, gateway } = await fixture({ prompt: async (input) => { promptInput = input; return { sessionId: 'pi-session', text: '**完成**', cwd: directory, assets: [] } } })
   t.after(() => rm(directory, { recursive: true, force: true }))
-  await assert.rejects(() => service.create({ type: 'wecom', webhookUrl: 'https://example.com/cgi-bin/webhook/send?key=secret' }), /企业微信官方/)
-  const channel = await service.create({ type: 'wecom', webhookUrl: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=secret' })
-  await service.test(channel.id)
-  assert.equal(payload.msgtype, 'text')
-  assert.match(payload.text.content, /连接成功/)
+  await service.completeOnboarding({ appId: 'cli_app', appSecret: 'secret', ownerOpenId: 'owner' })
+  await service.handleMessage({ messageId: 'm1', chatId: 'chat1', chatType: 'p2p', senderId: 'owner', senderName: '用户', content: '检查项目', resources: [] })
+  assert.equal(promptInput.message, '检查项目')
+  assert.equal(service.getState().scopes[0].sessionId, 'pi-session')
+  assert.deepEqual(gateway.sent.at(-1).input, { markdown: '**完成**' })
 })
 
-test('automatic notifications only target enabled subscribed channels', async (t) => {
-  let sends = 0
-  const { directory, service } = await fixture(async () => { sends += 1; return response({ errcode: 0 }) })
+test('owner-only mode rejects other users and /stop aborts the bound session', async (t) => {
+  let aborted = ''
+  const { directory, service, gateway } = await fixture({ abort: async (id) => { aborted = id; return true } })
   t.after(() => rm(directory, { recursive: true, force: true }))
-  const channel = await service.create({
-    type: 'wecom',
-    webhookUrl: 'https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=secret',
-    events: ['agent.failed'],
+  await service.completeOnboarding({ appId: 'cli_app', appSecret: 'secret', ownerOpenId: 'owner' })
+  await service.handleMessage({ messageId: 'm1', chatId: 'chat1', chatType: 'p2p', senderId: 'owner', content: '开始', resources: [] })
+  await service.handleMessage({ messageId: 'm2', chatId: 'chat1', chatType: 'p2p', senderId: 'other', content: '继续', resources: [] })
+  assert.match(gateway.sent.at(-1).input.text, /扫码创建者/)
+  await service.handleMessage({ messageId: 'm3', chatId: 'chat1', chatType: 'p2p', senderId: 'owner', content: '/stop', resources: [] })
+  assert.equal(aborted, 'session-1')
+})
+
+test('official registerApp flow requests only bidirectional bot capabilities', async () => {
+  let options
+  const service = new FeishuOnboardingService({
+    registerAppImpl: async (input) => {
+      options = input
+      input.onQRCodeReady({ url: 'https://accounts.feishu.cn/device', expireIn: 60 })
+      return { client_id: 'cli_app', client_secret: 'secret', user_info: { open_id: 'owner', tenant_brand: 'feishu' } }
+    },
+    renderQr: async () => 'data:image/png;base64,qr',
+    onCompleted: async () => {},
   })
-  await service.notify('agent.completed', { name: '任务' })
-  assert.equal(sends, 0)
-  await service.notify('agent.failed', { name: '任务' })
-  assert.equal(sends, 1)
-  await service.update(channel.id, { enabled: false })
-  await service.notify('agent.failed', { name: '任务' })
-  assert.equal(sends, 1)
+  const job = await service.start()
+  assert.equal(job.qrDataUrl, 'data:image/png;base64,qr')
+  await service.jobs.get(job.id).promise
+  assert.equal(options.createOnly, true)
+  assert.deepEqual(options.addons.events.items.tenant, ['im.message.receive_v1'])
+  assert.ok(options.addons.scopes.tenant.includes('im:message:send_as_bot'))
 })

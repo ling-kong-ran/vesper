@@ -41,7 +41,7 @@ server.listen(port, host, () => {
 })
 
 async function shutdown() {
-  await runtime.disposeSessions()
+  await runtime.dispose()
   await vite?.close()
   server.close(() => process.exit(0))
 }

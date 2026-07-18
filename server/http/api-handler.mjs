@@ -28,27 +28,38 @@ export function createApiHandler(runtime) {
         json(res, 200, runtime.getChannels())
         return true
       }
-      if (req.method === 'POST' && url.pathname === '/api/channels') {
-        json(res, 201, await runtime.createChannel(await bodyJson(req)))
+      if (req.method === 'POST' && url.pathname === '/api/channels/feishu/onboarding') {
+        json(res, 201, await runtime.startChannelOnboarding())
         return true
       }
-      const channelTestMatch = url.pathname.match(/^\/api\/channels\/([^/]+)\/test$/)
-      if (req.method === 'POST' && channelTestMatch) {
-        const result = await runtime.testChannel(decodeURIComponent(channelTestMatch[1]), await bodyJson(req))
-        if (!result) json(res, 404, { error: '渠道不存在。' })
+      const onboardingMatch = url.pathname.match(/^\/api\/channels\/feishu\/onboarding\/([^/]+)$/)
+      if (req.method === 'GET' && onboardingMatch) {
+        const result = runtime.getChannelOnboarding(decodeURIComponent(onboardingMatch[1]))
+        if (!result) json(res, 404, { error: '扫码任务不存在或已过期。' })
         else json(res, 200, result)
         return true
       }
-      const channelMatch = url.pathname.match(/^\/api\/channels\/([^/]+)$/)
-      if (req.method === 'PATCH' && channelMatch) {
-        const result = await runtime.updateChannel(decodeURIComponent(channelMatch[1]), await bodyJson(req))
-        if (!result) json(res, 404, { error: '渠道不存在。' })
-        else json(res, 200, result)
+      if (req.method === 'DELETE' && onboardingMatch) {
+        json(res, 200, { cancelled: runtime.cancelChannelOnboarding(decodeURIComponent(onboardingMatch[1])) })
         return true
       }
-      if (req.method === 'DELETE' && channelMatch) {
-        const deleted = await runtime.deleteChannel(decodeURIComponent(channelMatch[1]))
-        if (!deleted) json(res, 404, { error: '渠道不存在。' })
+      if (req.method === 'PATCH' && url.pathname === '/api/channels/feishu') {
+        json(res, 200, await runtime.updateChannel(await bodyJson(req)))
+        return true
+      }
+      if (req.method === 'POST' && url.pathname === '/api/channels/feishu/reconnect') {
+        json(res, 200, await runtime.reconnectChannel())
+        return true
+      }
+      if (req.method === 'DELETE' && url.pathname === '/api/channels/feishu') {
+        await runtime.deleteChannel()
+        json(res, 200, { deleted: true })
+        return true
+      }
+      const channelScopeMatch = url.pathname.match(/^\/api\/channels\/feishu\/scopes\/([^/]+)$/)
+      if (req.method === 'DELETE' && channelScopeMatch) {
+        const deleted = await runtime.resetChannelScope(decodeURIComponent(channelScopeMatch[1]))
+        if (!deleted) json(res, 404, { error: '飞书会话不存在。' })
         else json(res, 200, { deleted: true })
         return true
       }
