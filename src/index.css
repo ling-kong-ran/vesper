@@ -420,6 +420,7 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
   .mobile-menu { display: grid; }.page-header { padding-inline: 16px; }.page-content { padding: 0 16px 18px; }.search-box { width: 190px; }
   .chat-layout, .chat-layout.mode-focus { grid-template-columns: 190px minmax(0,1fr); }.session-grid { grid-template-columns: 1fr; overflow: auto; }
   .asset-columns, .two-one-grid, .split-list-detail, .config-layout, .workflow-top, .workflow-bottom { grid-template-columns: 1fr; }
+  .split-list-detail.schedule-layout { grid-template-columns: 280px minmax(420px,1fr); overflow-x: auto; }
   .selection-list { max-height: 300px; }.channel-cards { grid-template-columns: 1fr; }.asset-side { grid-template-columns: repeat(2,minmax(0,1fr)); }.config-bottom { grid-template-columns: 1fr; }
   .builder-layout { grid-template-columns: 180px minmax(520px,1fr); overflow: auto; }.builder-layout > .inspector { grid-column: 1/-1; }
 }
