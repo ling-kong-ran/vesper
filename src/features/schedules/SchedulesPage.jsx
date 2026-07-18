@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Bell, Bot, CheckCircle2, ChevronDown, Clock3, MessageCircle, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Toggle } from '../../components/ui.jsx'
 import { apiJson } from '../../lib/api.js'
@@ -46,6 +46,7 @@ export function SchedulesPage({ notify, createSignal, openNotificationSettings }
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [createOpen, setCreateOpen] = useState(false)
+  const handledCreateSignal = useRef(createSignal)
 
   const load = useCallback(async () => {
     try {
@@ -57,7 +58,7 @@ export function SchedulesPage({ notify, createSignal, openNotificationSettings }
   }, [])
 
   useEffect(() => { load() }, [load])
-  useEffect(() => { if (createSignal > 0) setCreateOpen(true) }, [createSignal])
+  useEffect(() => { if (createSignal > handledCreateSignal.current) setCreateOpen(true); handledCreateSignal.current = createSignal }, [createSignal])
   useEffect(() => {
     const timer = window.setInterval(load, data.tasks.some((task) => task.lastStatus === 'running') ? 2000 : 10_000)
     return () => window.clearInterval(timer)

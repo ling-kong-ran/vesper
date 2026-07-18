@@ -367,6 +367,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
   const [tiledSessionIds, setTiledSessionIds] = useState(() => readStoredArray('pi-coder-tiled-sessions'))
   const tiledStorageWasEmpty = useRef(localStorage.getItem('pi-coder-tiled-sessions') === null)
   const createSessionRef = useRef(null)
+  const handledCreateSignal = useRef(createSignal)
   const sessionStatesRef = useRef(sessionStates)
 
   useEffect(() => {
@@ -383,9 +384,32 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
     setSessionStates(states)
   }, [])
 
+  const syncLiveSession = useCallback(async (id) => {
+    if (!id) return
+    try {
+      const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/live`)
+      updateSessionState(id, (current) => ({
+        ...current,
+        messages: data.messages,
+        tools: data.tools || [],
+        streaming: data.streaming,
+        recovering: data.streaming,
+        loaded: true,
+        loading: false,
+        error: data.error || '',
+        model: data.model || current.model,
+        cwd: data.cwd || current.cwd,
+      }))
+      setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd } : session))
+    } catch (caught) {
+      updateSessionState(id, { recovering: false, loading: false, error: caught.message })
+    }
+  }, [updateSessionState])
+
   const loadSessionMessages = useCallback(async (id, force = false) => {
     if (!id) return
     const current = sessionStatesRef.current[id]
+    if (current?.recovering) { await syncLiveSession(id); return }
     if (!force && (current?.loaded || current?.loading || current?.streaming)) return
     updateSessionState(id, { loading: true })
     try {
@@ -396,7 +420,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
     } catch (caught) {
       updateSessionState(id, { loading: false, error: caught.message })
     }
-  }, [updateSessionState])
+  }, [syncLiveSession, updateSessionState])
 
   useEffect(() => {
     if (activeId) localStorage.setItem('pi-coder-active-session', activeId)
@@ -454,6 +478,9 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
         }
         if (!active) return
         setRemoteSessions(list)
+        for (const session of list) {
+          if (session.streaming) updateSessionState(session.id, { streaming: true, recovering: true, loaded: false, error: '' })
+        }
         const storedId = localStorage.getItem('pi-coder-active-session')
         setActiveId(list.some((session) => session.id === storedId) ? storedId : (list[0]?.id || ''))
         setTiledSessionIds((current) => {
@@ -468,10 +495,11 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
       .catch((caught) => active && setError(caught.message))
       .finally(() => active && setLoading(false))
     return () => { active = false }
-  }, [])
+  }, [updateSessionState])
 
   useEffect(() => {
-    if (createSignal > 0) createSessionRef.current?.()
+    if (createSignal > handledCreateSignal.current) createSessionRef.current?.()
+    handledCreateSignal.current = createSignal
   }, [createSignal])
 
   useEffect(() => {
@@ -481,6 +509,17 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
   useEffect(() => {
     for (const id of tiledSessionIds) loadSessionMessages(id)
   }, [tiledSessionIds, loadSessionMessages])
+
+  useEffect(() => {
+    let active = true
+    const poll = () => {
+      if (!active) return
+      for (const [id, state] of Object.entries(sessionStatesRef.current)) if (state.recovering) void syncLiveSession(id)
+    }
+    poll()
+    const timer = window.setInterval(poll, 800)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [syncLiveSession])
 
   const sendPrompt = async (text, requestedSessionId = activeId, attachments = []) => {
     const prompt = text.trim() || (attachments.length ? '请分析这些附件。' : '')
@@ -805,6 +844,7 @@ function AssetsPage({ query, notify, createSignal, onUse }) {
   const [assets, setAssets] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const handledCreateSignal = useRef(createSignal)
   const [preview, setPreview] = useState(null)
   const [linkModal, setLinkModal] = useState(false)
 
@@ -828,7 +868,7 @@ function AssetsPage({ query, notify, createSignal, onUse }) {
   }, [query, tab])
 
   useEffect(() => { loadAssets() }, [loadAssets])
-  useEffect(() => { if (createSignal > 0) setLinkModal(true) }, [createSignal])
+  useEffect(() => { if (createSignal > handledCreateSignal.current) setLinkModal(true); handledCreateSignal.current = createSignal }, [createSignal])
 
   const deleteAsset = async (asset) => {
     if (!window.confirm(`确定删除资产「${asset.name}」吗？`)) return
@@ -916,6 +956,7 @@ function ConfigPage({ notify, createSignal, section, setSection, onBrowserNotifi
   const [error, setError] = useState('')
   const [providerModal, setProviderModal] = useState(false)
   const [modelModal, setModelModal] = useState(false)
+  const handledCreateSignal = useRef(createSignal)
 
   useEffect(() => {
     apiJson('/api/config')
@@ -928,7 +969,8 @@ function ConfigPage({ notify, createSignal, section, setSection, onBrowserNotifi
   }, [])
 
   useEffect(() => {
-    if (createSignal > 0) setProviderModal(true)
+    if (createSignal > handledCreateSignal.current) setProviderModal(true)
+    handledCreateSignal.current = createSignal
   }, [createSignal])
 
   const selectProvider = (provider) => {

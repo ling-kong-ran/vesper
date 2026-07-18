@@ -220,6 +220,7 @@ export class AgentRuntimeService {
       notifications: this.notificationSettings,
     })
     this.sessions = new Map()
+    this.liveSessions = new Map()
     this.modelRuntime = null
     this.settingsManager = null
     this.sessionMeta = {}
@@ -507,6 +508,7 @@ export class AgentRuntimeService {
         cwd: active?.cwd || this.sessionMeta[session.id]?.cwd || session.cwd || this.cwd,
         created: session.created.toISOString(),
         modified: session.modified.toISOString(),
+        streaming: Boolean(active?.session.isStreaming),
       }
     })
     const persistedIds = new Set(result.map((session) => session.id))
@@ -521,6 +523,7 @@ export class AgentRuntimeService {
         cwd: value.cwd || this.cwd,
         created: value.created,
         modified: value.modified,
+        streaming: Boolean(value.session.isStreaming),
       })
     }
     return result
@@ -563,6 +566,35 @@ export class AgentRuntimeService {
       .filter((asset) => asset.sessionId === id && asset.source === 'agent' && /^(?:image|video)\//.test(asset.mimeType || ''))
       .sort((left, right) => new Date(left.created).getTime() - new Date(right.created).getTime())
     return attachGeneratedAssets(messages, assets)
+  }
+
+  async getSessionLive(id) {
+    const active = this.sessions.get(id)
+    const live = this.liveSessions.get(id)
+    const messages = await this.getSessionMessages(id)
+    const streaming = Boolean(active?.session.isStreaming || live?.streaming)
+    if (streaming && live) {
+      const lastUserIndex = messages.findLastIndex((message) => message.role === 'user')
+      const assistantIndex = messages.findIndex((message, index) => index > lastUserIndex && message.role === 'agent')
+      const liveMessage = {
+        id: `live-${id}`,
+        role: 'agent',
+        text: live.text,
+        streaming: true,
+        attachments: live.assets,
+      }
+      if (assistantIndex >= 0) messages[assistantIndex] = { ...messages[assistantIndex], ...liveMessage, text: live.text || messages[assistantIndex].text, attachments: live.assets.length ? live.assets : messages[assistantIndex].attachments }
+      else messages.push(liveMessage)
+    }
+    return {
+      id,
+      streaming,
+      messages,
+      tools: live?.tools || [],
+      error: live?.error || '',
+      model: active?.session.model ? `${active.session.model.provider}/${active.session.model.id}` : '',
+      cwd: active?.cwd || this.sessionMeta[id]?.cwd || this.cwd,
+    }
   }
 
   async renameSession(id, name, { manual = true } = {}) {
@@ -711,6 +743,8 @@ export class AgentRuntimeService {
       throw new Error('没有可用模型，请先在配置页设置 Provider、模型和 API Key。')
     }
     if (session.isStreaming) throw new Error('当前会话仍在运行，请等待完成或先停止。')
+    const live = { streaming: true, text: '', tools: [], assets: [], error: '', startedAt: new Date().toISOString() }
+    this.liveSessions.set(session.sessionId, live)
 
     const firstTurn = !session.messages.some((item) => item.role === 'user')
     const sessionMeta = this.sessionMeta[session.sessionId]
@@ -734,10 +768,11 @@ export class AgentRuntimeService {
     const unsubscribe = session.subscribe((event) => {
       if (event.type === 'message_update') {
         const update = event.assistantMessageEvent
-        if (update.type === 'text_delta') send('text_delta', { delta: update.delta })
+        if (update.type === 'text_delta') { live.text += update.delta || ''; send('text_delta', { delta: update.delta }) }
         if (update.type === 'thinking_delta') send('thinking_delta', { delta: update.delta })
       } else if (event.type === 'tool_execution_start') {
         toolArgs.set(event.toolCallId, event.args)
+        live.tools.push({ id: event.toolCallId, name: event.toolName, status: 'running' })
         send('tool_start', { id: event.toolCallId, name: event.toolName, args: event.args })
       } else if (event.type === 'tool_execution_update') {
         send('tool_update', { id: event.toolCallId, name: event.toolName })
@@ -747,8 +782,13 @@ export class AgentRuntimeService {
         if (!event.isError && event.toolName === 'generate_visual' && event.result?.details?.path) {
           const generatedPath = resolve(event.result.details.path)
           const asset = this.assetIndex.assets.find((item) => item.filePath && resolve(item.filePath) === generatedPath)
-          if (asset) send('generated_asset', assetMessageAttachment(asset))
+          if (asset) {
+            const attachment = assetMessageAttachment(asset)
+            live.assets = [...live.assets.filter((item) => item.id !== attachment.id), attachment]
+            send('generated_asset', attachment)
+          }
         }
+        live.tools = live.tools.map((item) => item.id === event.toolCallId ? { ...item, status: event.isError ? 'error' : 'done', message: event.isError ? textFromContent(event.result?.content) || '工具执行失败。' : '' } : item)
         send('tool_end', {
           id: event.toolCallId,
           name: event.toolName,
@@ -805,8 +845,14 @@ export class AgentRuntimeService {
         }
       }
       send('done', { sessionId: session.sessionId })
+    } catch (error) {
+      live.error = error instanceof Error ? error.message : String(error)
+      throw error
     } finally {
       unsubscribe()
+      live.streaming = false
+      const timer = setTimeout(() => { if (this.liveSessions.get(session.sessionId) === live) this.liveSessions.delete(session.sessionId) }, 60_000)
+      timer.unref?.()
     }
   }
 

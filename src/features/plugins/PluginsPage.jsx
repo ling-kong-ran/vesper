@@ -32,7 +32,7 @@ export function PluginsPage({ query, notify, saveSignal, onStatusChange }) {
   const [tab, setTab] = useState('全部')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const handledSaveSignal = useRef(0)
+  const handledSaveSignal = useRef(saveSignal)
 
   useEffect(() => {
     apiJson('/api/plugins').then((result) => {

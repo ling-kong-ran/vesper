@@ -233,6 +233,11 @@ export function createApiHandler(runtime) {
         json(res, 200, { messages: await runtime.getSessionMessages(decodeURIComponent(messagesMatch[1])) })
         return true
       }
+      const liveSessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/live$/)
+      if (req.method === 'GET' && liveSessionMatch) {
+        json(res, 200, await runtime.getSessionLive(decodeURIComponent(liveSessionMatch[1])))
+        return true
+      }
       const abortMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/abort$/)
       if (req.method === 'POST' && abortMatch) {
         json(res, 200, { aborted: await runtime.abortSession(decodeURIComponent(abortMatch[1])) })
@@ -253,7 +258,7 @@ export function createApiHandler(runtime) {
             sessionId: body.sessionId,
             message: String(body.message).trim(),
             attachments: body.attachments,
-            send: (event, data) => sseSend(res, event, data),
+            send: (event, data) => { if (!res.destroyed && !res.writableEnded) sseSend(res, event, data) },
           })
         } catch (error) {
           sseSend(res, 'error', { message: error instanceof Error ? error.message : String(error) })

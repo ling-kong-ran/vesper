@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Bot, CheckCircle2, ChevronDown, ExternalLink, FolderOpen, MessageCircle, MessageSquare, Plus, RefreshCw, ShieldCheck, Trash2, Unplug, X, Zap } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Toggle } from '../../components/ui.jsx'
 import { apiJson } from '../../lib/api.js'
@@ -27,6 +27,7 @@ export function ChannelsPage({ notify, createSignal }) {
   const [starting, setStarting] = useState('')
   const [saving, setSaving] = useState(false)
   const [cwd, setCwd] = useState('')
+  const handledCreateSignal = useRef(createSignal)
 
   const load = useCallback(async () => {
     try {
@@ -39,7 +40,7 @@ export function ChannelsPage({ notify, createSignal }) {
   }, [selectedPlatform])
 
   useEffect(() => { load() }, [load])
-  useEffect(() => { if (createSignal > 0) beginOnboarding(selectedPlatform) }, [createSignal]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (createSignal > handledCreateSignal.current) beginOnboarding(selectedPlatform); handledCreateSignal.current = createSignal }, [createSignal]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!onboarding?.id || ['completed', 'failed', 'cancelled'].includes(onboarding.status)) return undefined
     const timer = window.setInterval(async () => {
