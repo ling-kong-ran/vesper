@@ -93,7 +93,8 @@ export class ChannelService {
   async init() {
     const stored = await readJson(this.path, defaultState())
     this.state = normalizeState(stored)
-    if (stored?.version !== 3) await this.save()
+    const hasLegacyTemplateTargets = Object.values(stored?.templates || {}).some((template) => Object.values(template?.channels || {}).some((variant) => Object.hasOwn(variant || {}, 'targets')))
+    if (stored?.version !== 3 || hasLegacyTemplateTargets) await this.save()
     for (const platform of PLATFORMS) {
       const connection = this.state.connections[platform]
       if (connection && connection.enabled !== false) void this.connect(platform).catch(() => {})
@@ -213,7 +214,6 @@ export class ChannelService {
     await this.gateways[platform].disconnect()
     this.state.connections[platform] = null
     for (const key of Object.keys(this.state.scopes)) if (this.state.scopes[key].platform === platform) delete this.state.scopes[key]
-    for (const template of Object.values(this.state.templates)) template.channels[platform].targets = []
     await this.save()
     return true
   }
@@ -221,11 +221,16 @@ export class ChannelService {
   async resetScope(key) {
     if (!this.state.scopes[key]) return false
     delete this.state.scopes[key]
-    for (const template of Object.values(this.state.templates)) {
-      for (const platform of PLATFORMS) template.channels[platform].targets = template.channels[platform].targets.filter((target) => target !== key)
-    }
     await this.save()
     return true
+  }
+
+  latestScope(platform) {
+    return Object.values(this.state.scopes).reduce((latest, scope) => {
+      if (scope.platform !== platform) return latest
+      if (!latest) return scope
+      return new Date(scope.updatedAt || 0).getTime() >= new Date(latest.updatedAt || 0).getTime() ? scope : latest
+    }, null)
   }
 
   updateWeixinSync(value) {
@@ -310,9 +315,6 @@ export class ChannelService {
       if (!content) throw new Error('通知模板不能为空。')
       template.channels[platform].content = content.slice(0, 12_000)
     }
-    if (Object.hasOwn(input || {}, 'targets')) {
-      template.channels[platform].targets = [...new Set((Array.isArray(input.targets) ? input.targets : []).map(String).filter((key) => this.state.scopes[key]?.platform === platform))]
-    }
     await this.save()
     return this.getState()
   }
@@ -325,12 +327,10 @@ export class ChannelService {
       const connection = this.state.connections[platform]
       if (!connection?.enabled) continue
       const variant = template.channels[platform]
+      const scope = this.latestScope(platform)
+      if (!scope) continue
       const content = renderNotificationTemplate(variant.content, data)
-      for (const key of variant.targets) {
-        const scope = this.state.scopes[key]
-        if (!scope || scope.platform !== platform) continue
-        results.push(this.gateways[platform].sendToPeer(scope.peerId, platform === 'feishu' ? { markdown: content } : { text: content }, scope))
-      }
+      results.push(this.gateways[platform].sendToPeer(scope.peerId, platform === 'feishu' ? { markdown: content } : { text: content }, scope))
     }
     return Promise.allSettled(results)
   }
@@ -338,15 +338,11 @@ export class ChannelService {
   async testNotification(event, platform) {
     const variant = this.state.templates[event]?.channels?.[platform]
     if (!variant) throw new Error('通知模板不存在。')
-    if (!variant.targets.length) throw new Error('请先为模板选择至少一个接收会话。')
+    const scope = this.latestScope(platform)
+    if (!scope) throw new Error('该渠道还没有可接收通知的历史会话。')
     const content = renderNotificationTemplate(variant.content, sampleNotificationData())
-    const sends = variant.targets.map((key) => {
-      const scope = this.state.scopes[key]
-      if (!scope) return Promise.resolve()
-      return this.gateways[platform].sendToPeer(scope.peerId, platform === 'feishu' ? { markdown: content } : { text: content }, scope)
-    })
-    await Promise.all(sends)
-    return { sent: sends.length, preview: content }
+    await this.gateways[platform].sendToPeer(scope.peerId, platform === 'feishu' ? { markdown: content } : { text: content }, scope)
+    return { sent: 1, preview: content }
   }
 
   async dispose() {

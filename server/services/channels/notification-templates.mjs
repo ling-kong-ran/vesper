@@ -45,8 +45,8 @@ export function defaultTemplates() {
   return Object.fromEntries(Object.entries(NOTIFICATION_EVENTS).map(([event, definition]) => [event, {
     enabled: true,
     channels: {
-      feishu: { content: definition.defaultContent, targets: [] },
-      weixin: { content: definition.defaultContent, targets: [] },
+      feishu: { content: definition.defaultContent },
+      weixin: { content: definition.defaultContent },
     },
   }]))
 }
@@ -61,7 +61,6 @@ export function normalizeTemplates(input) {
       const variant = stored.channels?.[platform]
       if (!variant || typeof variant !== 'object') continue
       if (String(variant.content || '').trim()) defaults[event].channels[platform].content = String(variant.content).slice(0, 12_000)
-      if (Array.isArray(variant.targets)) defaults[event].channels[platform].targets = [...new Set(variant.targets.map(String).filter(Boolean))]
     }
   }
   return defaults
@@ -74,4 +73,3 @@ export function templateCatalog(templates) {
 export function sampleNotificationData() {
   return JSON.parse(JSON.stringify(SAMPLE_DATA))
 }
-

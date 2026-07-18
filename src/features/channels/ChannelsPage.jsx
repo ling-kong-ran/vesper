@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Bot, CheckCircle2, ChevronDown, ExternalLink, FolderOpen, MessageCircle, MessageSquare, Plus, RefreshCw, Save, Send, ShieldCheck, Trash2, Unplug, X, Zap } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Toggle } from '../../components/ui.jsx'
 import { apiJson } from '../../lib/api.js'
@@ -140,16 +140,15 @@ function NotificationTemplates({ data, setData, notify }) {
   const selected = data.templates.find((item) => item.id === eventId) || data.templates[0]
   const variant = selected?.channels?.[platform]
   const [content, setContent] = useState(variant?.content || '')
-  const [targets, setTargets] = useState(variant?.targets || [])
   const [saving, setSaving] = useState(false)
-  const availableTargets = useMemo(() => data.scopes.filter((scope) => scope.platform === platform), [data.scopes, platform])
+  const latestScope = data.scopes.find((scope) => scope.platform === platform)
 
-  useEffect(() => { setContent(variant?.content || ''); setTargets(variant?.targets || []) }, [eventId, platform, variant?.content, variant?.targets])
+  useEffect(() => { setContent(variant?.content || '') }, [eventId, platform, variant?.content])
   if (!selected) return null
   const save = async () => {
     setSaving(true)
     try {
-      const result = await apiJson(`/api/channels/templates/${encodeURIComponent(selected.id)}/${platform}`, { method: 'PUT', body: JSON.stringify({ enabled: selected.enabled, content, targets }) })
+      const result = await apiJson(`/api/channels/templates/${encodeURIComponent(selected.id)}/${platform}`, { method: 'PUT', body: JSON.stringify({ enabled: selected.enabled, content }) })
       setData(result); notify('通知模板已保存')
     } catch (caught) { notify(caught.message) }
     finally { setSaving(false) }
@@ -160,9 +159,7 @@ function NotificationTemplates({ data, setData, notify }) {
     catch (caught) { notify(caught.message) }
     finally { setSaving(false) }
   }
-  const toggleTarget = (key) => setTargets((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])
-
-  return <div className="two-one-grid channel-template-layout"><Panel><div className="channel-section-head"><SectionTitle title="通知模板" /><span>由定时任务、工作流等事件调用</span></div>{data.templates.map((template) => <button className={`channel-template-row ${template.id === selected.id ? 'selected' : ''}`} onClick={() => setEventId(template.id)} key={template.id}><span className="route-icon"><Send size={14} /></span><span><strong>{template.name}</strong><small>{template.description}</small></span><Badge tone={template.enabled ? 'green' : 'gray'}>{template.enabled ? '启用' : '停用'}</Badge></button>)}</Panel><Panel className="channel-template-editor"><div className="card-head"><div><h2>{selected.name}</h2><p>{selected.description}</p></div><Toggle value={selected.enabled} onChange={(enabled) => setData((current) => ({ ...current, templates: current.templates.map((item) => item.id === selected.id ? { ...item, enabled } : item) }))} /></div><div className="channel-template-platforms">{Object.entries(PROVIDERS).map(([id, provider]) => <button className={platform === id ? 'active' : ''} onClick={() => setPlatform(id)} key={id}>{provider.name}<Badge tone={data.connections?.[id] ? 'green' : 'gray'}>{data.connections?.[id] ? '已连接' : '未连接'}</Badge></button>)}</div><label className="field-label">消息内容<textarea value={content} onChange={(event) => setContent(event.target.value)} /></label><div className="channel-template-vars"><span>可用变量</span>{selected.variables.map((variable) => <code key={variable}>{`{{${variable}}}`}</code>)}</div><div className="channel-template-preview"><small>预览</small><pre>{renderPreview(content)}</pre></div><div className="channel-targets"><strong>接收会话</strong>{availableTargets.length ? availableTargets.map((scope) => <label key={scope.key}><input type="checkbox" checked={targets.includes(scope.key)} onChange={() => toggleTarget(scope.key)} /><span>{scope.title}</span></label>) : <p>该渠道还没有产生可接收通知的会话，请先向机器人发送一条消息。</p>}</div><div className="modal-actions"><button className="button secondary" disabled={saving || !targets.length} onClick={test}><Send size={14} />测试发送</button><button className="button primary" disabled={saving || !content.trim()} onClick={save}>{saving ? <RefreshCw className="spin" size={14} /> : <Save size={14} />}保存模板</button></div></Panel></div>
+  return <div className="two-one-grid channel-template-layout"><Panel><div className="channel-section-head"><SectionTitle title="通知模板" /><span>由定时任务、工作流等事件调用</span></div>{data.templates.map((template) => <button className={`channel-template-row ${template.id === selected.id ? 'selected' : ''}`} onClick={() => setEventId(template.id)} key={template.id}><span className="route-icon"><Send size={14} /></span><span><strong>{template.name}</strong><small>{template.description}</small></span><Badge tone={template.enabled ? 'green' : 'gray'}>{template.enabled ? '启用' : '停用'}</Badge></button>)}</Panel><Panel className="channel-template-editor"><div className="card-head"><div><h2>{selected.name}</h2><p>{selected.description}</p></div><Toggle value={selected.enabled} onChange={(enabled) => setData((current) => ({ ...current, templates: current.templates.map((item) => item.id === selected.id ? { ...item, enabled } : item) }))} /></div><div className="channel-template-platforms">{Object.entries(PROVIDERS).map(([id, provider]) => <button className={platform === id ? 'active' : ''} onClick={() => setPlatform(id)} key={id}>{provider.name}<Badge tone={data.connections?.[id] ? 'green' : 'gray'}>{data.connections?.[id] ? '已连接' : '未连接'}</Badge></button>)}</div><label className="field-label">消息内容<textarea value={content} onChange={(event) => setContent(event.target.value)} /></label><div className="channel-template-vars"><span>可用变量</span>{selected.variables.map((variable) => <code key={variable}>{`{{${variable}}}`}</code>)}</div><div className="channel-template-preview"><small>预览</small><pre>{renderPreview(content)}</pre></div><div className="modal-actions"><button className="button secondary" disabled={saving || !latestScope} onClick={test}><Send size={14} />测试发送</button><button className="button primary" disabled={saving || !content.trim()} onClick={save}>{saving ? <RefreshCw className="spin" size={14} /> : <Save size={14} />}保存模板</button></div></Panel></div>
 }
 
 function OnboardingModal({ job, onClose, onRetry, notify }) {
