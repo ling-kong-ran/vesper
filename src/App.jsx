@@ -28,6 +28,8 @@ import {
   Link2,
   Menu,
   MessageSquare,
+  Monitor,
+  Moon,
   MoreHorizontal,
   Network,
   Package,
@@ -44,6 +46,7 @@ import {
   ShieldCheck,
   Sparkles,
   Square,
+  Sun,
   Trash2,
   Upload,
   Wrench,
@@ -102,6 +105,17 @@ function renderNotificationContent(content, data) {
   })
 }
 
+const THEME_SEQUENCE = ['system', 'light', 'dark']
+const THEME_META = {
+  system: ['跟随系统', Monitor],
+  light: ['浅色', Sun],
+  dark: ['深色', Moon],
+}
+
+function resolveDark(mode) {
+  return mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
+}
+
 function App() {
   const initialPage = window.location.hash.slice(1)
   const [page, setPage] = useState(PAGE_META[initialPage] ? initialPage : 'chat')
@@ -126,6 +140,23 @@ function App() {
   const browserEventCursor = useRef('')
   const toastTimer = useRef(null)
   const appDialog = useAppDialog()
+  const [theme, setTheme] = useState(() => {
+    const stored = localStorage.getItem('pi-coder-theme')
+    return THEME_SEQUENCE.includes(stored) ? stored : 'system'
+  })
+
+  useEffect(() => {
+    const apply = () => { document.documentElement.dataset.theme = resolveDark(theme) ? 'dark' : 'light' }
+    apply()
+    if (theme === 'system') localStorage.removeItem('pi-coder-theme')
+    else localStorage.setItem('pi-coder-theme', theme)
+    if (theme !== 'system') return undefined
+    const media = window.matchMedia('(prefers-color-scheme: dark)')
+    media.addEventListener('change', apply)
+    return () => media.removeEventListener('change', apply)
+  }, [theme])
+
+  const cycleTheme = () => setTheme((current) => THEME_SEQUENCE[(THEME_SEQUENCE.indexOf(current) + 1) % THEME_SEQUENCE.length])
 
   const refreshUsage = useCallback(async () => {
     try {
@@ -278,6 +309,8 @@ function App() {
               else setModal(page)
             }}
             notify={notify}
+            theme={theme}
+            onCycleTheme={cycleTheme}
           />
           <div className={`page-content page-${page}`}>
             {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} createSignal={chatCreateSignal} onUsageChange={refreshUsage} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />}
@@ -327,13 +360,14 @@ function Sidebar({ page, navigate, open, onClose, usage, pluginStats }) {
   )
 }
 
-function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, notify }) {
+function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, notify, theme, onCycleTheme }) {
   const primary = page === 'config' && configSection !== 'models' ? null : ({
     chat: ['新会话', Plus], assets: ['添加链接', Link2], channels: ['连接渠道', Plus], schedules: ['新建任务', Plus],
     config: ['添加 Provider', Plus], plugins: ['保存策略', Save], memory: ['新建节点', Plus], mcp: ['添加服务', Plus],
     skills: ['安装技能', Plus], workflows: ['新建工作流', Plus], workflowCreate: ['发布', Rocket],
   }[page])
   const PrimaryIcon = primary?.[1]
+  const [themeLabel, ThemeIcon] = THEME_META[theme] || THEME_META.system
   return (
     <header className="page-header">
       <button className="mobile-menu" onClick={onMenu}><Menu size={19} /></button>
@@ -349,6 +383,7 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
           <label className="search-box"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? '搜索会话' : page === 'mcp' ? '搜索服务或工具' : page === 'memory' ? '搜索节点或文件' : `搜索${meta[0]}`} /></label>
         )}
         {primary && <button className="button primary" onClick={onPrimary}><PrimaryIcon size={15} />{primary[0]}</button>}
+        <button className="icon-button theme-toggle" title={`主题：${themeLabel}（点击切换）`} aria-label={`主题：${themeLabel}，点击切换主题`} onClick={onCycleTheme}><ThemeIcon size={16} /></button>
       </div>
     </header>
   )
