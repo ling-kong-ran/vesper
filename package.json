@@ -1,0 +1,34 @@
+{
+  "name": "pi-coder",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node server/index.mjs",
+    "build": "vite build",
+    "lint": "oxlint",
+    "test": "node --test server/tests/*.test.mjs",
+    "preview": "node server/index.mjs --production",
+    "start": "node server/index.mjs --production"
+  },
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "^0.80.10",
+    "@tailwindcss/vite": "^4.3.3",
+    "lucide-react": "^1.24.0",
+    "officeparser": "^7.3.0",
+    "openai": "^6.26.0",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
+    "tailwindcss": "^4.3.3",
+    "typebox": "^1.1.38"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "oxlint": "^1.71.0",
+    "vite": "^8.1.1"
+  }
+}

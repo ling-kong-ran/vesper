@@ -1,0 +1,120 @@
+import { readJson } from '../../storage/json-file.mjs'
+
+const VIDEO_PATTERN = /(?:^|[-_/])(sora|veo|video|kling|runway|hailuo|minimax-video|wan[-_.]?\d|grok-imagine-video)(?:$|[-_/])/i
+const IMAGE_PATTERN = /(?:^|[-_/])(gpt[-_.]?(?:\d+(?:\.\d+)?)?[-_.]?image|gpt-image|dall-e|imagen|image|flux|recraft|ideogram|grok-imagine-image)(?:$|[-_/])/i
+
+export function inferModelKind(modelId, explicitKind = 'auto') {
+  if (['chat', 'image', 'video'].includes(explicitKind)) return explicitKind
+  const id = String(modelId || '')
+  if (VIDEO_PATTERN.test(id)) return 'video'
+  if (IMAGE_PATTERN.test(id)) return 'image'
+  return 'chat'
+}
+
+function credentialKey(credential) {
+  if (typeof credential === 'string') return credential
+  if (credential?.type === 'api_key') return credential.key || ''
+  return credential?.key || credential?.token || credential?.access_token || ''
+}
+
+function defaultBaseUrl(providerId, api) {
+  const value = `${providerId} ${api}`.toLowerCase()
+  if (value.includes('google')) return 'https://generativelanguage.googleapis.com/v1beta'
+  if (value.includes('xai') || value.includes('x-ai') || value.includes('grok')) return 'https://api.x.ai/v1'
+  if (value.includes('openrouter')) return 'https://openrouter.ai/api/v1'
+  if (value.includes('openai')) return 'https://api.openai.com/v1'
+  return ''
+}
+
+function driverFor(model) {
+  if (model.visualApi) return model.visualApi
+  const value = `${model.providerId} ${model.api} ${model.baseUrl} ${model.id}`.toLowerCase()
+  if (value.includes('google') || value.includes('generativelanguage.googleapis.com')) return model.kind === 'video' ? 'google-video' : 'google-image'
+  if (value.includes('openrouter')) return model.kind === 'video' ? 'openai-video' : 'openrouter-image'
+  return model.kind === 'video' ? 'openai-video' : 'openai-image'
+}
+
+function modelScore(model) {
+  const id = model.id.toLowerCase()
+  let score = 0
+  if (/gpt-image-2|gpt-5\.4-image/.test(id)) score += 120
+  else if (/gpt-image|gpt-\d.*image/.test(id)) score += 105
+  if (/gemini-3|imagen-4/.test(id)) score += 100
+  if (/grok-imagine/.test(id)) score += 95
+  if (/sora-2-pro|veo-3\.1/.test(id)) score += 120
+  else if (/sora-2|veo-3/.test(id)) score += 105
+  if (model.providerId === 'openai') score += 8
+  if (model.providerId === 'google') score += 7
+  if (model.providerId === 'xai') score += 6
+  return score
+}
+
+export class VisualModelCatalog {
+  constructor({ modelsPath, authPath, appConfigPath, getModelRuntime }) {
+    this.modelsPath = modelsPath
+    this.authPath = authPath
+    this.appConfigPath = appConfigPath
+    this.getModelRuntime = getModelRuntime
+  }
+
+  async list(kind) {
+    const [modelsJson, credentials, appConfig] = await Promise.all([
+      readJson(this.modelsPath, { providers: {} }),
+      readJson(this.authPath, {}),
+      readJson(this.appConfigPath, { disabledProviders: [] }),
+    ])
+    const disabled = new Set(appConfig.disabledProviders || [])
+    const runtime = this.getModelRuntime?.()
+    const providerIds = new Set([
+      ...Object.keys(modelsJson.providers || {}),
+      ...(runtime?.getProviders().map((provider) => provider.id) || []),
+    ])
+    const result = []
+    for (const providerId of providerIds) {
+      if (disabled.has(providerId)) continue
+      const provider = modelsJson.providers?.[providerId] || {}
+      const runtimeProvider = runtime?.getProvider(providerId)
+      const apiKey = credentialKey(credentials[providerId])
+      if (!apiKey) continue
+      const runtimeModels = runtime?.getModels(providerId) || []
+      const definitions = new Map((provider.models || []).map((model) => [model.id, model]))
+      const modelIds = new Set([...definitions.keys(), ...runtimeModels.map((model) => model.id)])
+      for (const modelId of modelIds) {
+        const definition = definitions.get(modelId) || {}
+        const runtimeModel = runtimeModels.find((model) => model.id === modelId)
+        const modelKind = inferModelKind(modelId, definition.kind)
+        if (modelKind !== kind) continue
+        const api = definition.api || provider.api || runtimeModel?.api || ''
+        const baseUrl = String(definition.baseUrl || provider.baseUrl || runtimeModel?.baseUrl || defaultBaseUrl(providerId, api)).replace(/\/+$/, '')
+        if (!baseUrl) continue
+        const value = {
+          id: modelId,
+          name: definition.name || runtimeModel?.name || modelId,
+          providerId,
+          providerName: provider.name || runtimeProvider?.name || providerId,
+          api,
+          kind: modelKind,
+          baseUrl,
+          apiKey,
+          headers: { ...(provider.headers || {}), ...(runtimeModel?.headers || {}), ...(definition.headers || {}) },
+          visualApi: definition.visualApi || provider.visualApi || '',
+        }
+        value.driver = driverFor(value)
+        value.score = modelScore(value)
+        result.push(value)
+      }
+    }
+    return result.sort((left, right) => right.score - left.score || left.name.localeCompare(right.name))
+  }
+
+  async select(kind, requestedModel) {
+    const models = await this.list(kind)
+    if (!models.length) throw new Error(`没有已配置并启用的${kind === 'video' ? '视频' : '图像'}生成模型。请先在配置页添加视觉模型。`)
+    if (!requestedModel) return models[0]
+    const requested = String(requestedModel).trim().toLowerCase()
+    const exact = models.find((model) => `${model.providerId}/${model.id}`.toLowerCase() === requested)
+      || models.find((model) => model.id.toLowerCase() === requested)
+    if (!exact) throw new Error(`未找到已启用的视觉模型：${requestedModel}`)
+    return exact
+  }
+}
