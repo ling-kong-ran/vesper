@@ -12,6 +12,24 @@ export function createApiHandler(runtime) {
         json(res, 200, await runtime.getConfig())
         return true
       }
+      if (req.method === 'GET' && url.pathname === '/api/settings/notifications') {
+        json(res, 200, await runtime.getNotificationSettings())
+        return true
+      }
+      if (req.method === 'PATCH' && url.pathname === '/api/settings/notifications/browser') {
+        json(res, 200, await runtime.updateBrowserNotifications(await bodyJson(req)))
+        return true
+      }
+      const notificationTemplateTestMatch = url.pathname.match(/^\/api\/settings\/notifications\/templates\/([^/]+)\/(feishu|weixin)\/test$/)
+      if (req.method === 'POST' && notificationTemplateTestMatch) {
+        json(res, 200, await runtime.testNotificationTemplate(decodeURIComponent(notificationTemplateTestMatch[1]), notificationTemplateTestMatch[2]))
+        return true
+      }
+      const notificationTemplateMatch = url.pathname.match(/^\/api\/settings\/notifications\/templates\/([^/]+)\/(feishu|weixin)$/)
+      if (req.method === 'PUT' && notificationTemplateMatch) {
+        json(res, 200, await runtime.saveNotificationTemplate(decodeURIComponent(notificationTemplateMatch[1]), notificationTemplateMatch[2], await bodyJson(req)))
+        return true
+      }
       if (req.method === 'GET' && url.pathname === '/api/usage/today') {
         json(res, 200, await runtime.getTodayUsage())
         return true
@@ -71,16 +89,6 @@ export function createApiHandler(runtime) {
         const deleted = await runtime.resetChannelScope(decodeURIComponent(channelScopeMatch[1]))
         if (!deleted) json(res, 404, { error: '渠道会话不存在。' })
         else json(res, 200, { deleted: true })
-        return true
-      }
-      const templateTestMatch = url.pathname.match(/^\/api\/channels\/templates\/([^/]+)\/(feishu|weixin)\/test$/)
-      if (req.method === 'POST' && templateTestMatch) {
-        json(res, 200, await runtime.testChannelTemplate(decodeURIComponent(templateTestMatch[1]), templateTestMatch[2]))
-        return true
-      }
-      const templateMatch = url.pathname.match(/^\/api\/channels\/templates\/([^/]+)\/(feishu|weixin)$/)
-      if (req.method === 'PUT' && templateMatch) {
-        json(res, 200, await runtime.saveChannelTemplate(decodeURIComponent(templateMatch[1]), templateMatch[2], await bodyJson(req)))
         return true
       }
       if (req.method === 'POST' && url.pathname === '/api/assets') {

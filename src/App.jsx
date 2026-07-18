@@ -56,6 +56,7 @@ import { Badge, InputLabel, Metric, Panel, SectionTitle, Segmented, SelectLabel,
 import { useAttachmentSelection } from './features/chat/attachments.js'
 import { PluginsPage } from './features/plugins/PluginsPage.jsx'
 import { ChannelsPage } from './features/channels/ChannelsPage.jsx'
+import { NotificationSettings } from './features/config/NotificationSettings.jsx'
 import { apiJson, consumeEventStream } from './lib/api.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 
@@ -102,6 +103,7 @@ function App() {
   const [modal, setModal] = useState(null)
   const [chatCreateSignal, setChatCreateSignal] = useState(0)
   const [configCreateSignal, setConfigCreateSignal] = useState(0)
+  const [configSection, setConfigSection] = useState('models')
   const [assetUploadSignal, setAssetUploadSignal] = useState(0)
   const [pluginSaveSignal, setPluginSaveSignal] = useState(0)
   const [channelCreateSignal, setChannelCreateSignal] = useState(0)
@@ -109,6 +111,7 @@ function App() {
   const [usage, setUsage] = useState(null)
   const [pluginStats, setPluginStats] = useState(null)
   const [startupReady, setStartupReady] = useState(false)
+  const [browserNotificationsEnabled, setBrowserNotificationsEnabled] = useState(false)
 
   const refreshUsage = useCallback(async () => {
     try {
@@ -140,6 +143,13 @@ function App() {
     window.clearTimeout(notify.timer)
     notify.timer = window.setTimeout(() => setToast(''), 2400)
   }
+
+  const browserNotify = useCallback((title, body) => {
+    if (!browserNotificationsEnabled || !('Notification' in window) || window.Notification.permission !== 'granted') return
+    if (document.visibilityState === 'visible' && document.hasFocus()) return
+    const item = new window.Notification(title, { body, tag: `pi-coder-${title}` })
+    item.onclick = () => { window.focus(); item.close() }
+  }, [browserNotificationsEnabled])
 
   const navigate = (next) => {
     setPage(next)
@@ -190,6 +200,12 @@ function App() {
     refreshPluginStats()
   }, [refreshPluginStats])
 
+  useEffect(() => {
+    apiJson('/api/settings/notifications')
+      .then((data) => setBrowserNotificationsEnabled(Boolean(data.browser?.enabled)))
+      .catch(() => {})
+  }, [])
+
   const activeMeta = page === 'chat' && chatMode === 'focus'
     ? ['对话', '聚集模式 · 单会话工作台']
     : PAGE_META[page]
@@ -209,10 +225,11 @@ function App() {
             setQuery={setQuery}
             chatMode={chatMode}
             setChatMode={setChatMode}
+            configSection={configSection}
             onMenu={() => setMobileNav(true)}
             onPrimary={() => {
               if (page === 'chat') setChatCreateSignal((value) => value + 1)
-              else if (page === 'config') setConfigCreateSignal((value) => value + 1)
+              else if (page === 'config' && configSection === 'models') setConfigCreateSignal((value) => value + 1)
               else if (page === 'assets') setAssetUploadSignal((value) => value + 1)
               else if (page === 'plugins') setPluginSaveSignal((value) => value + 1)
               else if (page === 'channels') setChannelCreateSignal((value) => value + 1)
@@ -223,11 +240,11 @@ function App() {
             notify={notify}
           />
           <div className={`page-content page-${page}`}>
-            {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} createSignal={chatCreateSignal} onUsageChange={refreshUsage} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} />}
+            {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} createSignal={chatCreateSignal} onUsageChange={refreshUsage} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} />}
             {page === 'assets' && <AssetsPage query={query} notify={notify} createSignal={assetUploadSignal} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} />}
             {page === 'channels' && <ChannelsPage notify={notify} createSignal={channelCreateSignal} />}
             {page === 'schedules' && <SchedulesPage notify={notify} />}
-            {page === 'config' && <ConfigPage notify={notify} createSignal={configCreateSignal} />}
+            {page === 'config' && <ConfigPage notify={notify} createSignal={configCreateSignal} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setBrowserNotificationsEnabled} />}
             {page === 'plugins' && <PluginsPage query={query} notify={notify} saveSignal={pluginSaveSignal} onStatusChange={setPluginStats} />}
             {page === 'memory' && <MemoryPage notify={notify} />}
             {page === 'mcp' && <McpPage notify={notify} />}
@@ -278,13 +295,13 @@ function Sidebar({ page, navigate, open, onClose, usage, pluginStats }) {
   )
 }
 
-function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, onMenu, onPrimary, notify }) {
-  const primary = {
+function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, notify }) {
+  const primary = page === 'config' && configSection !== 'models' ? null : ({
     chat: ['新会话', Plus], assets: ['添加链接', Link2], channels: ['连接渠道', Plus], schedules: ['新建任务', Plus],
     config: ['添加 Provider', Plus], plugins: ['保存策略', Save], memory: ['新建节点', Plus], mcp: ['添加服务', Plus],
     skills: ['安装技能', Plus], workflows: ['新建工作流', Plus], workflowCreate: ['发布', Rocket],
-  }[page]
-  const PrimaryIcon = primary[1]
+  }[page])
+  const PrimaryIcon = primary?.[1]
   return (
     <header className="page-header">
       <button className="mobile-menu" onClick={onMenu}><Menu size={19} /></button>
@@ -299,13 +316,13 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, onMenu
         ) : (
           <label className="search-box"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? '搜索会话' : page === 'mcp' ? '搜索服务或工具' : page === 'memory' ? '搜索节点或文件' : `搜索${meta[0]}`} /></label>
         )}
-        <button className="button primary" onClick={onPrimary}><PrimaryIcon size={15} />{primary[0]}</button>
+        {primary && <button className="button primary" onClick={onPrimary}><PrimaryIcon size={15} />{primary[0]}</button>}
       </div>
     </header>
   )
 }
 
-function ChatPage({ mode, setMode, query, notify, createSignal, onUsageChange, pendingAsset, onAssetConsumed }) {
+function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, onUsageChange, pendingAsset, onAssetConsumed }) {
   const [remoteSessions, setRemoteSessions] = useState([])
   const [activeId, setActiveId] = useState(() => localStorage.getItem('pi-coder-active-session') || '')
   const [sessionStates, setSessionStates] = useState({})
@@ -481,9 +498,12 @@ function ChatPage({ mode, setMode, query, notify, createSignal, onUsageChange, p
         }
       })
       updateSessionState(sessionId, (current) => ({ ...current, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false } : item) }))
-      await refreshSessions()
+      const sessions = await refreshSessions()
+      const completed = sessions.find((session) => session.id === sessionId)
+      browserNotify?.('Agent 任务已完成', completed?.name || 'Pi Coder 已完成回复')
     } catch (caught) {
       updateSessionState(sessionId, (current) => ({ ...current, error: caught.message, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || caught.message } : item) }))
+      browserNotify?.('Agent 任务执行失败', caught.message)
     } finally {
       updateSessionState(sessionId, { streaming: false })
       onUsageChange?.()
@@ -865,7 +885,7 @@ function configDraft(data, provider, preferredModel) {
   }
 }
 
-function ConfigPage({ notify, createSignal }) {
+function ConfigPage({ notify, createSignal, section, setSection, onBrowserNotificationChange }) {
   const [config, setConfig] = useState(null)
   const [draft, setDraft] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -950,6 +970,8 @@ function ConfigPage({ notify, createSignal }) {
   const providerIcons = { openai: Bot, anthropic: Brain, google: Sparkles, deepseek: Code2, xai: Zap, openrouter: Network }
   return (
     <>
+    <div className="config-subnav"><button className={section === 'models' ? 'active' : ''} onClick={() => setSection('models')}>模型配置</button><button className={section === 'notifications' ? 'active' : ''} onClick={() => setSection('notifications')}>通知设置</button></div>
+    {section === 'notifications' ? <NotificationSettings notify={notify} onBrowserNotificationChange={onBrowserNotificationChange} /> : <>
     <div className="split-list-detail config-layout">
       <Panel className="selection-list"><div className="provider-list-heading"><SectionTitle title="Provider 连接" /><button className="icon-button" title="添加 Provider" onClick={() => setProviderModal(true)}><Plus size={15} /></button></div>{config.providers.map((provider) => { const Icon = providerIcons[provider.id] || Server; return <div className={`provider-list-item ${draft.provider === provider.id ? 'active' : ''} ${provider.enabled ? '' : 'disabled-provider'}`} key={provider.id}><button className="provider-select-main" onClick={() => selectProvider(provider)}><span className="list-icon"><Icon size={16} /></span><span><strong>{provider.name}</strong><small>{provider.id} · {provider.models.length} 个模型</small></span></button><div className="provider-list-control"><Badge tone={!provider.enabled ? 'gray' : provider.configured ? 'green' : 'amber'}>{!provider.enabled ? '已停用' : provider.configured ? '已配置' : '未认证'}</Badge><Toggle value={provider.enabled} disabled={!provider.configured || toggling === provider.id} onChange={(enabled) => toggleProvider(provider, enabled)} /></div></div> })}</Panel>
       <div className="detail-stack">
@@ -972,6 +994,7 @@ function ConfigPage({ notify, createSignal }) {
     </div>
     {providerModal && <ProviderConfigModal onClose={() => setProviderModal(false)} onCreated={(data) => { const provider = data.providers.find((item) => item.id === data.createdProviderId); setConfig(data); setDraft(configDraft(data, provider)); setProviderModal(false); notify('Provider 连接已创建') }} />}
     {modelModal && <ProviderModelModal provider={selectedProvider} onClose={() => setModelModal(false)} onCreated={(data, modelId) => { const provider = data.providers.find((item) => item.id === selectedProvider.id); setConfig(data); setDraft((current) => ({ ...configDraft(data, provider, modelId), thinkingLevel: current.thinkingLevel, toolMode: current.toolMode })); setModelModal(false); notify('模型已添加') }} />}
+    </>}
     </>
   )
 }

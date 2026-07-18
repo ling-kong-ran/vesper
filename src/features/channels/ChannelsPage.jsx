@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, Bot, CheckCircle2, ChevronDown, ExternalLink, FolderOpen, MessageCircle, MessageSquare, Plus, RefreshCw, Save, Send, ShieldCheck, Trash2, Unplug, X, Zap } from 'lucide-react'
+import { AlertTriangle, Bot, CheckCircle2, ChevronDown, ExternalLink, FolderOpen, MessageCircle, MessageSquare, Plus, RefreshCw, ShieldCheck, Trash2, Unplug, X, Zap } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Toggle } from '../../components/ui.jsx'
 import { apiJson } from '../../lib/api.js'
 import { relativeTime } from '../../lib/format.js'
@@ -18,13 +18,8 @@ function expiresIn(value) {
   return seconds >= 60 ? `${Math.ceil(seconds / 60)} 分钟后` : `${seconds} 秒后`
 }
 
-function renderPreview(content) {
-  const values = { 'task.name': '每日代码巡检', 'task.summary': '发现 2 个待处理问题，报告已归档。', 'task.duration': '2 分 18 秒', 'task.nextRun': '明天 09:00', 'task.error': '测试进程超时', 'workflow.name': '发布前检查', 'workflow.summary': '测试、构建和安全检查均已通过。', 'workflow.duration': '6 分 42 秒', 'workflow.runId': 'run_20260718_001', 'workflow.node': '端到端测试', 'workflow.error': '浏览器启动失败' }
-  return String(content || '').replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, key) => values[key] || `{{${key}}}`)
-}
-
 export function ChannelsPage({ notify, createSignal }) {
-  const [data, setData] = useState({ providers: [], connections: {}, scopes: [], templates: [], models: [] })
+  const [data, setData] = useState({ providers: [], connections: {}, scopes: [], models: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [selectedPlatform, setSelectedPlatform] = useState('feishu')
@@ -100,7 +95,7 @@ export function ChannelsPage({ notify, createSignal }) {
   }
 
   const remove = async (platform) => {
-    if (!window.confirm(`解除${PROVIDERS[platform].name}连接？本地凭据、会话映射和通知接收目标会被删除。`)) return
+    if (!window.confirm(`解除${PROVIDERS[platform].name}连接？本地凭据和会话映射会被删除。`)) return
     try { await apiJson(`/api/channels/${platform}`, { method: 'DELETE' }); await load(); notify(`${PROVIDERS[platform].name}已解除连接`) }
     catch (caught) { notify(caught.message) }
   }
@@ -129,37 +124,8 @@ export function ChannelsPage({ notify, createSignal }) {
       <Panel className="test-panel"><div className="channel-section-head"><SectionTitle title={`${PROVIDERS[selectedPlatform].name}设置`} /><span>{PROVIDERS[selectedPlatform].transport}</span></div>{selectedConnection ? <><div className={`channel-live-status ${selectedConnection.status}`}><span className="channel-status-dot" /><div><strong>{statusLabel}</strong><small>{selectedConnection.lastError || (selectedConnection.status === 'connected' ? `已连接 ${relativeTime(selectedConnection.connectedAt)}` : '正在建立持续连接')}</small></div></div><div className="modal-toggle-row"><span><strong>启用此渠道</strong><small>关闭后断开连接，但保留登录凭据</small></span><Toggle value={selectedConnection.enabled} disabled={saving} onChange={(enabled) => update(selectedPlatform, { enabled }, enabled ? '渠道已启用' : '渠道已暂停')} /></div><label className="field-label">回复模型<span className="select-wrap"><select value={selectedConnection.replyModel ? `${selectedConnection.replyModel.provider}/${selectedConnection.replyModel.model}` : ''} onChange={(event) => { const [provider, ...parts] = event.target.value.split('/'); update(selectedPlatform, { replyModel: event.target.value ? { provider, model: parts.join('/') } : null }, '渠道回复模型已更新') }}><option value="">跟随应用默认模型</option>{data.models.map((model) => <option value={`${model.provider}/${model.model}`} key={`${model.provider}/${model.model}`}>{model.label}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">访问范围<span className="select-wrap"><select value={selectedConnection.accessMode} onChange={(event) => update(selectedPlatform, { accessMode: event.target.value }, '访问范围已更新')}><option value="owner" disabled={!selectedConnection.ownerConfigured}>仅扫码创建者</option><option value="all">{selectedPlatform === 'feishu' ? '当前租户所有成员' : '所有给机器人发消息的微信用户'}</option></select><ChevronDown size={13} /></span></label><label className="field-label">新会话默认工作目录<span className="channel-setting-input"><FolderOpen size={13} /><input value={cwd} onChange={(event) => setCwd(event.target.value)} /><button className="button tiny" disabled={saving || cwd === selectedConnection.defaultCwd} onClick={() => update(selectedPlatform, { defaultCwd: cwd }, '默认工作目录已保存')}>保存</button></span></label><div className="permission-note"><ShieldCheck size={15} /><span><strong>本机安全边界</strong><small>默认仅允许扫码创建者使用；Agent 工具仍受插件权限和会话工作目录限制。</small></span></div><div className="button-row"><button className="button secondary" onClick={() => reconnect(selectedPlatform)} disabled={saving}><RefreshCw size={14} />重连</button><button className="button danger" onClick={() => remove(selectedPlatform)}><Unplug size={14} />解除连接</button></div></> : <><p>扫码确认后会自动保存凭据并保持在线，收到消息后直接交给指定模型和 Pi Coder Agent。</p><div className="test-summary"><CheckCircle2 size={14} />真正双向收发，不使用通知 Webhook</div><div className="test-summary"><CheckCircle2 size={14} />每个联系人或聊天独立映射 Agent 会话</div><button className="button primary wide" onClick={() => beginOnboarding(selectedPlatform)}><Zap size={15} />扫码连接{PROVIDERS[selectedPlatform].name}</button></>}</Panel>
     </div>
 
-    <NotificationTemplates data={data} setData={setData} notify={notify} />
     {onboarding && <OnboardingModal job={onboarding} onClose={closeOnboarding} onRetry={() => beginOnboarding(onboarding.platform)} notify={notify} />}
   </div>
-}
-
-function NotificationTemplates({ data, setData, notify }) {
-  const [eventId, setEventId] = useState(data.templates[0]?.id || '')
-  const [platform, setPlatform] = useState('feishu')
-  const selected = data.templates.find((item) => item.id === eventId) || data.templates[0]
-  const variant = selected?.channels?.[platform]
-  const [content, setContent] = useState(variant?.content || '')
-  const [saving, setSaving] = useState(false)
-  const latestScope = data.scopes.find((scope) => scope.platform === platform)
-
-  useEffect(() => { setContent(variant?.content || '') }, [eventId, platform, variant?.content])
-  if (!selected) return null
-  const save = async () => {
-    setSaving(true)
-    try {
-      const result = await apiJson(`/api/channels/templates/${encodeURIComponent(selected.id)}/${platform}`, { method: 'PUT', body: JSON.stringify({ enabled: selected.enabled, content }) })
-      setData(result); notify('通知模板已保存')
-    } catch (caught) { notify(caught.message) }
-    finally { setSaving(false) }
-  }
-  const test = async () => {
-    setSaving(true)
-    try { const result = await apiJson(`/api/channels/templates/${encodeURIComponent(selected.id)}/${platform}/test`, { method: 'POST', body: '{}' }); notify(`测试通知已发送到 ${result.sent} 个会话`) }
-    catch (caught) { notify(caught.message) }
-    finally { setSaving(false) }
-  }
-  return <div className="two-one-grid channel-template-layout"><Panel><div className="channel-section-head"><SectionTitle title="通知模板" /><span>由定时任务、工作流等事件调用</span></div>{data.templates.map((template) => <button className={`channel-template-row ${template.id === selected.id ? 'selected' : ''}`} onClick={() => setEventId(template.id)} key={template.id}><span className="route-icon"><Send size={14} /></span><span><strong>{template.name}</strong><small>{template.description}</small></span><Badge tone={template.enabled ? 'green' : 'gray'}>{template.enabled ? '启用' : '停用'}</Badge></button>)}</Panel><Panel className="channel-template-editor"><div className="card-head"><div><h2>{selected.name}</h2><p>{selected.description}</p></div><Toggle value={selected.enabled} onChange={(enabled) => setData((current) => ({ ...current, templates: current.templates.map((item) => item.id === selected.id ? { ...item, enabled } : item) }))} /></div><div className="channel-template-platforms">{Object.entries(PROVIDERS).map(([id, provider]) => <button className={platform === id ? 'active' : ''} onClick={() => setPlatform(id)} key={id}>{provider.name}<Badge tone={data.connections?.[id] ? 'green' : 'gray'}>{data.connections?.[id] ? '已连接' : '未连接'}</Badge></button>)}</div><label className="field-label">消息内容<textarea value={content} onChange={(event) => setContent(event.target.value)} /></label><div className="channel-template-vars"><span>可用变量</span>{selected.variables.map((variable) => <code key={variable}>{`{{${variable}}}`}</code>)}</div><div className="channel-template-preview"><small>预览</small><pre>{renderPreview(content)}</pre></div><div className="modal-actions"><button className="button secondary" disabled={saving || !latestScope} onClick={test}><Send size={14} />测试发送</button><button className="button primary" disabled={saving || !content.trim()} onClick={save}>{saving ? <RefreshCw className="spin" size={14} /> : <Save size={14} />}保存模板</button></div></Panel></div>
 }
 
 function OnboardingModal({ job, onClose, onRetry, notify }) {

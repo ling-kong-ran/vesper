@@ -10,6 +10,7 @@ import {
 } from '@earendil-works/pi-coding-agent'
 import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
 import { ChannelService } from '../services/channels/channel-service.mjs'
+import { NotificationSettingsService } from '../services/notification-settings-service.mjs'
 import { ToolPluginService } from '../services/tool-plugin-service.mjs'
 import { inferModelKind, VisualGenerationService } from '../services/visual-generation/index.mjs'
 import { assetMessageAttachment, attachGeneratedAssets } from '../services/session-assets.mjs'
@@ -207,6 +208,7 @@ export class AgentRuntimeService {
         validateDirectory: (input) => resolveDirectory(input, this.cwd),
       },
     })
+    this.notificationSettings = new NotificationSettingsService({ path: this.appConfigPath, channels: this.channels })
     this.sessions = new Map()
     this.modelRuntime = null
     this.settingsManager = null
@@ -902,7 +904,9 @@ export class AgentRuntimeService {
     const state = this.channels.getState()
     const config = await this.getConfig()
     return {
-      ...state,
+      providers: state.providers,
+      connections: state.connections,
+      scopes: state.scopes,
       models: config.providers.filter((provider) => provider.enabled && provider.configured).flatMap((provider) => provider.models.filter((model) => model.kind === 'chat').map((model) => ({ provider: provider.id, model: model.id, label: `${provider.name} / ${model.name}` }))),
     }
   }
@@ -941,17 +945,24 @@ export class AgentRuntimeService {
     return this.channels.resetScope(key)
   }
 
-  async saveChannelTemplate(event, platform, input) {
-    await this.channels.updateTemplate(event, platform, input)
-    return this.getChannels()
+  getNotificationSettings() {
+    return this.notificationSettings.getState()
   }
 
-  testChannelTemplate(event, platform) {
-    return this.channels.testNotification(event, platform)
+  updateBrowserNotifications(input) {
+    return this.notificationSettings.updateBrowser(input)
+  }
+
+  saveNotificationTemplate(event, platform, input) {
+    return this.notificationSettings.updateTemplate(event, platform, input)
+  }
+
+  testNotificationTemplate(event, platform) {
+    return this.notificationSettings.testTemplate(event, platform)
   }
 
   notifyChannels(event, data) {
-    return this.channels.notify(event, data)
+    return this.notificationSettings.notify(event, data)
   }
 
   async dispose() {
