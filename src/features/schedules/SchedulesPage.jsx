@@ -38,7 +38,7 @@ function nextRunLabel(task) {
   return new Intl.DateTimeFormat('zh-CN', { timeZone: task.timezone, dateStyle: 'medium', timeStyle: 'short' }).format(new Date(task.nextRunAt))
 }
 
-export function SchedulesPage({ notify, createSignal, openNotificationSettings }) {
+export function SchedulesPage({ notify, createSignal, openNotificationSettings, requestConfirm }) {
   const [data, setData] = useState({ tasks: [], runs: [], notificationTargets: {} })
   const [selectedId, setSelectedId] = useState('')
   const [draft, setDraft] = useState(null)
@@ -89,7 +89,9 @@ export function SchedulesPage({ notify, createSignal, openNotificationSettings }
   }
 
   const remove = async () => {
-    if (!selected || !window.confirm(`删除定时任务「${selected.name}」及其执行历史？`)) return
+    if (!selected) return
+    const approved = await requestConfirm({ title: '删除定时任务', message: `删除定时任务「${selected.name}」及其执行历史？`, confirmLabel: '删除' })
+    if (!approved) return
     try { await apiJson(`/api/schedules/${encodeURIComponent(selected.id)}`, { method: 'DELETE' }); await load(); notify('定时任务已删除') }
     catch (caught) { setError(caught.message) }
   }

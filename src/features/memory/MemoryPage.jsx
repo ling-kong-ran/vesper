@@ -17,7 +17,7 @@ function graphNodes(nodes, selectedId) {
   return ordered.slice(0, GRAPH_POINTS.length)
 }
 
-export function MemoryPage({ notify, query, createSignal }) {
+export function MemoryPage({ notify, query, createSignal, requestConfirm }) {
   const [data, setData] = useState({ spaces: [], nodes: [], links: [], selectedSpaceId: '' })
   const [spaceId, setSpaceId] = useState('')
   const [selectedId, setSelectedId] = useState('')
@@ -67,7 +67,8 @@ export function MemoryPage({ notify, query, createSignal }) {
   const selectedSpace = data.spaces.find((space) => space.id === spaceId)
 
   const deleteNode = async (node) => {
-    if (!window.confirm(`确定删除记忆“${node.title}”吗？`)) return
+    const approved = await requestConfirm({ title: '删除记忆节点', message: `确定删除记忆“${node.title}”吗？`, confirmLabel: '删除' })
+    if (!approved) return
     try {
       await apiJson(`/api/memory/nodes/${encodeURIComponent(node.id)}`, { method: 'DELETE' })
       notify('记忆节点已删除')
@@ -76,7 +77,9 @@ export function MemoryPage({ notify, query, createSignal }) {
   }
 
   const deleteSpace = async () => {
-    if (!selectedSpace || !window.confirm(`确定删除记忆空间“${selectedSpace.name}”及其全部节点吗？`)) return
+    if (!selectedSpace) return
+    const approved = await requestConfirm({ title: '删除记忆空间', message: `确定删除记忆空间“${selectedSpace.name}”及其全部节点吗？`, confirmLabel: '删除' })
+    if (!approved) return
     try {
       await apiJson(`/api/memory/spaces/${encodeURIComponent(selectedSpace.id)}`, { method: 'DELETE' })
       setSpaceId('')

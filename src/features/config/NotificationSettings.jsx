@@ -51,7 +51,7 @@ export function NotificationSettings({ notify, onBrowserNotificationChange }) {
       setData(result)
       onBrowserNotificationChange?.(result)
       notify(enabled ? '浏览器通知已启用' : '浏览器通知已关闭')
-    } catch (caught) { notify(caught.message) }
+    } catch (caught) { notify(caught.message, 'error') }
     finally { setBrowserSaving(false) }
   }
 
@@ -94,7 +94,7 @@ function NotificationTemplates({ data, setData, notify, permission, onSettingsCh
       setData(result)
       onSettingsChange?.(result)
       notify('通知模板已保存')
-    } catch (caught) { notify(caught.message) }
+    } catch (caught) { notify(caught.message, 'error') }
     finally { setSaving(false) }
   }
 
@@ -103,7 +103,7 @@ function NotificationTemplates({ data, setData, notify, permission, onSettingsCh
     try {
       const result = await apiJson(`/api/settings/notifications/templates/${encodeURIComponent(selected.id)}/${platform}/test`, { method: 'POST', body: '{}' })
       notify(`测试通知已发送到 ${result.sent} 个会话`)
-    } catch (caught) { notify(caught.message) }
+    } catch (caught) { notify(caught.message, 'error') }
     finally { setSaving(false) }
   }
 

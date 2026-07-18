@@ -7,7 +7,6 @@ import {
   Bot,
   Brain,
   Check,
-  CheckCircle2,
   ChevronDown,
   ChevronRight,
   CircleDot,
@@ -52,7 +51,7 @@ import {
   Zap,
 } from 'lucide-react'
 import { NAV_ITEMS, PAGE_META } from './app/navigation.jsx'
-import { Badge, InputLabel, Metric, Panel, SectionTitle, Segmented, SelectLabel, Toggle } from './components/ui.jsx'
+import { AppDialog, Badge, InputLabel, Metric, Panel, PreviewNotice, SectionTitle, Segmented, SelectLabel, Toast, Toggle } from './components/ui.jsx'
 import { useAttachmentSelection } from './features/chat/attachments.js'
 import { PluginsPage } from './features/plugins/PluginsPage.jsx'
 import { ChannelsPage } from './features/channels/ChannelsPage.jsx'
@@ -61,6 +60,7 @@ import { MemoryPage } from './features/memory/MemoryPage.jsx'
 import { SchedulesPage } from './features/schedules/SchedulesPage.jsx'
 import { apiJson, consumeEventStream } from './lib/api.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
+import { useAppDialog } from './hooks/useAppDialog.js'
 
 const toolRows = [
   ['get_editor_state', 'Pencil · 读取画布状态', '低风险', true],
@@ -108,7 +108,7 @@ function App() {
   const [chatMode, setChatModeState] = useState(() => localStorage.getItem('pi-coder-chat-mode') || 'focus')
   const [query, setQuery] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
-  const [toast, setToast] = useState('')
+  const [toast, setToast] = useState(null)
   const [modal, setModal] = useState(null)
   const [chatCreateSignal, setChatCreateSignal] = useState(0)
   const [configCreateSignal, setConfigCreateSignal] = useState(0)
@@ -124,6 +124,8 @@ function App() {
   const [startupReady, setStartupReady] = useState(false)
   const [notificationSettings, setNotificationSettings] = useState({ browser: { enabled: false }, templates: [] })
   const browserEventCursor = useRef('')
+  const toastTimer = useRef(null)
+  const appDialog = useAppDialog()
 
   const refreshUsage = useCallback(async () => {
     try {
@@ -150,11 +152,13 @@ function App() {
     localStorage.setItem('pi-coder-chat-mode', nextMode)
   }
 
-  const notify = (message) => {
-    setToast(message)
-    window.clearTimeout(notify.timer)
-    notify.timer = window.setTimeout(() => setToast(''), 2400)
-  }
+  const notify = useCallback((message, tone = 'success') => {
+    setToast({ message, tone })
+    window.clearTimeout(toastTimer.current)
+    toastTimer.current = window.setTimeout(() => setToast(null), 2800)
+  }, [])
+
+  useEffect(() => () => window.clearTimeout(toastTimer.current), [])
 
   const showBrowserNotification = useCallback((title, body, { force = false } = {}) => {
     if (!notificationSettings.browser?.enabled || !('Notification' in window) || window.Notification.permission !== 'granted') return
@@ -248,7 +252,6 @@ function App() {
 
   return (
     <div className="app-shell">
-      <DesktopTitlebar />
       <div className="app-body">
         <Sidebar page={page} navigate={navigate} open={mobileNav} onClose={() => setMobileNav(false)} usage={usage} pluginStats={pluginStats} />
         <main className="main-surface">
@@ -270,19 +273,20 @@ function App() {
               else if (page === 'schedules') setScheduleCreateSignal((value) => value + 1)
               else if (page === 'memory') setMemoryCreateSignal((value) => value + 1)
               else if (page === 'workflows') navigate('workflowCreate')
-              else if (page === 'workflowCreate') notify('工作流已发布')
+              else if (page === 'workflowCreate') notify('工作流运行时尚未接入，当前不会真实发布', 'info')
+              else if (page === 'mcp' || page === 'skills') notify('该页面当前为演示界面，功能尚未接入', 'info')
               else setModal(page)
             }}
             notify={notify}
           />
           <div className={`page-content page-${page}`}>
-            {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} createSignal={chatCreateSignal} onUsageChange={refreshUsage} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} />}
-            {page === 'assets' && <AssetsPage query={query} notify={notify} createSignal={assetUploadSignal} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} />}
-            {page === 'channels' && <ChannelsPage notify={notify} createSignal={channelCreateSignal} />}
-            {page === 'schedules' && <SchedulesPage notify={notify} createSignal={scheduleCreateSignal} openNotificationSettings={() => { setConfigSection('notifications'); navigate('config') }} />}
-            {page === 'config' && <ConfigPage notify={notify} createSignal={configCreateSignal} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} />}
+            {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} createSignal={chatCreateSignal} onUsageChange={refreshUsage} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />}
+            {page === 'assets' && <AssetsPage query={query} notify={notify} createSignal={assetUploadSignal} requestConfirm={appDialog.confirm} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} />}
+            {page === 'channels' && <ChannelsPage notify={notify} createSignal={channelCreateSignal} requestConfirm={appDialog.confirm} />}
+            {page === 'schedules' && <SchedulesPage notify={notify} createSignal={scheduleCreateSignal} requestConfirm={appDialog.confirm} openNotificationSettings={() => { setConfigSection('notifications'); navigate('config') }} />}
+            {page === 'config' && <ConfigPage notify={notify} createSignal={configCreateSignal} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} requestConfirm={appDialog.confirm} />}
             {page === 'plugins' && <PluginsPage query={query} notify={notify} saveSignal={pluginSaveSignal} onStatusChange={setPluginStats} />}
-            {page === 'memory' && <MemoryPage query={query} notify={notify} createSignal={memoryCreateSignal} />}
+            {page === 'memory' && <MemoryPage query={query} notify={notify} createSignal={memoryCreateSignal} requestConfirm={appDialog.confirm} />}
             {page === 'mcp' && <McpPage notify={notify} />}
             {page === 'skills' && <SkillsPage notify={notify} />}
             {page === 'workflows' && <WorkflowsPage navigate={navigate} notify={notify} />}
@@ -290,17 +294,9 @@ function App() {
           </div>
         </main>
       </div>
-      {toast && <div className="toast"><CheckCircle2 size={17} />{toast}</div>}
+      {toast && <Toast message={toast.message} tone={toast.tone} />}
+      <AppDialog dialog={appDialog.dialog} onClose={appDialog.close} onFinish={appDialog.finish} />
       {modal && <QuickCreate type={modal} close={() => setModal(null)} notify={notify} />}
-    </div>
-  )
-}
-
-function DesktopTitlebar() {
-  return (
-    <div className="desktop-titlebar">
-      <span>Pi Coder</span>
-      <div className="window-controls" aria-hidden="true"><button>−</button><button>□</button><button className="window-close">×</button></div>
     </div>
   )
 }
@@ -323,8 +319,8 @@ function Sidebar({ page, navigate, open, onClose, usage, pluginStats }) {
           ))}
         </nav>
         <div className="sidebar-status">
-          <span>{page === 'workflowCreate' ? '当前草稿' : page === 'skills' ? '技能状态' : page === 'mcp' ? '连接状态' : page === 'plugins' ? '插件状态' : '运行状态'}</span>
-          {page === 'workflowCreate' ? <><b>节点 <em>7</em></b><b>分支 <em>2</em></b><b>未配置 <em className="amber">1</em></b></> : <b>{page === 'skills' ? '已启用 12 / 18' : page === 'mcp' ? '在线服务 6 / 8' : page === 'plugins' ? `已启用 ${pluginStats?.enabled ?? '—'} / ${pluginStats?.total ?? '—'}` : <>今日 tokens <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</b>}
+          <span>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? '功能状态' : page === 'plugins' ? '插件状态' : '运行状态'}</span>
+          <b>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? <>演示页面 <em className="amber">尚未接入</em></> : page === 'plugins' ? `已启用 ${pluginStats?.enabled ?? '—'} / ${pluginStats?.total ?? '—'}` : <>今日 tokens <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</b>
         </div>
       </aside>
     </>
@@ -346,8 +342,8 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
         {page === 'chat' && <Segmented options={['平铺', '聚集']} value={chatMode === 'grid' ? '平铺' : '聚集'} onChange={(v) => setChatMode(v === '平铺' ? 'grid' : 'focus')} compact />}
         {page === 'workflowCreate' ? (
           <>
-            <button className="button secondary" onClick={() => notify('草稿已保存')}><Save size={15} />保存草稿</button>
-            <button className="button dark" onClick={() => notify('试运行已开始')}><Play size={15} />试运行</button>
+            <button className="button secondary" onClick={() => notify('当前为演示编辑器，草稿不会持久化', 'info')}><Save size={15} />保存草稿</button>
+            <button className="button dark" onClick={() => notify('工作流运行时尚未接入，无法试运行', 'info')}><Play size={15} />试运行</button>
           </>
         ) : (
           <label className="search-box"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? '搜索会话' : page === 'mcp' ? '搜索服务或工具' : page === 'memory' ? '搜索节点或文件' : `搜索${meta[0]}`} /></label>
@@ -358,7 +354,7 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
   )
 }
 
-function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, onUsageChange, pendingAsset, onAssetConsumed }) {
+function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, onUsageChange, pendingAsset, onAssetConsumed, requestConfirm, requestText }) {
   const [remoteSessions, setRemoteSessions] = useState([])
   const [activeId, setActiveId] = useState(() => localStorage.getItem('pi-coder-active-session') || '')
   const [sessionStates, setSessionStates] = useState({})
@@ -596,7 +592,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
     if (!sessionId) return
     await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', body: '{}' })
     updateSessionState(sessionId, { streaming: false })
-    notify('已停止当前运行')
+    notify('已停止当前运行', 'info')
   }
 
   const toggleTiledSession = (id) => {
@@ -666,12 +662,12 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
   }
 
   const renameSession = async (session) => {
-    const name = window.prompt('输入新的会话标题', session.name)
-    if (name === null || name.trim() === session.name) return
+    const name = await requestText({ title: '重命名会话', inputLabel: '会话标题', value: session.name, confirmLabel: '保存' })
+    if (name === null || name === session.name) return
     try {
       const updated = await apiJson(`/api/sessions/${encodeURIComponent(session.id)}`, {
         method: 'PATCH',
-        body: JSON.stringify({ name: name.trim() }),
+        body: JSON.stringify({ name }),
       })
       setRemoteSessions((current) => current.map((item) => item.id === session.id ? { ...item, name: updated.name } : item))
       notify('会话标题已更新')
@@ -681,7 +677,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
   }
 
   const deleteSession = async (session) => {
-    if (!window.confirm(`确定删除会话「${session.name}」吗？此操作会删除本地历史记录。`)) return
+    const approved = await requestConfirm({ title: '删除会话', message: `确定删除会话「${session.name}」吗？此操作会删除本地历史记录。`, confirmLabel: '删除' })
+    if (!approved) return
     try {
       await apiJson(`/api/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' })
       const remaining = remoteSessions.filter((item) => item.id !== session.id)
@@ -908,7 +905,7 @@ function FocusSession({ session, messages, model, permissionMode, cwd, available
   )
 }
 
-function AssetsPage({ query, notify, createSignal, onUse }) {
+function AssetsPage({ query, notify, createSignal, onUse, requestConfirm }) {
   const [tab, setTab] = useState('全部')
   const [assets, setAssets] = useState([])
   const [loading, setLoading] = useState(true)
@@ -940,7 +937,8 @@ function AssetsPage({ query, notify, createSignal, onUse }) {
   useEffect(() => { if (createSignal > handledCreateSignal.current) setLinkModal(true); handledCreateSignal.current = createSignal }, [createSignal])
 
   const deleteAsset = async (asset) => {
-    if (!window.confirm(`确定删除资产「${asset.name}」吗？`)) return
+    const approved = await requestConfirm({ title: '删除资产', message: `确定删除资产「${asset.name}」吗？`, confirmLabel: '删除' })
+    if (!approved) return
     try {
       await apiJson(`/api/assets/${encodeURIComponent(asset.id)}`, { method: 'DELETE' })
       setAssets((current) => current.filter((item) => item.id !== asset.id))
@@ -1017,7 +1015,7 @@ function configDraft(data, provider, preferredModel) {
   }
 }
 
-function ConfigPage({ notify, createSignal, section, setSection, onBrowserNotificationChange }) {
+function ConfigPage({ notify, createSignal, section, setSection, onBrowserNotificationChange, requestConfirm }) {
   const [config, setConfig] = useState(null)
   const [draft, setDraft] = useState(null)
   const [saving, setSaving] = useState(false)
@@ -1067,7 +1065,8 @@ function ConfigPage({ notify, createSignal, section, setSection, onBrowserNotifi
   }
 
   const deleteProvider = async (provider) => {
-    if (!window.confirm(`确定删除 Provider 连接「${provider.name}」吗？对应的模型配置和认证信息也会删除。`)) return
+    const approved = await requestConfirm({ title: '删除 Provider 连接', message: `确定删除「${provider.name}」吗？对应的模型配置和认证信息也会删除。`, confirmLabel: '删除' })
+    if (!approved) return
     setError('')
     try {
       const updated = await apiJson(`/api/providers/${encodeURIComponent(provider.id)}`, { method: 'DELETE' })
@@ -1173,7 +1172,7 @@ function McpPage({ notify }) {
   const services = [['Pencil', 'mcp.pencil.local', '在线', 'green'], ['Filesystem', 'stdio://filesystem', '在线', 'green'], ['GitHub', 'https://mcp.github.com', '离线', 'red'], ['Browser', 'stdio://browser', '受限', 'amber'], ['Hermes Docs', 'https://mcp.hermesagent.org.cn/v1', '在线', 'green'], ['Database', 'stdio://postgres', '未授权', 'gray']]
   const [selected, setSelected] = useState(0)
   return (
-    <div className="mcp-layout"><Panel className="selection-list"><SectionTitle title="服务" />{services.map((s, i) => <button className={`service-row ${selected === i ? 'active' : ''}`} onClick={() => setSelected(i)} key={s[0]}><span className="list-icon"><Server size={15} /></span><span><strong>{s[0]}</strong><small>{s[1]}</small></span><Badge tone={s[3]}>{s[2]}</Badge></button>)}</Panel><div className="mcp-center"><div className="metric-grid"><Metric value="6" label="在线服务" note="8 total" tone="blue" /><Metric value="38" label="可用工具" note="5 restricted" tone="green" /><Metric value="0.8%" label="错误率" note="24h" tone="amber" /></div><Panel><SectionTitle title="工具能力" />{toolRows.map((r) => <div className="tool-row" key={r[0]}><span className="list-icon"><Wrench size={15} /></span><span><strong>{r[0]}</strong><small>{r[1]}</small></span><Badge tone={r[2] === '高风险' ? 'red' : r[2] === '中风险' ? 'amber' : 'green'}>{r[2]}</Badge><Toggle defaultOn={r[3]} /></div>)}</Panel></div><div className="detail-stack"><Panel><SectionTitle title="当前服务" /><h2>{services[selected][0]}</h2><p className="muted-copy">用于读取、生成和验证 .pen 设计文件。当前连接稳定，允许设计编辑工具。</p>{[['Transport', 'Streamable HTTP'], ['Latency', '42 ms'], ['Last Ping', '12 seconds ago'], ['Auth', 'Local session']].map((r) => <div className="key-value" key={r[0]}><span>{r[0]}</span><strong>{r[1]}</strong></div>)}<button className="button secondary wide" onClick={() => notify('连接测试成功，延迟 42ms')}><RefreshCw size={14} />测试连接</button></Panel><Panel><SectionTitle title="最近调用" />{[['snapshot_layout', '14:28 · OK'], ['batch_design', '14:26 · OK'], ['get_screenshot', '14:22 · OK'], ['export_html', '14:18 · Skipped']].map((a) => <div className="activity-row" key={a[0]}><CircleDot size={14} /><span><strong>{a[0]}</strong><small>{a[1]}</small></span></div>)}</Panel></div></div>
+    <div className="preview-page"><PreviewNotice>MCP 页面当前展示的是交互原型数据，尚未连接真实服务状态。</PreviewNotice><div className="mcp-layout"><Panel className="selection-list"><SectionTitle title="服务" />{services.map((s, i) => <button className={`service-row ${selected === i ? 'active' : ''}`} onClick={() => setSelected(i)} key={s[0]}><span className="list-icon"><Server size={15} /></span><span><strong>{s[0]}</strong><small>{s[1]}</small></span><Badge tone={s[3]}>{s[2]}</Badge></button>)}</Panel><div className="mcp-center"><div className="metric-grid"><Metric value="6" label="在线服务" note="8 total" tone="blue" /><Metric value="38" label="可用工具" note="5 restricted" tone="green" /><Metric value="0.8%" label="错误率" note="24h" tone="amber" /></div><Panel><SectionTitle title="工具能力" />{toolRows.map((r) => <div className="tool-row" key={r[0]}><span className="list-icon"><Wrench size={15} /></span><span><strong>{r[0]}</strong><small>{r[1]}</small></span><Badge tone={r[2] === '高风险' ? 'red' : r[2] === '中风险' ? 'amber' : 'green'}>{r[2]}</Badge><Toggle defaultOn={r[3]} /></div>)}</Panel></div><div className="detail-stack"><Panel><SectionTitle title="当前服务" /><h2>{services[selected][0]}</h2><p className="muted-copy">用于读取、生成和验证 .pen 设计文件。当前连接稳定，允许设计编辑工具。</p>{[['Transport', 'Streamable HTTP'], ['Latency', '42 ms'], ['Last Ping', '12 seconds ago'], ['Auth', 'Local session']].map((r) => <div className="key-value" key={r[0]}><span>{r[0]}</span><strong>{r[1]}</strong></div>)}<button className="button secondary wide" onClick={() => notify('演示页面尚未连接真实 MCP 服务', 'info')}><RefreshCw size={14} />测试连接</button></Panel><Panel><SectionTitle title="最近调用" />{[['snapshot_layout', '14:28 · OK'], ['batch_design', '14:26 · OK'], ['get_screenshot', '14:22 · OK'], ['export_html', '14:18 · Skipped']].map((a) => <div className="activity-row" key={a[0]}><CircleDot size={14} /><span><strong>{a[0]}</strong><small>{a[1]}</small></span></div>)}</Panel></div></div></div>
   )
 }
 
@@ -1181,14 +1180,14 @@ function SkillsPage({ notify }) {
   const [selected, setSelected] = useState(0)
   const [enabled, setEnabled] = useState(skillInstalled.map((x) => x[3]))
   return (
-    <div className="skills-page"><Segmented options={['全部', '已安装', '可安装', '设计', '代码', '文档', '高权限']} value="全部" onChange={() => {}} /><div className="skills-layout"><Panel><SectionTitle title="已安装技能" />{skillInstalled.map((s, i) => { const Icon = s[2]; return <button className={`skill-row ${selected === i ? 'selected' : ''}`} onClick={() => setSelected(i)} key={s[0]}><span className="list-icon"><Icon size={15} /></span><span><strong>{s[0]}</strong><small>{s[1]}</small></span><Toggle value={enabled[i]} onChange={() => setEnabled(enabled.map((e, x) => x === i ? !e : e))} /></button>})}</Panel><Panel><div className="card-head"><SectionTitle title="技能市场" /><a>18 available</a></div>{[['browser-research', '网页调研、引用整理与资料归档', 'Research'], ['figma-import', '同步 Figma 组件并生成设计 token', 'Design'], ['db-admin', '读取 schema、生成安全 SQL 草案', 'Data'], ['release-writer', '根据 commits 生成 changelog 和发布说明', '已安装'], ['test-author', '为变更生成 focused tests', 'Code'], ['prompt-auditor', '检查系统 prompt 漏洞和冲突', 'Safety']].map((s) => <div className="market-row" key={s[0]}><span className="list-icon"><Sparkles size={15} /></span><span><strong>{s[0]}</strong><small>{s[1]}</small></span><Badge tone={s[2] === '已安装' ? 'green' : 'blue'}>{s[2]}</Badge></div>)}</Panel><div className="detail-stack"><Panel><SectionTitle title="选中技能" /><h2>{skillInstalled[selected][0]}</h2><p className="muted-copy">当任务需要 AI 生成位图、编辑图片、做贴图或视觉素材时自动触发。</p>{[['触发方式', '自动 + 手动'], ['权限', '生成图片'], ['版本', 'system / latest'], ['来源', '内置技能']].map((r) => <div className="key-value" key={r[0]}><span>{r[0]}</span><strong>{r[1]}</strong></div>)}<button className="button primary wide" onClick={() => notify('技能设置已更新')}><Save size={14} />保存设置</button></Panel><Panel><SectionTitle title="触发条件" />{['请求生成图片', '编辑已有图片', '需要 SVG 图标', '仅文本解释'].map((x, i) => <label className="check-row" key={x}><input type="checkbox" defaultChecked={i < 2} /><span>{x}</span></label>)}</Panel></div></div></div>
+    <div className="skills-page"><PreviewNotice>Skills 页面当前展示的是交互原型，安装数量和市场内容不是实时数据。</PreviewNotice><Segmented options={['全部', '已安装', '可安装', '设计', '代码', '文档', '高权限']} value="全部" onChange={() => {}} /><div className="skills-layout"><Panel><SectionTitle title="已安装技能" />{skillInstalled.map((s, i) => { const Icon = s[2]; return <button className={`skill-row ${selected === i ? 'selected' : ''}`} onClick={() => setSelected(i)} key={s[0]}><span className="list-icon"><Icon size={15} /></span><span><strong>{s[0]}</strong><small>{s[1]}</small></span><Toggle value={enabled[i]} onChange={() => setEnabled(enabled.map((e, x) => x === i ? !e : e))} /></button>})}</Panel><Panel><div className="card-head"><SectionTitle title="技能市场" /><a>18 available</a></div>{[['browser-research', '网页调研、引用整理与资料归档', 'Research'], ['figma-import', '同步 Figma 组件并生成设计 token', 'Design'], ['db-admin', '读取 schema、生成安全 SQL 草案', 'Data'], ['release-writer', '根据 commits 生成 changelog 和发布说明', '已安装'], ['test-author', '为变更生成 focused tests', 'Code'], ['prompt-auditor', '检查系统 prompt 漏洞和冲突', 'Safety']].map((s) => <div className="market-row" key={s[0]}><span className="list-icon"><Sparkles size={15} /></span><span><strong>{s[0]}</strong><small>{s[1]}</small></span><Badge tone={s[2] === '已安装' ? 'green' : 'blue'}>{s[2]}</Badge></div>)}</Panel><div className="detail-stack"><Panel><SectionTitle title="选中技能" /><h2>{skillInstalled[selected][0]}</h2><p className="muted-copy">当任务需要 AI 生成位图、编辑图片、做贴图或视觉素材时自动触发。</p>{[['触发方式', '自动 + 手动'], ['权限', '生成图片'], ['版本', 'system / latest'], ['来源', '内置技能']].map((r) => <div className="key-value" key={r[0]}><span>{r[0]}</span><strong>{r[1]}</strong></div>)}<button className="button primary wide" onClick={() => notify('演示页面尚未接入技能运行时', 'info')}><Save size={14} />保存设置</button></Panel><Panel><SectionTitle title="触发条件" />{['请求生成图片', '编辑已有图片', '需要 SVG 图标', '仅文本解释'].map((x, i) => <label className="check-row" key={x}><input type="checkbox" defaultChecked={i < 2} /><span>{x}</span></label>)}</Panel></div></div></div>
   )
 }
 
 function WorkflowsPage({ navigate, notify }) {
   const templates = [['代码审查', '读取 diff → 运行测试 → 生成 review', Code2], ['PR 修复', '定位失败 → 修改代码 → 回归测试', GitBranch], ['资料调研', '搜索资料 → 提取引用 → 写入记忆', Search], ['日报周报', '汇总会话 → 生成摘要 → 渠道通知', File], ['资产生成', '生成图片 → 存入资产库 → 通知验收', Image], ['发布准备', '版本检查 → changelog → 创建发布单', Rocket]]
   return (
-    <div className="workflows-page"><Segmented options={['全部', '预设', '自定义', '运行中', '失败', '草稿']} value="全部" onChange={() => {}} /><div className="workflow-top"><Panel><div className="card-head"><SectionTitle title="常见预设" /><a>6 templates</a></div><div className="template-grid">{templates.map((t) => { const Icon = t[2]; return <button onClick={() => { navigate('workflowCreate'); notify(`已载入「${t[0]}」模板`) }} key={t[0]}><span className="list-icon"><Icon size={15} /></span><span><strong>{t[0]}</strong><small>{t[1]}</small></span><ChevronRight size={14} /></button>})}</div></Panel><Panel className="workflow-preview"><div className="card-head"><SectionTitle title="自定义工作流" /><button className="text-button" onClick={() => navigate('workflowCreate')}>空白创建</button></div><WorkflowMiniMap /></Panel></div><div className="workflow-bottom"><Panel><div className="card-head"><SectionTitle title="并行运行" /><a>3 running · 5 queued</a></div>{[['PR 修复 #284', '回归测试', 72, 'blue'], ['资料调研：MCP Auth', '整理引用', 46, 'violet'], ['资产生成：活动页', '等待验收', 88, 'green'], ['发布准备 v2.8', '生成 changelog', 31, 'amber']].map((r) => <div className="run-row" key={r[0]}><span><strong>{r[0]}</strong><small>{r[1]}</small></span><div className="run-progress"><i className={r[3]} style={{ width: `${r[2]}%` }} /></div><em>{r[2]}%</em><button onClick={() => notify(`${r[0]} 已停止`)}><Square size={12} />停止</button></div>)}</Panel><Panel><SectionTitle title="队列与限制" />{[['最大并发', '4', '当前 3 个运行'], ['失败重试', '2 次', '指数退避'], ['默认模型', 'GPT-5-Codex', '可按步骤覆盖'], ['完成推送', '已启用', '工作流结束后发送模板消息']].map((r) => <div className="setting-row" key={r[0]}><span><strong>{r[0]}</strong><small>{r[2]}</small></span><button>{r[1]} <ChevronDown size={12} /></button></div>)}</Panel></div></div>
+    <div className="workflows-page"><PreviewNotice>Workflows 页面当前是产品原型，运行数、队列和进度均为演示数据。</PreviewNotice><Segmented options={['全部', '预设', '自定义', '运行中', '失败', '草稿']} value="全部" onChange={() => {}} /><div className="workflow-top"><Panel><div className="card-head"><SectionTitle title="常见预设" /><a>6 templates</a></div><div className="template-grid">{templates.map((t) => { const Icon = t[2]; return <button onClick={() => { navigate('workflowCreate'); notify(`已载入「${t[0]}」演示模板`, 'info') }} key={t[0]}><span className="list-icon"><Icon size={15} /></span><span><strong>{t[0]}</strong><small>{t[1]}</small></span><ChevronRight size={14} /></button>})}</div></Panel><Panel className="workflow-preview"><div className="card-head"><SectionTitle title="自定义工作流" /><button className="text-button" onClick={() => navigate('workflowCreate')}>空白创建</button></div><WorkflowMiniMap /></Panel></div><div className="workflow-bottom"><Panel><div className="card-head"><SectionTitle title="并行运行" /><a>3 running · 5 queued</a></div>{[['PR 修复 #284', '回归测试', 72, 'blue'], ['资料调研：MCP Auth', '整理引用', 46, 'violet'], ['资产生成：活动页', '等待验收', 88, 'green'], ['发布准备 v2.8', '生成 changelog', 31, 'amber']].map((r) => <div className="run-row" key={r[0]}><span><strong>{r[0]}</strong><small>{r[1]}</small></span><div className="run-progress"><i className={r[3]} style={{ width: `${r[2]}%` }} /></div><em>{r[2]}%</em><button onClick={() => notify('演示任务没有真实运行实例', 'info')}><Square size={12} />停止</button></div>)}</Panel><Panel><SectionTitle title="队列与限制" />{[['最大并发', '4', '当前 3 个运行'], ['失败重试', '2 次', '指数退避'], ['默认模型', 'GPT-5-Codex', '可按步骤覆盖'], ['完成推送', '已启用', '工作流结束后发送模板消息']].map((r) => <div className="setting-row" key={r[0]}><span><strong>{r[0]}</strong><small>{r[2]}</small></span><button>{r[1]} <ChevronDown size={12} /></button></div>)}</Panel></div></div>
   )
 }
 
@@ -1213,7 +1212,7 @@ function WorkflowBuilder({ notify }) {
   }
   const current = nodes.find((n) => n.id === selected) || nodes[0]
   return (
-    <div className="builder-layout"><Panel className="node-library"><SectionTitle title="节点库" />{palette.map(([label, Icon], i) => <div key={label}><small>{[0, 3, 7].includes(i) ? ['触发', '动作', '控制'][[0, 3, 7].indexOf(i)] : ''}</small><button draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', JSON.stringify({ label }))}><Icon size={15} />{label}<span>拖拽</span></button></div>)}</Panel><Panel className="builder-canvas" ref={canvasRef} onDragOver={(e) => e.preventDefault()} onDrop={drop}><div className="canvas-tools"><button><Plus size={14} /></button><button>−</button><button><Grid2X2 size={13} /></button></div><svg viewBox="0 0 620 520"><path d="M125 70 H235 M355 70 H405 M465 95 L465 160 M405 185 H355 M295 210 V280 M355 305 H405 M465 330 L380 385 M295 330 L320 385" /></svg>{nodes.map((n) => <button draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', JSON.stringify({ id: n.id }))} onClick={() => setSelected(n.id)} className={`flow-node ${selected === n.id ? 'active' : ''} type-${n.type}`} style={{ left: n.x, top: n.y }} key={n.id}><small>{n.type}</small><strong>{n.label}</strong></button>)}</Panel><div className="detail-stack inspector"><Panel><SectionTitle title="完成后通知" /><div className="toggle-line"><span><MessageSquare size={15} />微信研发群</span><Toggle defaultOn /></div><div className="toggle-line"><span><Send size={15} />飞书 On-call</span><Toggle defaultOn /></div><label className="field-label">模板<textarea defaultValue="{{workflow.name}} 已完成，耗时 {{duration}}，产物 {{asset.count}} 个。" /></label></Panel><Panel><SectionTitle title="选中节点" /><h2>{current.label}</h2><p className="muted-copy">配置该步骤使用的模型、插件权限、输入输出和失败处理。</p><SelectLabel label="模型" options={['GPT-5-Codex', 'GPT-5', 'DeepSeek']} /><InputLabel label="插件" value="Read, Write, Grep" /><InputLabel label="超时" value="20 分钟" /><SelectLabel label="失败处理" options={['重试 2 次', '立即停止', '跳过']} /><label className="field-label">Prompt<textarea defaultValue="根据测试结果和 diff 修改代码，保留用户已有改动，不执行破坏性命令。" /></label><div className="button-row"><button className="button secondary" onClick={() => { const id = Date.now(); setNodes([...nodes, { ...current, id, x: current.x + 25, y: current.y + 25 }]); notify('节点已复制') }}><Copy size={14} />复制节点</button><button className="button danger" onClick={() => { setNodes(nodes.filter((n) => n.id !== selected)); setSelected(nodes[0]?.id); notify('节点已删除') }}><Trash2 size={14} />删除节点</button></div></Panel></div></div>
+    <div className="preview-page"><PreviewNotice>工作流编辑器当前仅用于交互预览，发布和试运行不会启动真实工作流。</PreviewNotice><div className="builder-layout"><Panel className="node-library"><SectionTitle title="节点库" />{palette.map(([label, Icon], i) => <div key={label}><small>{[0, 3, 7].includes(i) ? ['触发', '动作', '控制'][[0, 3, 7].indexOf(i)] : ''}</small><button draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', JSON.stringify({ label }))}><Icon size={15} />{label}<span>拖拽</span></button></div>)}</Panel><Panel className="builder-canvas" ref={canvasRef} onDragOver={(e) => e.preventDefault()} onDrop={drop}><div className="canvas-tools"><button><Plus size={14} /></button><button>−</button><button><Grid2X2 size={13} /></button></div><svg viewBox="0 0 620 520"><path d="M125 70 H235 M355 70 H405 M465 95 L465 160 M405 185 H355 M295 210 V280 M355 305 H405 M465 330 L380 385 M295 330 L320 385" /></svg>{nodes.map((n) => <button draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', JSON.stringify({ id: n.id }))} onClick={() => setSelected(n.id)} className={`flow-node ${selected === n.id ? 'active' : ''} type-${n.type}`} style={{ left: n.x, top: n.y }} key={n.id}><small>{n.type}</small><strong>{n.label}</strong></button>)}</Panel><div className="detail-stack inspector"><Panel><SectionTitle title="完成后通知" /><div className="toggle-line"><span><MessageSquare size={15} />微信研发群</span><Toggle defaultOn /></div><div className="toggle-line"><span><Send size={15} />飞书 On-call</span><Toggle defaultOn /></div><label className="field-label">模板<textarea defaultValue="{{workflow.name}} 已完成，耗时 {{duration}}，产物 {{asset.count}} 个。" /></label></Panel><Panel><SectionTitle title="选中节点" /><h2>{current.label}</h2><p className="muted-copy">配置该步骤使用的模型、插件权限、输入输出和失败处理。</p><SelectLabel label="模型" options={['GPT-5-Codex', 'GPT-5', 'DeepSeek']} /><InputLabel label="插件" value="Read, Write, Grep" /><InputLabel label="超时" value="20 分钟" /><SelectLabel label="失败处理" options={['重试 2 次', '立即停止', '跳过']} /><label className="field-label">Prompt<textarea defaultValue="根据测试结果和 diff 修改代码，保留用户已有改动，不执行破坏性命令。" /></label><div className="button-row"><button className="button secondary" onClick={() => { const id = Date.now(); setNodes([...nodes, { ...current, id, x: current.x + 25, y: current.y + 25 }]); notify('节点已复制', 'info') }}><Copy size={14} />复制节点</button><button className="button danger" onClick={() => { setNodes(nodes.filter((n) => n.id !== selected)); setSelected(nodes[0]?.id); notify('节点已删除', 'info') }}><Trash2 size={14} />删除节点</button></div></Panel></div></div></div>
   )
 }
 

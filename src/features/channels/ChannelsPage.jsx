@@ -18,7 +18,7 @@ function expiresIn(value) {
   return seconds >= 60 ? `${Math.ceil(seconds / 60)} 分钟后` : `${seconds} 秒后`
 }
 
-export function ChannelsPage({ notify, createSignal }) {
+export function ChannelsPage({ notify, createSignal, requestConfirm }) {
   const [data, setData] = useState({ providers: [], connections: {}, scopes: [], models: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -61,7 +61,10 @@ export function ChannelsPage({ notify, createSignal }) {
 
   const beginOnboarding = async (platform) => {
     const connection = data.connections?.[platform]
-    if (connection && !window.confirm(`重新扫码会替换当前${PROVIDERS[platform].name}连接，是否继续？`)) return
+    if (connection) {
+      const approved = await requestConfirm({ title: `重新连接${PROVIDERS[platform].name}`, message: `重新扫码会替换当前${PROVIDERS[platform].name}连接，是否继续？`, confirmLabel: '继续扫码', tone: 'primary' })
+      if (!approved) return
+    }
     setSelectedPlatform(platform)
     setStarting(platform)
     setOnboarding({ platform, status: 'starting' })
@@ -84,27 +87,29 @@ export function ChannelsPage({ notify, createSignal }) {
       setData(result)
       setCwd(result.connections?.[platform]?.defaultCwd || '')
       notify(success)
-    } catch (caught) { notify(caught.message) }
+    } catch (caught) { notify(caught.message, 'error') }
     finally { setSaving(false) }
   }
 
   const reconnect = async (platform) => {
     setSaving(true)
     try { setData(await apiJson(`/api/channels/${platform}/reconnect`, { method: 'POST', body: '{}' })); notify(`${PROVIDERS[platform].name}已重新连接`) }
-    catch (caught) { notify(caught.message); load() }
+    catch (caught) { notify(caught.message, 'error'); load() }
     finally { setSaving(false) }
   }
 
   const remove = async (platform) => {
-    if (!window.confirm(`解除${PROVIDERS[platform].name}连接？本地凭据和会话映射会被删除。`)) return
+    const approved = await requestConfirm({ title: `解除${PROVIDERS[platform].name}连接`, message: '本地凭据和会话映射会被删除。', confirmLabel: '解除连接' })
+    if (!approved) return
     try { await apiJson(`/api/channels/${platform}`, { method: 'DELETE' }); await load(); notify(`${PROVIDERS[platform].name}已解除连接`) }
-    catch (caught) { notify(caught.message) }
+    catch (caught) { notify(caught.message, 'error') }
   }
 
   const resetScope = async (scope) => {
-    if (!window.confirm(`重置“${scope.title}”绑定的 Pi Coder 会话？`)) return
+    const approved = await requestConfirm({ title: '重置渠道会话', message: `重置“${scope.title}”绑定的 Pi Coder 会话？`, confirmLabel: '重置' })
+    if (!approved) return
     try { await apiJson(`/api/channels/scopes/${encodeURIComponent(scope.key)}`, { method: 'DELETE' }); await load(); notify('渠道会话已重置') }
-    catch (caught) { notify(caught.message) }
+    catch (caught) { notify(caught.message, 'error') }
   }
 
   if (loading) return <Panel className="empty-state"><RefreshCw className="spin" size={23} /><h2>正在加载渠道</h2></Panel>
@@ -135,7 +140,7 @@ function OnboardingModal({ job, onClose, onRetry, notify }) {
   const provider = PROVIDERS[job.platform]
   const submitCode = async () => {
     try { await apiJson(`/api/channels/${job.platform}/onboarding/${encodeURIComponent(job.id)}/verify`, { method: 'POST', body: JSON.stringify({ code }) }); notify('配对码已提交') }
-    catch (caught) { notify(caught.message) }
+    catch (caught) { notify(caught.message, 'error') }
   }
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal feishu-onboard-modal"><div className="card-head"><div><h2>扫码连接{provider.name}</h2><p>{job.platform === 'feishu' ? '由飞书官方授权页创建机器人应用。' : '由腾讯 iLink Bot 完成个人微信登录。'}</p></div><button className="icon-button" onClick={onClose}><X size={17} /></button></div><div className={`feishu-qr-stage ${job.status}`}>{job.qrDataUrl ? <img src={job.qrDataUrl} alt={`${provider.name}连接二维码`} /> : job.status === 'failed' ? <AlertTriangle size={42} /> : <RefreshCw className="spin" size={32} />}<strong>{ONBOARD_STATUS[job.status] || '正在处理…'}</strong>{job.error && <p>{job.error}</p>}{job.expireAt && !terminal && <small>二维码将在 {expiresIn(job.expireAt)}过期</small>}</div>{job.needsVerifyCode && <div className="weixin-verify-code"><input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 8))} placeholder="输入手机显示的数字" /><button className="button primary" disabled={!code} onClick={submitCode}>提交配对码</button></div>}{job.qrUrl && !terminal && <a className="button secondary wide feishu-open-link" href={job.qrUrl} target="_blank" rel="noreferrer"><ExternalLink size={14} />无法扫码？打开登录链接</a>}<div className="permission-note"><ShieldCheck size={15} /><span><strong>持续在线的双向连接</strong><small>{job.platform === 'feishu' ? 'WebSocket 接收私聊和群聊 @ 消息。' : '腾讯 iLink 持续拉取私聊消息，并支持文字与媒体回复。'}</small></span></div><div className="modal-actions"><button className="button secondary" onClick={onClose}>{terminal ? '关闭' : '取消'}</button>{job.status === 'failed' && <button className="button primary" onClick={onRetry}><RefreshCw size={14} />重新生成二维码</button>}</div></section></div>
 }
