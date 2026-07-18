@@ -1,25 +1,16 @@
-import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, Bot, CheckCircle2, ChevronDown, ExternalLink, FolderOpen, MessageSquare, Plus, RadioTower, RefreshCw, ShieldCheck, Trash2, Unplug, X, Zap } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { AlertTriangle, Bot, CheckCircle2, ChevronDown, ExternalLink, FolderOpen, MessageCircle, MessageSquare, Plus, RefreshCw, Save, Send, ShieldCheck, Trash2, Unplug, X, Zap } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Toggle } from '../../components/ui.jsx'
 import { apiJson } from '../../lib/api.js'
 import { relativeTime } from '../../lib/format.js'
 
-const STATUS = {
-  idle: ['未连接', 'gray'],
-  connecting: ['连接中', 'amber'],
-  connected: ['在线', 'green'],
-  reconnecting: ['重连中', 'amber'],
-  failed: ['连接失败', 'red'],
+const PROVIDERS = {
+  feishu: { name: '飞书', title: '飞书应用机器人', Icon: Bot, tone: 'blue', transport: 'WebSocket 长连接', capability: '私聊、群聊 @、图片和文件' },
+  weixin: { name: '微信', title: '微信', Icon: MessageCircle, tone: 'green', transport: 'Tencent iLink 持续连接', capability: '个人微信私聊、图片和文件' },
 }
-
+const STATUS = { idle: ['未连接', 'gray'], connecting: ['连接中', 'amber'], connected: ['在线', 'green'], reconnecting: ['重连中', 'amber'], failed: ['连接失败', 'red'] }
 const ONBOARD_STATUS = {
-  starting: '正在向飞书申请创建机器人…',
-  waiting: '请使用飞书 App 扫描二维码并确认创建',
-  authorizing: '已扫码，正在确认授权…',
-  connecting: '机器人已创建，正在建立 WebSocket 长连接…',
-  completed: '机器人已经连接',
-  failed: '创建失败',
-  cancelled: '已取消',
+  starting: '正在申请登录二维码…', waiting: '请使用手机扫码并确认连接', scanned: '已扫码，正在等待确认…', verification_required: '请输入手机上显示的数字配对码', authorizing: '正在确认授权…', connecting: '授权成功，正在建立持续连接…', completed: '渠道已经连接', failed: '连接失败', cancelled: '已取消',
 }
 
 function expiresIn(value) {
@@ -27,12 +18,18 @@ function expiresIn(value) {
   return seconds >= 60 ? `${Math.ceil(seconds / 60)} 分钟后` : `${seconds} 秒后`
 }
 
+function renderPreview(content) {
+  const values = { 'task.name': '每日代码巡检', 'task.summary': '发现 2 个待处理问题，报告已归档。', 'task.duration': '2 分 18 秒', 'task.nextRun': '明天 09:00', 'task.error': '测试进程超时', 'workflow.name': '发布前检查', 'workflow.summary': '测试、构建和安全检查均已通过。', 'workflow.duration': '6 分 42 秒', 'workflow.runId': 'run_20260718_001', 'workflow.node': '端到端测试', 'workflow.error': '浏览器启动失败' }
+  return String(content || '').replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, key) => values[key] || `{{${key}}}`)
+}
+
 export function ChannelsPage({ notify, createSignal }) {
-  const [data, setData] = useState({ providers: [], connection: null, scopes: [] })
+  const [data, setData] = useState({ providers: [], connections: {}, scopes: [], templates: [], models: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [selectedPlatform, setSelectedPlatform] = useState('feishu')
   const [onboarding, setOnboarding] = useState(null)
-  const [starting, setStarting] = useState(false)
+  const [starting, setStarting] = useState('')
   const [saving, setSaving] = useState(false)
   const [cwd, setCwd] = useState('')
 
@@ -41,102 +38,140 @@ export function ChannelsPage({ notify, createSignal }) {
       setError('')
       const result = await apiJson('/api/channels')
       setData(result)
-      setCwd(result.connection?.defaultCwd || '')
+      setCwd(result.connections?.[selectedPlatform]?.defaultCwd || '')
     } catch (caught) { setError(caught.message) }
     finally { setLoading(false) }
-  }, [])
+  }, [selectedPlatform])
 
   useEffect(() => { load() }, [load])
-  useEffect(() => {
-    if (createSignal > 0) beginOnboarding()
-    // beginOnboarding intentionally reads the latest connection state.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [createSignal])
+  useEffect(() => { if (createSignal > 0) beginOnboarding(selectedPlatform) }, [createSignal]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!onboarding?.id || ['completed', 'failed', 'cancelled'].includes(onboarding.status)) return undefined
     const timer = window.setInterval(async () => {
       try {
-        const next = await apiJson(`/api/channels/feishu/onboarding/${encodeURIComponent(onboarding.id)}`)
-        setOnboarding(next)
+        const platform = onboarding.platform
+        const next = await apiJson(`/api/channels/${platform}/onboarding/${encodeURIComponent(onboarding.id)}`)
+        setOnboarding({ ...next, platform })
         if (next.status === 'completed') {
           window.clearInterval(timer)
-          notify('飞书机器人已创建并建立双向连接')
+          notify(`${PROVIDERS[platform].name}已建立双向连接`)
           await load()
           window.setTimeout(() => setOnboarding(null), 900)
         }
-      } catch (caught) {
-        setOnboarding((current) => ({ ...current, status: 'failed', error: caught.message }))
-      }
+      } catch (caught) { setOnboarding((current) => ({ ...current, status: 'failed', error: caught.message })) }
     }, 1500)
     return () => window.clearInterval(timer)
-  }, [onboarding?.id, onboarding?.status, load, notify])
+  }, [onboarding?.id, onboarding?.platform, onboarding?.status, load, notify])
 
-  const beginOnboarding = async () => {
-    if (data.connection && !window.confirm('重新扫码会创建新的飞书机器人，并替换当前连接。是否继续？')) return
-    setStarting(true)
-    setOnboarding({ status: 'starting' })
-    try { setOnboarding(await apiJson('/api/channels/feishu/onboarding', { method: 'POST', body: '{}' })) }
-    catch (caught) { setOnboarding({ status: 'failed', error: caught.message }) }
-    finally { setStarting(false) }
+  const beginOnboarding = async (platform) => {
+    const connection = data.connections?.[platform]
+    if (connection && !window.confirm(`重新扫码会替换当前${PROVIDERS[platform].name}连接，是否继续？`)) return
+    setSelectedPlatform(platform)
+    setStarting(platform)
+    setOnboarding({ platform, status: 'starting' })
+    try {
+      const job = await apiJson(`/api/channels/${platform}/onboarding`, { method: 'POST', body: '{}' })
+      setOnboarding({ ...job, platform })
+    } catch (caught) { setOnboarding({ platform, status: 'failed', error: caught.message }) }
+    finally { setStarting('') }
   }
 
   const closeOnboarding = async () => {
-    if (onboarding?.id && !['completed', 'failed', 'cancelled'].includes(onboarding.status)) {
-      await apiJson(`/api/channels/feishu/onboarding/${encodeURIComponent(onboarding.id)}`, { method: 'DELETE' }).catch(() => {})
-    }
+    if (onboarding?.id && !['completed', 'failed', 'cancelled'].includes(onboarding.status)) await apiJson(`/api/channels/${onboarding.platform}/onboarding/${encodeURIComponent(onboarding.id)}`, { method: 'DELETE' }).catch(() => {})
     setOnboarding(null)
   }
 
-  const update = async (patch, success) => {
+  const update = async (platform, patch, success) => {
     setSaving(true)
     try {
-      const result = await apiJson('/api/channels/feishu', { method: 'PATCH', body: JSON.stringify(patch) })
+      const result = await apiJson(`/api/channels/${platform}`, { method: 'PATCH', body: JSON.stringify(patch) })
       setData(result)
-      setCwd(result.connection?.defaultCwd || '')
+      setCwd(result.connections?.[platform]?.defaultCwd || '')
       notify(success)
     } catch (caught) { notify(caught.message) }
     finally { setSaving(false) }
   }
 
-  const reconnect = async () => {
+  const reconnect = async (platform) => {
     setSaving(true)
-    try { setData(await apiJson('/api/channels/feishu/reconnect', { method: 'POST', body: '{}' })); notify('飞书 WebSocket 已重新连接') }
+    try { setData(await apiJson(`/api/channels/${platform}/reconnect`, { method: 'POST', body: '{}' })); notify(`${PROVIDERS[platform].name}已重新连接`) }
     catch (caught) { notify(caught.message); load() }
     finally { setSaving(false) }
   }
 
-  const remove = async () => {
-    if (!window.confirm('解除飞书机器人连接？本地保存的应用凭据和飞书会话映射会被删除。')) return
-    try { await apiJson('/api/channels/feishu', { method: 'DELETE' }); await load(); notify('飞书机器人已解除连接') }
+  const remove = async (platform) => {
+    if (!window.confirm(`解除${PROVIDERS[platform].name}连接？本地凭据、会话映射和通知接收目标会被删除。`)) return
+    try { await apiJson(`/api/channels/${platform}`, { method: 'DELETE' }); await load(); notify(`${PROVIDERS[platform].name}已解除连接`) }
     catch (caught) { notify(caught.message) }
   }
 
   const resetScope = async (scope) => {
-    if (!window.confirm(`重置“${scope.title}”绑定的 Pi Coder 会话？下一条消息会创建新会话。`)) return
-    try { await apiJson(`/api/channels/feishu/scopes/${encodeURIComponent(scope.chatId)}`, { method: 'DELETE' }); await load(); notify('飞书会话已重置') }
+    if (!window.confirm(`重置“${scope.title}”绑定的 Pi Coder 会话？`)) return
+    try { await apiJson(`/api/channels/scopes/${encodeURIComponent(scope.key)}`, { method: 'DELETE' }); await load(); notify('渠道会话已重置') }
     catch (caught) { notify(caught.message) }
   }
 
   if (loading) return <Panel className="empty-state"><RefreshCw className="spin" size={23} /><h2>正在加载渠道</h2></Panel>
-  const connection = data.connection
-  const [statusLabel, statusTone] = STATUS[connection?.status || 'idle'] || STATUS.failed
+  const selectedConnection = data.connections?.[selectedPlatform]
+  const [statusLabel] = STATUS[selectedConnection?.status || 'idle'] || STATUS.failed
 
   return <div className="channel-page">
     {error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}
-    <div className="channel-cards">
-      <Panel className="provider-card"><div className="provider-title"><span className="provider-icon blue"><Bot /></span><div><h2>飞书应用机器人</h2><p>扫码创建 · WebSocket 双向通信</p></div><Badge tone={statusTone}>{statusLabel}</Badge></div><label className="field-label">连接方式<span className="channel-summary-field">WebSocket 长连接</span></label><label className="field-label">机器人应用<span className="channel-summary-field">{connection ? `${connection.name} · ${connection.appId}` : '尚未创建'}</span></label><button className="button primary wide channel-provider-connect" disabled={starting} onClick={beginOnboarding}>{starting ? <RefreshCw className="spin" size={14} /> : <Plus size={14} />}{connection ? '重新扫码绑定' : '扫码创建机器人'}</button></Panel>
-      <Panel className="provider-card"><div className="provider-title"><span className="provider-icon green"><RadioTower /></span><div><h2>双向会话</h2><p>私聊直接使用，群聊 @机器人 后使用</p></div><Badge tone={connection?.status === 'connected' ? 'green' : 'gray'}>{connection?.status === 'connected' ? `${data.scopes.length} 个会话` : '等待连接'}</Badge></div><label className="field-label">消息能力<span className="channel-summary-field">文字、图片、文件 · Agent 回复与产物回传</span></label><label className="field-label">会话命令<span className="channel-summary-field">/new · /status · /stop</span></label><button className="button secondary wide channel-provider-connect" disabled={!connection || saving} onClick={reconnect}><RefreshCw className={saving ? 'spin' : ''} size={14} />重新连接</button></Panel>
-    </div>
+    <div className="channel-cards">{Object.entries(PROVIDERS).map(([platform, provider]) => {
+      const connection = data.connections?.[platform]
+      const [label, tone] = STATUS[connection?.status || 'idle'] || STATUS.failed
+      const Icon = provider.Icon
+      return <Panel className={`provider-card channel-platform-card ${selectedPlatform === platform ? 'selected' : ''}`} key={platform} onClick={() => { setSelectedPlatform(platform); setCwd(connection?.defaultCwd || '') }}><div className="provider-title"><span className={`provider-icon ${provider.tone}`}><Icon /></span><div><h2>{provider.title}</h2><p>{provider.transport}</p></div><Badge tone={tone}>{label}</Badge></div><label className="field-label">双向能力<span className="channel-summary-field">{provider.capability}</span></label><label className="field-label">回复模型<span className="channel-summary-field">{connection?.replyModel ? `${connection.replyModel.provider}/${connection.replyModel.model}` : '跟随应用默认模型'}</span></label><button className={`button wide channel-provider-connect ${connection ? 'secondary' : 'primary'}`} disabled={starting === platform} onClick={(event) => { event.stopPropagation(); beginOnboarding(platform) }}>{starting === platform ? <RefreshCw className="spin" size={14} /> : <Plus size={14} />}{connection ? '重新扫码绑定' : `扫码连接${provider.name}`}</button></Panel>
+    })}</div>
 
     <div className="two-one-grid">
-      <Panel><div className="channel-section-head"><SectionTitle title="飞书会话" /><span>{data.scopes.length} 个已绑定</span></div>{data.scopes.length ? data.scopes.map((scope) => <div className="route-row" key={scope.chatId}><span className="route-icon"><MessageSquare size={14} /></span><div className="channel-route-copy"><strong>{scope.title}</strong><small>{scope.chatType === 'p2p' ? '私聊' : '群聊'} · {scope.lastMessage || '暂无消息'} · {relativeTime(scope.updatedAt)}</small><small>{scope.cwd}</small></div><div className="channel-route-controls"><Badge tone="green">双向</Badge><button className="icon-button danger" title="重置会话" onClick={() => resetScope(scope)}><Trash2 size={13} /></button></div></div>) : <div className="channel-route-empty"><MessageSquare size={20} /><strong>{connection ? '等待飞书消息' : '尚未连接飞书机器人'}</strong><span>{connection ? '在飞书中私聊机器人，或在群里 @机器人。' : '扫码后会自动创建机器人并建立长连接。'}</span></div>}</Panel>
-      <Panel className="test-panel"><SectionTitle title="连接设置" />{connection ? <><div className={`channel-live-status ${connection.status}`}><span className="channel-status-dot" /><div><strong>{statusLabel}</strong><small>{connection.lastError || (connection.status === 'connected' ? `已连接 ${relativeTime(connection.connectedAt)}` : '正在等待 WebSocket 建连')}</small></div></div><div className="modal-toggle-row"><span><strong>启用飞书渠道</strong><small>关闭后断开长连接，但保留应用凭据</small></span><Toggle value={connection.enabled} disabled={saving} onChange={(enabled) => update({ enabled }, enabled ? '飞书渠道已启用' : '飞书渠道已暂停')} /></div><label className="field-label">访问范围<span className="select-wrap"><select value={connection.accessMode} disabled={saving} onChange={(event) => update({ accessMode: event.target.value }, '访问范围已更新')}><option value="owner" disabled={!connection.ownerConfigured}>仅扫码创建者</option><option value="tenant">当前租户所有成员</option></select><ChevronDown size={13} /></span></label><label className="field-label">新会话默认工作目录<span className="channel-setting-input"><FolderOpen size={13} /><input value={cwd} onChange={(event) => setCwd(event.target.value)} /><button className="button tiny" disabled={saving || cwd === connection.defaultCwd} onClick={() => update({ defaultCwd: cwd }, '默认工作目录已保存')}>保存</button></span></label><div className="permission-note"><ShieldCheck size={15} /><span><strong>本机安全边界</strong><small>默认仅允许扫码创建者使用。群聊必须 @机器人，所有 Agent 工具仍受插件权限与会话工作目录限制。</small></span></div><div className="button-row"><button className="button secondary" onClick={reconnect} disabled={saving}><RefreshCw size={14} />重连</button><button className="button danger" onClick={remove}><Unplug size={14} />解除连接</button></div></> : <><p>无需填写 App ID 或 Secret。使用飞书扫码确认后，SDK 会创建机器人应用、保存凭据并立即建立 WebSocket 长连接。</p><div className="test-summary"><CheckCircle2 size={14} />无需公网 IP、域名或回调地址</div><div className="test-summary"><CheckCircle2 size={14} />支持私聊、群聊 @、图片和文件</div><div className="test-summary"><CheckCircle2 size={14} />每个飞书聊天独立映射 Pi Coder 会话</div><button className="button primary wide" onClick={beginOnboarding}><Zap size={15} />扫码创建并连接</button></>}</Panel>
+      <Panel><div className="channel-section-head"><SectionTitle title="渠道会话" /><span>{data.scopes.length} 个已绑定</span></div>{data.scopes.length ? data.scopes.map((scope) => <div className="route-row" key={scope.key}><span className="route-icon">{scope.platform === 'feishu' ? <MessageSquare size={14} /> : <MessageCircle size={14} />}</span><div className="channel-route-copy"><strong>{scope.title} <Badge tone={scope.platform === 'feishu' ? 'blue' : 'green'}>{PROVIDERS[scope.platform].name}</Badge></strong><small>{scope.lastMessage || '暂无消息'} · {relativeTime(scope.updatedAt)}</small><small>{scope.model || '默认模型'} · {scope.cwd}</small></div><div className="channel-route-controls"><Badge tone="green">双向</Badge><button className="icon-button danger" title="重置会话" onClick={() => resetScope(scope)}><Trash2 size={13} /></button></div></div>) : <div className="channel-route-empty"><MessageSquare size={20} /><strong>等待渠道消息</strong><span>连接后，在飞书或微信中向机器人发送消息。</span></div>}</Panel>
+      <Panel className="test-panel"><div className="channel-section-head"><SectionTitle title={`${PROVIDERS[selectedPlatform].name}设置`} /><span>{PROVIDERS[selectedPlatform].transport}</span></div>{selectedConnection ? <><div className={`channel-live-status ${selectedConnection.status}`}><span className="channel-status-dot" /><div><strong>{statusLabel}</strong><small>{selectedConnection.lastError || (selectedConnection.status === 'connected' ? `已连接 ${relativeTime(selectedConnection.connectedAt)}` : '正在建立持续连接')}</small></div></div><div className="modal-toggle-row"><span><strong>启用此渠道</strong><small>关闭后断开连接，但保留登录凭据</small></span><Toggle value={selectedConnection.enabled} disabled={saving} onChange={(enabled) => update(selectedPlatform, { enabled }, enabled ? '渠道已启用' : '渠道已暂停')} /></div><label className="field-label">回复模型<span className="select-wrap"><select value={selectedConnection.replyModel ? `${selectedConnection.replyModel.provider}/${selectedConnection.replyModel.model}` : ''} onChange={(event) => { const [provider, ...parts] = event.target.value.split('/'); update(selectedPlatform, { replyModel: event.target.value ? { provider, model: parts.join('/') } : null }, '渠道回复模型已更新') }}><option value="">跟随应用默认模型</option>{data.models.map((model) => <option value={`${model.provider}/${model.model}`} key={`${model.provider}/${model.model}`}>{model.label}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">访问范围<span className="select-wrap"><select value={selectedConnection.accessMode} onChange={(event) => update(selectedPlatform, { accessMode: event.target.value }, '访问范围已更新')}><option value="owner" disabled={!selectedConnection.ownerConfigured}>仅扫码创建者</option><option value="all">{selectedPlatform === 'feishu' ? '当前租户所有成员' : '所有给机器人发消息的微信用户'}</option></select><ChevronDown size={13} /></span></label><label className="field-label">新会话默认工作目录<span className="channel-setting-input"><FolderOpen size={13} /><input value={cwd} onChange={(event) => setCwd(event.target.value)} /><button className="button tiny" disabled={saving || cwd === selectedConnection.defaultCwd} onClick={() => update(selectedPlatform, { defaultCwd: cwd }, '默认工作目录已保存')}>保存</button></span></label><div className="permission-note"><ShieldCheck size={15} /><span><strong>本机安全边界</strong><small>默认仅允许扫码创建者使用；Agent 工具仍受插件权限和会话工作目录限制。</small></span></div><div className="button-row"><button className="button secondary" onClick={() => reconnect(selectedPlatform)} disabled={saving}><RefreshCw size={14} />重连</button><button className="button danger" onClick={() => remove(selectedPlatform)}><Unplug size={14} />解除连接</button></div></> : <><p>扫码确认后会自动保存凭据并保持在线，收到消息后直接交给指定模型和 Pi Coder Agent。</p><div className="test-summary"><CheckCircle2 size={14} />真正双向收发，不使用通知 Webhook</div><div className="test-summary"><CheckCircle2 size={14} />每个联系人或聊天独立映射 Agent 会话</div><button className="button primary wide" onClick={() => beginOnboarding(selectedPlatform)}><Zap size={15} />扫码连接{PROVIDERS[selectedPlatform].name}</button></>}</Panel>
     </div>
-    {onboarding && <OnboardingModal job={onboarding} onClose={closeOnboarding} onRetry={beginOnboarding} />}
+
+    <NotificationTemplates data={data} setData={setData} notify={notify} />
+    {onboarding && <OnboardingModal job={onboarding} onClose={closeOnboarding} onRetry={() => beginOnboarding(onboarding.platform)} notify={notify} />}
   </div>
 }
 
-function OnboardingModal({ job, onClose, onRetry }) {
+function NotificationTemplates({ data, setData, notify }) {
+  const [eventId, setEventId] = useState(data.templates[0]?.id || '')
+  const [platform, setPlatform] = useState('feishu')
+  const selected = data.templates.find((item) => item.id === eventId) || data.templates[0]
+  const variant = selected?.channels?.[platform]
+  const [content, setContent] = useState(variant?.content || '')
+  const [targets, setTargets] = useState(variant?.targets || [])
+  const [saving, setSaving] = useState(false)
+  const availableTargets = useMemo(() => data.scopes.filter((scope) => scope.platform === platform), [data.scopes, platform])
+
+  useEffect(() => { setContent(variant?.content || ''); setTargets(variant?.targets || []) }, [eventId, platform, variant?.content, variant?.targets])
+  if (!selected) return null
+  const save = async () => {
+    setSaving(true)
+    try {
+      const result = await apiJson(`/api/channels/templates/${encodeURIComponent(selected.id)}/${platform}`, { method: 'PUT', body: JSON.stringify({ enabled: selected.enabled, content, targets }) })
+      setData(result); notify('通知模板已保存')
+    } catch (caught) { notify(caught.message) }
+    finally { setSaving(false) }
+  }
+  const test = async () => {
+    setSaving(true)
+    try { const result = await apiJson(`/api/channels/templates/${encodeURIComponent(selected.id)}/${platform}/test`, { method: 'POST', body: '{}' }); notify(`测试通知已发送到 ${result.sent} 个会话`) }
+    catch (caught) { notify(caught.message) }
+    finally { setSaving(false) }
+  }
+  const toggleTarget = (key) => setTargets((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key])
+
+  return <div className="two-one-grid channel-template-layout"><Panel><div className="channel-section-head"><SectionTitle title="通知模板" /><span>由定时任务、工作流等事件调用</span></div>{data.templates.map((template) => <button className={`channel-template-row ${template.id === selected.id ? 'selected' : ''}`} onClick={() => setEventId(template.id)} key={template.id}><span className="route-icon"><Send size={14} /></span><span><strong>{template.name}</strong><small>{template.description}</small></span><Badge tone={template.enabled ? 'green' : 'gray'}>{template.enabled ? '启用' : '停用'}</Badge></button>)}</Panel><Panel className="channel-template-editor"><div className="card-head"><div><h2>{selected.name}</h2><p>{selected.description}</p></div><Toggle value={selected.enabled} onChange={(enabled) => setData((current) => ({ ...current, templates: current.templates.map((item) => item.id === selected.id ? { ...item, enabled } : item) }))} /></div><div className="channel-template-platforms">{Object.entries(PROVIDERS).map(([id, provider]) => <button className={platform === id ? 'active' : ''} onClick={() => setPlatform(id)} key={id}>{provider.name}<Badge tone={data.connections?.[id] ? 'green' : 'gray'}>{data.connections?.[id] ? '已连接' : '未连接'}</Badge></button>)}</div><label className="field-label">消息内容<textarea value={content} onChange={(event) => setContent(event.target.value)} /></label><div className="channel-template-vars"><span>可用变量</span>{selected.variables.map((variable) => <code key={variable}>{`{{${variable}}}`}</code>)}</div><div className="channel-template-preview"><small>预览</small><pre>{renderPreview(content)}</pre></div><div className="channel-targets"><strong>接收会话</strong>{availableTargets.length ? availableTargets.map((scope) => <label key={scope.key}><input type="checkbox" checked={targets.includes(scope.key)} onChange={() => toggleTarget(scope.key)} /><span>{scope.title}</span></label>) : <p>该渠道还没有产生可接收通知的会话，请先向机器人发送一条消息。</p>}</div><div className="modal-actions"><button className="button secondary" disabled={saving || !targets.length} onClick={test}><Send size={14} />测试发送</button><button className="button primary" disabled={saving || !content.trim()} onClick={save}>{saving ? <RefreshCw className="spin" size={14} /> : <Save size={14} />}保存模板</button></div></Panel></div>
+}
+
+function OnboardingModal({ job, onClose, onRetry, notify }) {
+  const [code, setCode] = useState('')
   const terminal = ['completed', 'failed', 'cancelled'].includes(job.status)
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal feishu-onboard-modal"><div className="card-head"><div><h2>扫码创建飞书机器人</h2><p>由飞书官方授权页完成应用创建和权限确认。</p></div><button className="icon-button" onClick={onClose}><X size={17} /></button></div><div className={`feishu-qr-stage ${job.status}`}>{job.qrDataUrl ? <img src={job.qrDataUrl} alt="飞书机器人创建二维码" /> : job.status === 'failed' ? <AlertTriangle size={42} /> : <RefreshCw className="spin" size={32} />}<strong>{ONBOARD_STATUS[job.status] || '正在处理…'}</strong>{job.error && <p>{job.error}</p>}{job.expireAt && !terminal && <small>二维码将在 {expiresIn(job.expireAt)}过期</small>}</div>{job.qrUrl && !terminal && <a className="button secondary wide feishu-open-link" href={job.qrUrl} target="_blank" rel="noreferrer"><ExternalLink size={14} />无法扫码？在浏览器打开授权页</a>}<div className="permission-note"><ShieldCheck size={15} /><span><strong>仅申请双向对话所需权限</strong><small>发送机器人消息、接收私聊消息、接收群聊 @ 消息，以及消息事件订阅。</small></span></div><div className="modal-actions"><button className="button secondary" onClick={onClose}>{terminal ? '关闭' : '取消'}</button>{job.status === 'failed' && <button className="button primary" onClick={onRetry}><RefreshCw size={14} />重新生成二维码</button>}</div></section></div>
+  const provider = PROVIDERS[job.platform]
+  const submitCode = async () => {
+    try { await apiJson(`/api/channels/${job.platform}/onboarding/${encodeURIComponent(job.id)}/verify`, { method: 'POST', body: JSON.stringify({ code }) }); notify('配对码已提交') }
+    catch (caught) { notify(caught.message) }
+  }
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal feishu-onboard-modal"><div className="card-head"><div><h2>扫码连接{provider.name}</h2><p>{job.platform === 'feishu' ? '由飞书官方授权页创建机器人应用。' : '由腾讯 iLink Bot 完成个人微信登录。'}</p></div><button className="icon-button" onClick={onClose}><X size={17} /></button></div><div className={`feishu-qr-stage ${job.status}`}>{job.qrDataUrl ? <img src={job.qrDataUrl} alt={`${provider.name}连接二维码`} /> : job.status === 'failed' ? <AlertTriangle size={42} /> : <RefreshCw className="spin" size={32} />}<strong>{ONBOARD_STATUS[job.status] || '正在处理…'}</strong>{job.error && <p>{job.error}</p>}{job.expireAt && !terminal && <small>二维码将在 {expiresIn(job.expireAt)}过期</small>}</div>{job.needsVerifyCode && <div className="weixin-verify-code"><input value={code} onChange={(event) => setCode(event.target.value.replace(/\D/g, '').slice(0, 8))} placeholder="输入手机显示的数字" /><button className="button primary" disabled={!code} onClick={submitCode}>提交配对码</button></div>}{job.qrUrl && !terminal && <a className="button secondary wide feishu-open-link" href={job.qrUrl} target="_blank" rel="noreferrer"><ExternalLink size={14} />无法扫码？打开登录链接</a>}<div className="permission-note"><ShieldCheck size={15} /><span><strong>持续在线的双向连接</strong><small>{job.platform === 'feishu' ? 'WebSocket 接收私聊和群聊 @ 消息。' : '腾讯 iLink 持续拉取私聊消息，并支持文字与媒体回复。'}</small></span></div><div className="modal-actions"><button className="button secondary" onClick={onClose}>{terminal ? '关闭' : '取消'}</button>{job.status === 'failed' && <button className="button primary" onClick={onRetry}><RefreshCw size={14} />重新生成二维码</button>}</div></section></div>
 }

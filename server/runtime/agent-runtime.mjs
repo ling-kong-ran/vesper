@@ -859,13 +859,17 @@ export class AgentRuntimeService {
     return this.toolPlugins.getState()
   }
 
-  async promptFromChannel({ sessionId, message, attachments = [], cwd, title }) {
+  async promptFromChannel({ sessionId, message, attachments = [], cwd, title, model }) {
     let id = String(sessionId || '')
     if (id && !this.sessions.has(id) && !(await this.findSessionInfo(id))) id = ''
     if (!id) {
       const created = await this.createSession(title || '飞书会话')
       id = created.id
       if (cwd) await this.setSessionCwd(id, cwd)
+    }
+    if (model?.provider && model?.model) {
+      const active = await this.getOrCreateSession(id)
+      if (active.session.model?.provider !== model.provider || active.session.model?.id !== model.model) await this.setSessionModel(id, model.provider, model.model)
     }
     let actualId = id
     let text = ''
@@ -891,39 +895,63 @@ export class AgentRuntimeService {
       path: asset.filePath,
       mimeType: asset.mimeType,
     })).filter((asset) => asset.path)
-    return { sessionId: actualId, text: text.trim(), cwd: runtime?.cwd || this.sessionMeta[actualId]?.cwd || this.cwd, assets }
+    return { sessionId: actualId, text: text.trim(), cwd: runtime?.cwd || this.sessionMeta[actualId]?.cwd || this.cwd, model: runtime?.session.model ? `${runtime.session.model.provider}/${runtime.session.model.id}` : '', assets }
   }
 
-  getChannels() {
-    return this.channels.getState()
+  async getChannels() {
+    const state = this.channels.getState()
+    const config = await this.getConfig()
+    return {
+      ...state,
+      models: config.providers.filter((provider) => provider.enabled && provider.configured).flatMap((provider) => provider.models.filter((model) => model.kind === 'chat').map((model) => ({ provider: provider.id, model: model.id, label: `${provider.name} / ${model.name}` }))),
+    }
   }
 
-  startChannelOnboarding() {
-    return this.channels.startOnboarding()
+  startChannelOnboarding(platform) {
+    return this.channels.startOnboarding(platform)
   }
 
-  getChannelOnboarding(id) {
-    return this.channels.getOnboarding(id)
+  getChannelOnboarding(platform, id) {
+    return this.channels.getOnboarding(platform, id)
   }
 
-  cancelChannelOnboarding(id) {
-    return this.channels.cancelOnboarding(id)
+  cancelChannelOnboarding(platform, id) {
+    return this.channels.cancelOnboarding(platform, id)
   }
 
-  updateChannel(input) {
-    return this.channels.update(input)
+  verifyChannelOnboarding(platform, id, code) {
+    return this.channels.verifyOnboarding(platform, id, code)
   }
 
-  reconnectChannel() {
-    return this.channels.connect().then(() => this.channels.getState())
+  async updateChannel(platform, input) {
+    await this.channels.update(platform, input)
+    return this.getChannels()
   }
 
-  deleteChannel() {
-    return this.channels.remove()
+  async reconnectChannel(platform) {
+    await this.channels.connect(platform)
+    return this.getChannels()
   }
 
-  resetChannelScope(chatId) {
-    return this.channels.resetScope(chatId)
+  deleteChannel(platform) {
+    return this.channels.remove(platform)
+  }
+
+  resetChannelScope(key) {
+    return this.channels.resetScope(key)
+  }
+
+  async saveChannelTemplate(event, platform, input) {
+    await this.channels.updateTemplate(event, platform, input)
+    return this.getChannels()
+  }
+
+  testChannelTemplate(event, platform) {
+    return this.channels.testNotification(event, platform)
+  }
+
+  notifyChannels(event, data) {
+    return this.channels.notify(event, data)
   }
 
   async dispose() {

@@ -43,7 +43,7 @@ export class FeishuGateway {
     this.channel = channel
     channel.on({
       message: (message) => {
-        Promise.resolve(this.onMessage(message)).catch((error) => {
+        Promise.resolve(this.onMessage({ ...message, peerId: message.chatId })).catch((error) => {
           this.setStatus({ lastError: error instanceof Error ? error.message : String(error) })
         })
       },
@@ -70,12 +70,22 @@ export class FeishuGateway {
 
   async send(message, input) {
     if (!this.channel) throw new Error('飞书机器人尚未连接。')
-    return this.channel.send(message.chatId, input, { replyTo: message.messageId })
+    return this.channel.send(message.peerId, input, { replyTo: message.messageId })
   }
 
-  async sendToChat(chatId, input) {
+  async sendToPeer(peerId, input) {
     if (!this.channel) throw new Error('飞书机器人尚未连接。')
-    return this.channel.send(chatId, input)
+    return this.channel.send(peerId, input)
+  }
+
+  async sendAsset(peerId, asset) {
+    if (!this.channel) throw new Error('飞书机器人尚未连接。')
+    const input = asset.mimeType?.startsWith('image/')
+      ? { image: { source: asset.path } }
+      : asset.mimeType?.startsWith('video/')
+        ? { video: { source: asset.path } }
+        : { file: { source: asset.path, fileName: asset.name } }
+    return this.channel.send(peerId, input)
   }
 
   async downloadResources(resources = []) {

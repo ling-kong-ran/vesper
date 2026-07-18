@@ -2,37 +2,32 @@ import { extname } from 'node:path'
 import { readJson, writeJsonAtomic } from '../../storage/json-file.mjs'
 import { FeishuGateway } from './feishu-gateway.mjs'
 import { FeishuOnboardingService } from './feishu-onboarding.mjs'
+import { defaultTemplates, normalizeTemplates, NOTIFICATION_EVENTS, renderNotificationTemplate, sampleNotificationData, templateCatalog } from './notification-templates.mjs'
+import { WeixinGateway } from './weixin-gateway.mjs'
+import { WeixinOnboardingService } from './weixin-onboarding.mjs'
 
+const PLATFORMS = new Set(['feishu', 'weixin'])
 const TEXT_EXTENSIONS = new Set(['.txt', '.md', '.json', '.js', '.jsx', '.ts', '.tsx', '.css', '.html', '.xml', '.yaml', '.yml', '.csv', '.log', '.py', '.java', '.go', '.rs', '.sh', '.ps1', '.toml', '.sql'])
 const DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.odt', '.odp', '.ods', '.rtf', '.epub'])
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp'])
 
 function defaultState() {
-  return { version: 2, connection: null, scopes: {} }
+  return { version: 3, connections: { feishu: null, weixin: null }, scopes: {}, templates: defaultTemplates() }
 }
 
-function maskAppId(value) {
+function scopeKey(platform, peerId) {
+  return `${platform}:${peerId}`
+}
+
+function maskedId(value) {
   const id = String(value || '')
   return id.length > 10 ? `${id.slice(0, 7)}••••${id.slice(-4)}` : id
-}
-
-function publicScope(chatId, scope) {
-  return {
-    chatId,
-    chatType: scope.chatType || 'group',
-    sessionId: scope.sessionId || '',
-    title: scope.title || chatId,
-    senderName: scope.senderName || '',
-    cwd: scope.cwd || '',
-    lastMessage: scope.lastMessage || '',
-    updatedAt: scope.updatedAt || null,
-  }
 }
 
 function attachmentFromResource(resource) {
   const extension = extname(resource.name || '').toLowerCase()
   if (resource.type === 'image' || IMAGE_EXTENSIONS.has(extension)) {
-    const mimeType = extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : extension === '.webp' ? 'image/webp' : extension === '.gif' ? 'image/gif' : 'image/png'
+    const mimeType = resource.mimeType || (extension === '.jpg' || extension === '.jpeg' ? 'image/jpeg' : extension === '.webp' ? 'image/webp' : extension === '.gif' ? 'image/gif' : 'image/png')
     return { kind: 'image', name: resource.name, mimeType, size: resource.buffer.length, data: resource.buffer.toString('base64') }
   }
   if (TEXT_EXTENSIONS.has(extension)) return { kind: 'text', name: resource.name, size: resource.buffer.length, text: resource.buffer.toString('utf8') }
@@ -40,31 +35,69 @@ function attachmentFromResource(resource) {
   return null
 }
 
+function publicScope(key, scope) {
+  return {
+    key,
+    platform: scope.platform,
+    peerId: scope.peerId,
+    chatType: scope.chatType || 'p2p',
+    sessionId: scope.sessionId || '',
+    title: scope.title || scope.peerId,
+    cwd: scope.cwd || '',
+    model: scope.model || '',
+    lastMessage: scope.lastMessage || '',
+    updatedAt: scope.updatedAt || null,
+  }
+}
+
+function normalizeState(stored) {
+  if (stored?.version === 3) return {
+    version: 3,
+    connections: { feishu: stored.connections?.feishu || null, weixin: stored.connections?.weixin || null },
+    scopes: stored.scopes && typeof stored.scopes === 'object' ? stored.scopes : {},
+    templates: normalizeTemplates(stored.templates),
+  }
+  if (stored?.version === 2) {
+    const scopes = Object.fromEntries(Object.entries(stored.scopes || {}).map(([peerId, scope]) => [scopeKey('feishu', peerId), { ...scope, platform: 'feishu', peerId }]))
+    return { version: 3, connections: { feishu: stored.connection || null, weixin: null }, scopes, templates: defaultTemplates() }
+  }
+  return defaultState()
+}
+
 export class ChannelService {
-  constructor({ path, cwd, agent, gatewayFactory, onboardingFactory }) {
+  constructor({ path, cwd, agent, gatewayFactories = {}, onboardingFactories = {} }) {
     this.path = path
     this.cwd = cwd
     this.agent = agent
     this.state = defaultState()
     this.writeQueue = Promise.resolve()
     this.chatQueues = new Map()
-    this.gateway = gatewayFactory
-      ? gatewayFactory({ onMessage: (message) => this.enqueue(message) })
-      : new FeishuGateway({ onMessage: (message) => this.enqueue(message) })
-    this.onboarding = onboardingFactory
-      ? onboardingFactory({ onCompleted: (credentials) => this.completeOnboarding(credentials) })
-      : new FeishuOnboardingService({ onCompleted: (credentials) => this.completeOnboarding(credentials) })
+    this.gateways = {
+      feishu: gatewayFactories.feishu
+        ? gatewayFactories.feishu({ onMessage: (message) => this.enqueue('feishu', message) })
+        : new FeishuGateway({ onMessage: (message) => this.enqueue('feishu', message) }),
+      weixin: gatewayFactories.weixin
+        ? gatewayFactories.weixin({ onMessage: (message) => this.enqueue('weixin', message), onSyncBuf: (value) => this.updateWeixinSync(value) })
+        : new WeixinGateway({ onMessage: (message) => this.enqueue('weixin', message), onSyncBuf: (value) => this.updateWeixinSync(value) }),
+    }
+    this.onboardings = {
+      feishu: onboardingFactories.feishu
+        ? onboardingFactories.feishu({ onCompleted: (credentials) => this.completeOnboarding('feishu', credentials) })
+        : new FeishuOnboardingService({ onCompleted: (credentials) => this.completeOnboarding('feishu', credentials) }),
+      weixin: onboardingFactories.weixin
+        ? onboardingFactories.weixin({ onCompleted: (credentials) => this.completeOnboarding('weixin', credentials) })
+        : new WeixinOnboardingService({ onCompleted: (credentials) => this.completeOnboarding('weixin', credentials) }),
+    }
   }
 
   async init() {
     const stored = await readJson(this.path, defaultState())
-    if (stored?.version === 2) {
-      this.state = { version: 2, connection: stored.connection || null, scopes: stored.scopes && typeof stored.scopes === 'object' ? stored.scopes : {} }
-    } else {
-      this.state = defaultState()
-      await this.save()
+    this.state = normalizeState(stored)
+    if (stored?.version !== 3) await this.save()
+    for (const platform of PLATFORMS) {
+      const connection = this.state.connections[platform]
+      if (connection && connection.enabled !== false) void this.connect(platform).catch(() => {})
     }
-    if (this.state.connection?.enabled) void this.connect().catch(() => {})
   }
 
   save() {
@@ -73,138 +106,169 @@ export class ChannelService {
     return this.writeQueue
   }
 
-  getState() {
-    const connection = this.state.connection
-    const live = this.gateway.getStatus()
+  publicConnection(platform) {
+    const connection = this.state.connections[platform]
+    if (!connection) return null
+    const live = this.gateways[platform].getStatus()
+    const ownerId = platform === 'feishu' ? connection.ownerOpenId : connection.ownerUserId
     return {
-      providers: [{
-        type: 'feishu',
-        name: '飞书应用机器人',
-        description: '扫码创建应用，通过 WebSocket 长连接双向收发消息',
-        connected: live.state === 'connected',
-        status: live.state,
-      }],
-      connection: connection ? {
-        id: 'feishu',
-        type: 'feishu',
-        name: connection.name || live.bot?.name || 'Pi Coder Agent',
-        enabled: connection.enabled !== false,
-        appId: maskAppId(connection.appId),
-        domain: connection.domain || 'feishu',
-        accessMode: connection.accessMode || 'owner',
-        defaultCwd: connection.defaultCwd || this.cwd,
-        ownerConfigured: Boolean(connection.ownerOpenId),
-        bot: live.bot,
-        status: live.state,
-        lastError: live.lastError || '',
-        connectedAt: live.connectedAt,
-        reconnectAttempts: live.reconnectAttempts || 0,
-      } : null,
-      scopes: Object.entries(this.state.scopes).map(([chatId, scope]) => publicScope(chatId, scope)).sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0)),
+      id: platform,
+      type: platform,
+      name: connection.name || (platform === 'feishu' ? live.bot?.name || 'Pi Coder Agent' : '微信机器人'),
+      enabled: connection.enabled !== false,
+      accountId: maskedId(platform === 'feishu' ? connection.appId : connection.accountId),
+      accessMode: connection.accessMode || 'owner',
+      defaultCwd: connection.defaultCwd || this.cwd,
+      replyModel: connection.replyModel || null,
+      ownerConfigured: Boolean(ownerId),
+      bot: live.bot || null,
+      status: live.state,
+      lastError: live.lastError || '',
+      connectedAt: live.connectedAt || null,
+      lastEventAt: live.lastEventAt || null,
     }
   }
 
-  startOnboarding() {
-    return this.onboarding.start()
+  getState() {
+    return {
+      providers: [
+        { type: 'feishu', name: '飞书应用机器人', description: '官方扫码创建，WebSocket 长连接，支持私聊与群聊 @' },
+        { type: 'weixin', name: '微信', description: '腾讯 iLink Bot 扫码登录，支持个人微信私聊与媒体消息' },
+      ],
+      connections: { feishu: this.publicConnection('feishu'), weixin: this.publicConnection('weixin') },
+      scopes: Object.entries(this.state.scopes).map(([key, scope]) => publicScope(key, scope)).sort((a, b) => new Date(b.updatedAt || 0) - new Date(a.updatedAt || 0)),
+      templates: templateCatalog(this.state.templates),
+    }
   }
 
-  getOnboarding(id) {
-    return this.onboarding.get(id)
+  startOnboarding(platform) {
+    if (!PLATFORMS.has(platform)) throw new Error('不支持这个渠道。')
+    const options = platform === 'weixin' ? { localTokens: [this.state.connections.weixin?.token].filter(Boolean) } : undefined
+    return this.onboardings[platform].start(options)
   }
 
-  cancelOnboarding(id) {
-    return this.onboarding.cancel(id)
+  getOnboarding(platform, id) {
+    return this.onboardings[platform]?.get(id) || null
   }
 
-  async completeOnboarding(credentials) {
-    this.state.connection = {
-      name: 'Pi Coder Agent',
-      appId: credentials.appId,
-      appSecret: credentials.appSecret,
-      ownerOpenId: credentials.ownerOpenId || '',
-      domain: credentials.domain || 'feishu',
+  cancelOnboarding(platform, id) {
+    return this.onboardings[platform]?.cancel(id) || false
+  }
+
+  verifyOnboarding(platform, id, code) {
+    if (platform !== 'weixin') throw new Error('该渠道不需要配对码。')
+    return this.onboardings.weixin.verify(id, code)
+  }
+
+  async completeOnboarding(platform, credentials) {
+    const current = this.state.connections[platform]
+    const common = {
+      name: platform === 'feishu' ? 'Pi Coder Agent' : '微信机器人',
       accessMode: 'owner',
-      defaultCwd: this.cwd,
+      defaultCwd: current?.defaultCwd || this.cwd,
+      replyModel: current?.replyModel || null,
       enabled: true,
-      createdAt: new Date().toISOString(),
+      createdAt: current?.createdAt || new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     }
-    this.state.scopes = {}
+    this.state.connections[platform] = platform === 'feishu'
+      ? { ...common, appId: credentials.appId, appSecret: credentials.appSecret, ownerOpenId: credentials.ownerOpenId || '', domain: credentials.domain || 'feishu' }
+      : { ...common, accountId: credentials.accountId, token: credentials.token, ownerUserId: credentials.ownerUserId || '', baseUrl: credentials.baseUrl, cdnBaseUrl: credentials.cdnBaseUrl, syncBuf: '' }
+    for (const key of Object.keys(this.state.scopes)) if (this.state.scopes[key].platform === platform) delete this.state.scopes[key]
     await this.save()
-    const status = await this.connect()
-    if (status.bot?.name) {
-      this.state.connection.name = status.bot.name
-      await this.save()
+    const status = await this.connect(platform)
+    if (platform === 'feishu' && status.bot?.name) { this.state.connections.feishu.name = status.bot.name; await this.save() }
+    return this.getState()
+  }
+
+  async connect(platform) {
+    const connection = this.state.connections[platform]
+    if (!connection) throw new Error(`请先扫码连接${platform === 'feishu' ? '飞书' : '微信'}。`)
+    if (connection.enabled === false) return this.gateways[platform].getStatus()
+    return this.gateways[platform].connect(connection)
+  }
+
+  async update(platform, input) {
+    const connection = this.state.connections[platform]
+    if (!connection) throw new Error('渠道尚未连接。')
+    const enabledChanged = Object.hasOwn(input || {}, 'enabled')
+    if (Object.hasOwn(input || {}, 'enabled')) connection.enabled = Boolean(input.enabled)
+    if (Object.hasOwn(input || {}, 'accessMode')) connection.accessMode = input.accessMode === 'all' ? 'all' : 'owner'
+    if (Object.hasOwn(input || {}, 'defaultCwd')) connection.defaultCwd = await this.agent.validateDirectory(input.defaultCwd)
+    if (Object.hasOwn(input || {}, 'replyModel')) {
+      const provider = String(input.replyModel?.provider || '')
+      const model = String(input.replyModel?.model || '')
+      connection.replyModel = provider && model ? { provider, model } : null
+    }
+    connection.updatedAt = new Date().toISOString()
+    await this.save()
+    if (enabledChanged) {
+      if (connection.enabled) await this.connect(platform)
+      else await this.gateways[platform].disconnect()
     }
     return this.getState()
   }
 
-  async connect() {
-    const connection = this.state.connection
-    if (!connection?.appId || !connection?.appSecret) throw new Error('请先扫码创建飞书机器人。')
-    if (connection.enabled === false) return this.gateway.getStatus()
-    return this.gateway.connect(connection)
-  }
-
-  async update(input) {
-    if (!this.state.connection) throw new Error('飞书机器人尚未创建。')
-    if (Object.hasOwn(input || {}, 'enabled')) this.state.connection.enabled = Boolean(input.enabled)
-    if (Object.hasOwn(input || {}, 'accessMode')) this.state.connection.accessMode = input.accessMode === 'tenant' ? 'tenant' : 'owner'
-    if (Object.hasOwn(input || {}, 'defaultCwd')) this.state.connection.defaultCwd = await this.agent.validateDirectory(input.defaultCwd)
-    this.state.connection.updatedAt = new Date().toISOString()
-    await this.save()
-    if (this.state.connection.enabled) await this.connect()
-    else await this.gateway.disconnect()
-    return this.getState()
-  }
-
-  async remove() {
-    await this.gateway.disconnect()
-    this.state = defaultState()
+  async remove(platform) {
+    await this.gateways[platform].disconnect()
+    this.state.connections[platform] = null
+    for (const key of Object.keys(this.state.scopes)) if (this.state.scopes[key].platform === platform) delete this.state.scopes[key]
+    for (const template of Object.values(this.state.templates)) template.channels[platform].targets = []
     await this.save()
     return true
   }
 
-  async resetScope(chatId) {
-    if (!this.state.scopes[chatId]) return false
-    delete this.state.scopes[chatId]
+  async resetScope(key) {
+    if (!this.state.scopes[key]) return false
+    delete this.state.scopes[key]
+    for (const template of Object.values(this.state.templates)) {
+      for (const platform of PLATFORMS) template.channels[platform].targets = template.channels[platform].targets.filter((target) => target !== key)
+    }
     await this.save()
     return true
   }
 
-  enqueue(message) {
-    const previous = this.chatQueues.get(message.chatId) || Promise.resolve()
-    const next = previous.catch(() => {}).then(() => this.handleMessage(message))
-    this.chatQueues.set(message.chatId, next)
-    next.finally(() => { if (this.chatQueues.get(message.chatId) === next) this.chatQueues.delete(message.chatId) }).catch(() => {})
+  updateWeixinSync(value) {
+    if (!this.state.connections.weixin || this.state.connections.weixin.syncBuf === value) return
+    this.state.connections.weixin.syncBuf = value
+    void this.save()
   }
 
-  async handleMessage(message) {
-    const connection = this.state.connection
+  enqueue(platform, message) {
+    const key = scopeKey(platform, message.peerId)
+    const previous = this.chatQueues.get(key) || Promise.resolve()
+    const next = previous.catch(() => {}).then(() => this.handleMessage(platform, message))
+    this.chatQueues.set(key, next)
+    next.finally(() => { if (this.chatQueues.get(key) === next) this.chatQueues.delete(key) }).catch(() => {})
+  }
+
+  async handleMessage(platform, message) {
+    const connection = this.state.connections[platform]
     if (!connection?.enabled) return
-    if (connection.accessMode !== 'tenant' && (!connection.ownerOpenId || message.senderId !== connection.ownerOpenId)) {
-      await this.gateway.send(message, { text: connection.ownerOpenId ? '当前机器人仅允许扫码创建者使用。' : '未获取到创建者身份，请在渠道页重新扫码绑定或切换访问范围。' })
+    const ownerId = platform === 'feishu' ? connection.ownerOpenId : connection.ownerUserId
+    if (connection.accessMode !== 'all' && (!ownerId || message.senderId !== ownerId)) {
+      await this.gateways[platform].send(message, { text: ownerId ? '当前机器人仅允许扫码创建者使用。' : '未获取到创建者身份，请重新扫码或调整访问范围。' })
       return
     }
+    const key = scopeKey(platform, message.peerId)
+    const scope = this.state.scopes[key] || {}
     const command = message.content.trim().toLowerCase()
     if (command === '/new' || command === '/reset') {
-      await this.resetScope(message.chatId)
-      await this.gateway.send(message, { text: '已开始新的 Pi Coder 会话。' })
+      await this.resetScope(key)
+      await this.gateways[platform].send(message, { text: '已开始新的 Pi Coder 会话。' })
       return
     }
-    const scope = this.state.scopes[message.chatId] || {}
     if (command === '/status') {
-      await this.gateway.send(message, { text: scope.sessionId ? `会话：${scope.sessionId}\n工作目录：${scope.cwd || connection.defaultCwd}` : '当前聊天还没有绑定 Pi Coder 会话。' })
+      await this.gateways[platform].send(message, { text: scope.sessionId ? `会话：${scope.sessionId}\n模型：${scope.model || '默认'}\n工作目录：${scope.cwd || connection.defaultCwd}` : '当前聊天还没有绑定 Pi Coder 会话。' })
       return
     }
     if (command === '/stop') {
       const stopped = scope.sessionId ? await this.agent.abort(scope.sessionId) : false
-      await this.gateway.send(message, { text: stopped ? '已停止当前任务。' : '当前没有运行中的任务。' })
+      await this.gateways[platform].send(message, { text: stopped ? '已停止当前任务。' : '当前没有运行中的任务。' })
       return
     }
-
     try {
-      const resources = await this.gateway.downloadResources(message.resources)
+      const resources = await this.gateways[platform].downloadResources(message.resources)
       const attachments = resources.map(attachmentFromResource).filter(Boolean)
       const prompt = message.content.trim() || (attachments.length ? '请分析这些附件。' : '')
       if (!prompt) return
@@ -213,35 +277,80 @@ export class ChannelService {
         message: prompt,
         attachments,
         cwd: scope.cwd || connection.defaultCwd || this.cwd,
-        title: `飞书 · ${message.senderName || (message.chatType === 'p2p' ? '私聊' : '群聊')}`,
+        title: `${platform === 'feishu' ? '飞书' : '微信'} · ${message.senderName || (message.chatType === 'p2p' ? '私聊' : '群聊')}`,
+        model: connection.replyModel,
       })
-      this.state.scopes[message.chatId] = {
+      this.state.scopes[key] = {
         ...scope,
+        platform,
+        peerId: message.peerId,
         sessionId: result.sessionId,
         chatType: message.chatType,
-        senderName: message.senderName || '',
-        title: message.senderName || (message.chatType === 'p2p' ? '飞书私聊' : '飞书群聊'),
-        cwd: result.cwd || scope.cwd || connection.defaultCwd || this.cwd,
+        title: message.senderName || `${platform === 'feishu' ? '飞书' : '微信'}${message.chatType === 'p2p' ? '私聊' : '群聊'}`,
+        cwd: result.cwd || connection.defaultCwd || this.cwd,
+        model: result.model || (connection.replyModel ? `${connection.replyModel.provider}/${connection.replyModel.model}` : ''),
+        contextToken: message.contextToken || scope.contextToken || '',
         lastMessage: prompt.slice(0, 120),
         updatedAt: new Date().toISOString(),
       }
       await this.save()
-      await this.gateway.send(message, { markdown: result.text || '任务已完成。' })
-      for (const asset of result.assets || []) {
-        const input = asset.mimeType?.startsWith('image/')
-          ? { image: { source: asset.path } }
-          : asset.mimeType?.startsWith('video/')
-            ? { video: { source: asset.path } }
-            : { file: { source: asset.path, fileName: asset.name } }
-        await this.gateway.sendToChat(message.chatId, input)
-      }
+      await this.gateways[platform].send(message, { markdown: result.text || '任务已完成。' })
+      for (const asset of result.assets || []) await this.gateways[platform].sendAsset(message.peerId, asset, this.state.scopes[key])
     } catch (error) {
-      await this.gateway.send(message, { text: `执行失败：${error instanceof Error ? error.message : String(error)}` }).catch(() => {})
+      await this.gateways[platform].send(message, { text: `执行失败：${error instanceof Error ? error.message : String(error)}` }).catch(() => {})
     }
   }
 
+  async updateTemplate(event, platform, input) {
+    if (!NOTIFICATION_EVENTS[event] || !PLATFORMS.has(platform)) throw new Error('通知模板类型不存在。')
+    const template = this.state.templates[event]
+    if (Object.hasOwn(input || {}, 'enabled')) template.enabled = Boolean(input.enabled)
+    if (Object.hasOwn(input || {}, 'content')) {
+      const content = String(input.content || '').trim()
+      if (!content) throw new Error('通知模板不能为空。')
+      template.channels[platform].content = content.slice(0, 12_000)
+    }
+    if (Object.hasOwn(input || {}, 'targets')) {
+      template.channels[platform].targets = [...new Set((Array.isArray(input.targets) ? input.targets : []).map(String).filter((key) => this.state.scopes[key]?.platform === platform))]
+    }
+    await this.save()
+    return this.getState()
+  }
+
+  async notify(event, data) {
+    const template = this.state.templates[event]
+    if (!template?.enabled) return []
+    const results = []
+    for (const platform of PLATFORMS) {
+      const connection = this.state.connections[platform]
+      if (!connection?.enabled) continue
+      const variant = template.channels[platform]
+      const content = renderNotificationTemplate(variant.content, data)
+      for (const key of variant.targets) {
+        const scope = this.state.scopes[key]
+        if (!scope || scope.platform !== platform) continue
+        results.push(this.gateways[platform].sendToPeer(scope.peerId, platform === 'feishu' ? { markdown: content } : { text: content }, scope))
+      }
+    }
+    return Promise.allSettled(results)
+  }
+
+  async testNotification(event, platform) {
+    const variant = this.state.templates[event]?.channels?.[platform]
+    if (!variant) throw new Error('通知模板不存在。')
+    if (!variant.targets.length) throw new Error('请先为模板选择至少一个接收会话。')
+    const content = renderNotificationTemplate(variant.content, sampleNotificationData())
+    const sends = variant.targets.map((key) => {
+      const scope = this.state.scopes[key]
+      if (!scope) return Promise.resolve()
+      return this.gateways[platform].sendToPeer(scope.peerId, platform === 'feishu' ? { markdown: content } : { text: content }, scope)
+    })
+    await Promise.all(sends)
+    return { sent: sends.length, preview: content }
+  }
+
   async dispose() {
-    this.onboarding.dispose()
-    await this.gateway.disconnect()
+    for (const onboarding of Object.values(this.onboardings)) onboarding.dispose()
+    await Promise.all(Object.values(this.gateways).map((gateway) => gateway.disconnect()))
   }
 }

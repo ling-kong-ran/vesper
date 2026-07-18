@@ -25,42 +25,62 @@ export function createApiHandler(runtime) {
         return true
       }
       if (req.method === 'GET' && url.pathname === '/api/channels') {
-        json(res, 200, runtime.getChannels())
+        json(res, 200, await runtime.getChannels())
         return true
       }
-      if (req.method === 'POST' && url.pathname === '/api/channels/feishu/onboarding') {
-        json(res, 201, await runtime.startChannelOnboarding())
+      const onboardingStartMatch = url.pathname.match(/^\/api\/channels\/(feishu|weixin)\/onboarding$/)
+      if (req.method === 'POST' && onboardingStartMatch) {
+        json(res, 201, await runtime.startChannelOnboarding(onboardingStartMatch[1]))
         return true
       }
-      const onboardingMatch = url.pathname.match(/^\/api\/channels\/feishu\/onboarding\/([^/]+)$/)
+      const onboardingMatch = url.pathname.match(/^\/api\/channels\/(feishu|weixin)\/onboarding\/([^/]+)$/)
       if (req.method === 'GET' && onboardingMatch) {
-        const result = runtime.getChannelOnboarding(decodeURIComponent(onboardingMatch[1]))
+        const result = runtime.getChannelOnboarding(onboardingMatch[1], decodeURIComponent(onboardingMatch[2]))
         if (!result) json(res, 404, { error: '扫码任务不存在或已过期。' })
         else json(res, 200, result)
         return true
       }
       if (req.method === 'DELETE' && onboardingMatch) {
-        json(res, 200, { cancelled: runtime.cancelChannelOnboarding(decodeURIComponent(onboardingMatch[1])) })
+        json(res, 200, { cancelled: runtime.cancelChannelOnboarding(onboardingMatch[1], decodeURIComponent(onboardingMatch[2])) })
         return true
       }
-      if (req.method === 'PATCH' && url.pathname === '/api/channels/feishu') {
-        json(res, 200, await runtime.updateChannel(await bodyJson(req)))
+      const onboardingVerifyMatch = url.pathname.match(/^\/api\/channels\/(feishu|weixin)\/onboarding\/([^/]+)\/verify$/)
+      if (req.method === 'POST' && onboardingVerifyMatch) {
+        const result = runtime.verifyChannelOnboarding(onboardingVerifyMatch[1], decodeURIComponent(onboardingVerifyMatch[2]), (await bodyJson(req)).code)
+        if (!result) json(res, 404, { error: '扫码任务不存在或已过期。' })
+        else json(res, 200, result)
         return true
       }
-      if (req.method === 'POST' && url.pathname === '/api/channels/feishu/reconnect') {
-        json(res, 200, await runtime.reconnectChannel())
+      const reconnectMatch = url.pathname.match(/^\/api\/channels\/(feishu|weixin)\/reconnect$/)
+      if (req.method === 'POST' && reconnectMatch) {
+        json(res, 200, await runtime.reconnectChannel(reconnectMatch[1]))
         return true
       }
-      if (req.method === 'DELETE' && url.pathname === '/api/channels/feishu') {
-        await runtime.deleteChannel()
+      const channelMatch = url.pathname.match(/^\/api\/channels\/(feishu|weixin)$/)
+      if (req.method === 'PATCH' && channelMatch) {
+        json(res, 200, await runtime.updateChannel(channelMatch[1], await bodyJson(req)))
+        return true
+      }
+      if (req.method === 'DELETE' && channelMatch) {
+        await runtime.deleteChannel(channelMatch[1])
         json(res, 200, { deleted: true })
         return true
       }
-      const channelScopeMatch = url.pathname.match(/^\/api\/channels\/feishu\/scopes\/([^/]+)$/)
+      const channelScopeMatch = url.pathname.match(/^\/api\/channels\/scopes\/([^/]+)$/)
       if (req.method === 'DELETE' && channelScopeMatch) {
         const deleted = await runtime.resetChannelScope(decodeURIComponent(channelScopeMatch[1]))
-        if (!deleted) json(res, 404, { error: '飞书会话不存在。' })
+        if (!deleted) json(res, 404, { error: '渠道会话不存在。' })
         else json(res, 200, { deleted: true })
+        return true
+      }
+      const templateTestMatch = url.pathname.match(/^\/api\/channels\/templates\/([^/]+)\/(feishu|weixin)\/test$/)
+      if (req.method === 'POST' && templateTestMatch) {
+        json(res, 200, await runtime.testChannelTemplate(decodeURIComponent(templateTestMatch[1]), templateTestMatch[2]))
+        return true
+      }
+      const templateMatch = url.pathname.match(/^\/api\/channels\/templates\/([^/]+)\/(feishu|weixin)$/)
+      if (req.method === 'PUT' && templateMatch) {
+        json(res, 200, await runtime.saveChannelTemplate(decodeURIComponent(templateMatch[1]), templateMatch[2], await bodyJson(req)))
         return true
       }
       if (req.method === 'POST' && url.pathname === '/api/assets') {
