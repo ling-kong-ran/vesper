@@ -5,11 +5,13 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   Download,
   File,
   FolderOpen,
   Grid2X2,
+  History,
   Link2,
   Menu,
   Monitor,
@@ -430,8 +432,13 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   const [availableModels, setAvailableModels] = useState([])
   const [workspaceSession, setWorkspaceSession] = useState(null)
   const [tiledSessionIds, setTiledSessionIds] = useState(() => readStoredArray(STORAGE_KEYS.tiledSessions))
+  const [historyOpen, setHistoryOpen] = useState(() => localStorage.getItem(STORAGE_KEYS.chatHistory) === '1')
   const tiledStorageWasEmpty = useRef(localStorage.getItem(STORAGE_KEYS.tiledSessions) === null)
   const sessionStatesRef = useRef(sessionStates)
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEYS.chatHistory, historyOpen ? '1' : '0')
+  }, [historyOpen])
 
   useEffect(() => {
     sessionStatesRef.current = sessionStates
@@ -799,11 +806,15 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
 
   return (
     <>
-    <div className={`chat-layout mode-${mode}`}>
+    <div className={`chat-layout mode-${mode} ${historyOpen ? '' : 'history-closed'}`}>
+      {historyOpen ? (
       <Panel className="history-panel">
-        <div className="history-head"><SectionTitle title="历史对话" /><span>{tiledSessionIds.length} 个平铺</span></div>
+        <div className="history-head"><SectionTitle title="历史对话" /><span>{tiledSessionIds.length} 个平铺</span><button className="history-collapse" title="收起历史对话" aria-label="收起历史对话" onClick={() => setHistoryOpen(false)}><ChevronLeft size={14} /></button></div>
         {remoteSessions.map((session) => <div className={`history-row ${activeId === session.id ? 'active' : ''}`} key={session.id}><button className="history-item" onClick={() => { setActiveId(session.id); setMode('focus') }}><strong title={session.name}>{session.name}</strong><span>{relativeTime(session.modified)} · {session.messageCount} messages</span></button><div className="history-actions"><button className={tiledSessionIds.includes(session.id) ? 'is-tiled' : ''} title={tiledSessionIds.includes(session.id) ? '移出平铺' : '加入平铺'} aria-label={tiledSessionIds.includes(session.id) ? '移出平铺' : '加入平铺'} onClick={() => toggleTiledSession(session.id)}>{tiledSessionIds.includes(session.id) ? <Check size={12} /> : <Grid2X2 size={12} />}</button><button title="重命名会话" aria-label="重命名会话" onClick={() => renameSession(session)}><Pencil size={12} /></button><button className="delete" title="删除会话" aria-label="删除会话" onClick={() => deleteSession(session)}><Trash2 size={12} /></button></div></div>)}
       </Panel>
+      ) : (
+      <button className="history-rail" title="展开历史对话" aria-label="展开历史对话" onClick={() => setHistoryOpen(true)}><History size={15} /><span>历史对话</span><em>{remoteSessions.length}</em></button>
+      )}
       {loading ? <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在启动 Agent</h2><p>加载模型目录与历史会话…</p></Panel> : mode === 'grid' ? (
         <div className="session-grid">
           {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} permissionMode={sessionStates[session.id]?.permissionMode || session.permissionMode || 'auto'} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(session.id, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(session.id, approvalId, approved)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
