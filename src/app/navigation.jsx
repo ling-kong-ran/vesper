@@ -1,17 +1,25 @@
 import { Brain, CalendarClock, FolderOpen, MessageSquare, Plug, RadioTower, Server, Settings, Sparkles, Workflow } from 'lucide-react'
 
-export const NAV_ITEMS = [
-  ['chat', '对话', MessageSquare],
-  ['assets', '资产', FolderOpen],
-  ['channels', '渠道', RadioTower],
-  ['schedules', '定时任务', CalendarClock],
-  ['config', '配置', Settings],
-  ['plugins', '插件', Plug],
-  ['memory', '记忆', Brain],
-  ['mcp', 'MCP', Server],
-  ['skills', '技能', Sparkles],
-  ['workflows', '工作流', Workflow],
+export const NAV_GROUPS = [
+  ['工作区', [
+    ['chat', '对话', MessageSquare],
+    ['assets', '资产', FolderOpen],
+    ['channels', '渠道', RadioTower],
+    ['schedules', '定时任务', CalendarClock],
+  ]],
+  ['能力', [
+    ['plugins', '插件', Plug],
+    ['memory', '记忆', Brain],
+    ['mcp', 'MCP', Server],
+    ['skills', '技能', Sparkles],
+    ['workflows', '工作流', Workflow],
+  ]],
+  ['系统', [
+    ['config', '配置', Settings],
+  ]],
 ]
+
+export const NAV_ITEMS = NAV_GROUPS.flatMap(([, items]) => items)
 
 export const PAGE_META = {
   chat: ['对话', '多 session 并行工作台'],

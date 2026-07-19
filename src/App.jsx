@@ -33,7 +33,7 @@ import {
 } from 'lucide-react'
 import { APP_NAME } from './app/brand.js'
 import { STORAGE_KEYS } from './app/storage.js'
-import { NAV_ITEMS, PAGE_META } from './app/navigation.jsx'
+import { NAV_GROUPS, PAGE_META } from './app/navigation.jsx'
 import { BrandLogo } from './components/BrandLogo.jsx'
 import { AppDialog, InputLabel, Panel, SectionTitle, Segmented, SelectLabel, Toast } from './components/ui.jsx'
 import { useAttachmentSelection } from './features/chat/attachments.js'
@@ -317,7 +317,7 @@ function App() {
             theme={theme}
             onCycleTheme={cycleTheme}
           />
-          <div className={`page-content page-${page}`}>
+          <div className={`page-content page-${page}`} key={page}>
             {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} registerPrimaryAction={registerPrimaryAction} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />}
             {page === 'assets' && <Suspense fallback={<PageLoader />}><AssetsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} /></Suspense>}
             {page === 'channels' && <Suspense fallback={<PageLoader />}><ChannelsPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>}
@@ -370,10 +370,15 @@ function Sidebar({ page, navigate, open, onClose, pluginStats }) {
       <aside className={`sidebar ${open ? 'is-open' : ''}`}>
         <div className="brand"><BrandLogo size={22} /><strong>{APP_NAME}</strong><button className="mobile-close" onClick={onClose}><X size={18} /></button></div>
         <nav className="nav-list" aria-label="主导航">
-          {NAV_ITEMS.map(([id, label, Icon]) => (
-            <button key={id} className={active === id ? 'active' : ''} onClick={() => navigate(id)}>
-              <Icon size={16} /><span>{label}</span>
-            </button>
+          {NAV_GROUPS.map(([group, items]) => (
+            <div className="nav-group" key={group}>
+              <span className="nav-group-label">{group}</span>
+              {items.map(([id, label, Icon]) => (
+                <button key={id} className={active === id ? 'active' : ''} onClick={() => navigate(id)}>
+                  <Icon size={16} /><span>{label}</span>
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
         <div className="sidebar-status">
@@ -830,7 +835,7 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
     <Panel className="session-card">
       <div className="card-head"><button className="session-title-button" onClick={onOpen}><h3 title={session.name}>{session.name}</h3><span className={streaming ? 'success' : ''}>{streaming ? 'Agent 运行中' : `${session.messageCount || messages.length} 条消息`} · {relativeTime(session.modified)}</span><small className="workspace-summary" title={state?.cwd || session.cwd}><FolderOpen size={10} />{workspaceName(state?.cwd || session.cwd)}</small></button><div className="card-head-actions"><button className="icon-button" title="设置工作目录" onClick={onWorkspace} disabled={streaming || state?.switchingCwd}><FolderOpen size={14} /></button><button className="icon-button" title="重命名会话" onClick={onRename}><Pencil size={14} /></button>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={11} />停止</button> : <button className="icon-button" onClick={onOpen}><MoreHorizontal size={17} /></button>}</div></div>
       <div className="session-live-body" ref={liveRef} onScroll={onLiveScroll}>
-        {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />加载消息…</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />开始一个新的编码任务</button> : messages.map((message) => <div className={`mini-message ${message.role}`} key={message.id}><span>{message.role === 'agent' ? 'Agent' : 'You'}</span><div className="mini-message-content"><MarkdownMessage>{message.text || (message.streaming ? '正在思考…' : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} compact />}</div></div>)}
+        {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />加载消息…</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />开始一个新的编码任务</button> : messages.map((message) => <div className={`mini-message ${message.role}`} key={message.id}><span>{message.role === 'agent' ? 'Vesper' : 'You'}</span><div className="mini-message-content"><MarkdownMessage>{message.text || (message.streaming ? '正在思考…' : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} compact />}</div></div>)}
         {tools.some((tool) => tool.status === 'running') && <div className="mini-tool-status"><Wrench size={11} />{tools.filter((tool) => tool.status === 'running').map((tool) => tool.name).join('、')} 运行中</div>}
         {state?.error && <div className="mini-session-error"><AlertTriangle size={11} />{state.error}</div>}
       </div>
@@ -856,6 +861,13 @@ function SessionModelSelect({ value, models, onChange, disabled, compact = false
     </label>
   )
 }
+
+const WELCOME_CHIPS = [
+  { label: '解释代码', prompt: '解释这段代码的工作原理：' },
+  { label: '写单测', prompt: '为以下代码编写单元测试：' },
+  { label: '重构', prompt: '重构这段代码并说明改进点：' },
+  { label: '查 bug', prompt: '帮我定位并修复这个 bug：' },
+]
 
 const PERMISSION_OPTIONS = [
   ['ask', '询问', '敏感工具执行前需要确认'],
@@ -980,6 +992,16 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
     addSelectedAttachments([pendingAsset])
     onAssetConsumed?.()
   }, [pendingAsset, onAssetConsumed, addSelectedAttachments])
+  const applyWelcomeChip = (prompt) => {
+    setValue(prompt)
+    requestAnimationFrame(() => {
+      const el = promptRef.current
+      if (!el) return
+      el.focus()
+      el.style.height = 'auto'
+      el.style.height = `${Math.min(el.scrollHeight, 220)}px`
+    })
+  }
   const submit = (event) => {
     event.preventDefault()
     if (!value.trim() && !selection.attachments.length) return
@@ -994,8 +1016,8 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
       <div className="card-head"><div><div className="editable-session-title"><h3 title={session?.name}>{session?.name || '新会话'}</h3><button className="icon-button" title="重命名会话" onClick={onRename}><Pencil size={13} /></button></div><div className="session-runtime-meta"><span className={streaming ? 'success' : ''}>{streaming ? 'Agent 运行中' : '等待输入'}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd)}</button></div></div>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={12} />停止</button> : <MoreHorizontal size={17} />}</div>
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
         {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />重试加载更早消息</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />正在加载更早消息…</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />加载更早消息</button>}</div>}
-        {!messages.length && <div className="agent-welcome"><Bot size={22} /><h2>准备好开始编码</h2><p>Agent 可以读取当前工作区、搜索代码并持续处理任务。默认使用只读工具权限。</p></div>}
-        {messages.map((message) => <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? 'Agent' : 'You'}</span><div className="message-content"><MarkdownMessage>{message.text || (message.streaming ? '正在思考…' : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}{message.streaming && <i className="typing-dot" />}</div></div>)}
+        {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>准备好开始编码</h2><p>Agent 可以读取当前工作区、搜索代码并持续处理任务。默认使用只读工具权限。</p><div className="welcome-chips">{WELCOME_CHIPS.map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
+        {messages.map((message) => <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? 'Vesper' : 'You'}</span><div className="message-content"><MarkdownMessage>{message.text || (message.streaming ? '正在思考…' : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}{message.streaming && <i className="typing-dot" />}</div></div>)}
         {tools.length > 0 && <div className="tool-trace"><strong>工具执行</strong>{tools.map((tool) => <span key={tool.id} className={tool.status}><Wrench size={12} />{tool.name}<em>{tool.status === 'running' ? '运行中' : tool.status === 'done' ? '完成' : '失败'}</em></span>)}</div>}
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
