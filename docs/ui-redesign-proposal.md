@@ -1,8 +1,13 @@
 # Vesper UI 品牌重塑与整体优化方案
 
-> 状态：**待终审** · 确认后按 P1→P5 阶段执行，每阶段独立可回滚
+> 状态：**已执行** · P1–P5 全部落地，五阶段独立 commit（30efe9c → 8de0297），可逐阶段回滚
 > 概念图：`generated/visuals/2026-07-19T02-32-33-vesper-ui-concept-duotone.png`
 > Logo 定稿：`docs/brand/vesper-logo.svg`
+>
+> 执行偏差说明：
+> - §4 可选的 Space Grotesk 自托管未引入（方案允许纯系统栈）
+> - §7 skeleton shimmer 标注「按需」，本次未新增
+> - 执行中补充 `--star-strong`（`#B45309` / 暗色 `#FCD34D`）用于软底色上的小字与图标，保证对比度
 
 ---
 
