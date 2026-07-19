@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createPrimaryActionRegistry } from '../../src/app/primary-action.js'
-import { mergeSessionLists } from '../../src/features/chat/session-list.js'
+import { mergeSessionLists, removeTiledSession } from '../../src/features/chat/session-list.js'
 
 test('primary action remains callable until its page registration is disposed', () => {
   const registry = createPrimaryActionRegistry()
@@ -42,4 +42,8 @@ test('stale initial session lists preserve an optimistically created session', (
   const stale = [{ id: 'existing-session', name: '旧会话' }]
 
   assert.deepEqual(mergeSessionLists([optimistic], stale), [stale[0], optimistic])
+})
+
+test('removing a tiled session keeps the session itself available elsewhere', () => {
+  assert.deepEqual(removeTiledSession(['first', 'second', 'third'], 'second'), ['first', 'third'])
 })
