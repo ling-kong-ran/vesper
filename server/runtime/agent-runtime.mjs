@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, open, readFile, readdir, stat, unlink, writeFile } from 'node:fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, join, resolve, sep } from 'node:path'
 import { OfficeParser } from 'officeparser'
@@ -44,6 +44,9 @@ const MAX_ASSET_BYTES = 24 * 1024 * 1024
 const MAX_CHAT_ASSET_BYTES = 10 * 1024 * 1024
 const DEFAULT_SESSION_NAME = '新会话'
 const MAX_SESSION_TITLE_CHARS = 20
+const DEFAULT_MESSAGE_PAGE_SIZE = 40
+const MAX_MESSAGE_PAGE_SIZE = 100
+const LIVE_MESSAGE_PAGE_SIZE = 60
 const ASSET_TEXT_EXTENSIONS = new Set(['.txt', '.md', '.json', '.js', '.jsx', '.ts', '.tsx', '.css', '.html', '.xml', '.yaml', '.yml', '.csv', '.log', '.py', '.java', '.go', '.rs', '.sh', '.ps1', '.toml', '.sql'])
 const ASSET_DOCUMENT_EXTENSIONS = new Set(['.pdf', '.docx', '.pptx', '.xlsx', '.odt', '.odp', '.ods', '.rtf', '.epub'])
 const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp', '.svg'])
@@ -247,6 +250,8 @@ export class AgentRuntimeService {
     })
     this.sessions = new Map()
     this.liveSessions = new Map()
+    this.sessionHistoryCache = new Map()
+    this.sessionHistoryPaths = new Map()
     this.modelRuntime = null
     this.settingsManager = null
     this.sessionMeta = {}
@@ -611,10 +616,97 @@ export class AgentRuntimeService {
     return attachGeneratedAssets(messages, assets)
   }
 
+  async readSessionHistoryEntries(path) {
+    const file = await stat(path)
+    let cached = this.sessionHistoryCache.get(path)
+    if (!cached || file.size < cached.size || (file.size === cached.size && file.mtimeMs !== cached.mtimeMs)) {
+      cached = { size: 0, mtimeMs: 0, remainder: Buffer.alloc(0), entries: [], byId: new Map(), touchedAt: Date.now() }
+    }
+    if (file.size > cached.size) {
+      const handle = await open(path, 'r')
+      try {
+        const chunk = Buffer.allocUnsafe(file.size - cached.size)
+        await handle.read(chunk, 0, chunk.length, cached.size)
+        const combined = cached.remainder.length ? Buffer.concat([cached.remainder, chunk]) : chunk
+        const newline = combined.lastIndexOf(0x0a)
+        const complete = newline >= 0 ? combined.subarray(0, newline).toString('utf8') : ''
+        cached.remainder = newline >= 0 ? combined.subarray(newline + 1) : combined
+        for (const line of complete.split('\n')) {
+          if (!line.trim()) continue
+          try {
+            const entry = JSON.parse(line.trimEnd())
+            cached.entries.push(entry)
+            if (entry?.id) cached.byId.set(entry.id, entry)
+          } catch {
+            // Ignore a malformed history line without making the rest of the session unreadable.
+          }
+        }
+      } finally {
+        await handle.close()
+      }
+    }
+    cached.size = file.size
+    cached.mtimeMs = file.mtimeMs
+    cached.touchedAt = Date.now()
+    this.sessionHistoryCache.set(path, cached)
+    if (this.sessionHistoryCache.size > 20) {
+      const oldest = [...this.sessionHistoryCache.entries()].sort((left, right) => left[1].touchedAt - right[1].touchedAt)[0]?.[0]
+      if (oldest && oldest !== path) this.sessionHistoryCache.delete(oldest)
+    }
+    return cached
+  }
+
+  async getSessionHistoryMessages(id) {
+    const activePath = this.sessions.get(id)?.session.sessionFile
+    let path = activePath || this.sessionHistoryPaths.get(id)
+    if (!path) {
+      path = (await this.findSessionInfo(id))?.path
+      if (path) this.sessionHistoryPaths.set(id, path)
+    }
+    if (!path) return this.getSessionMessages(id)
+    const history = await this.readSessionHistoryEntries(path)
+    let cursor = [...history.entries].reverse().find((entry) => entry?.id)
+    const branch = []
+    const visited = new Set()
+    while (cursor?.id && !visited.has(cursor.id)) {
+      visited.add(cursor.id)
+      branch.push(cursor)
+      cursor = cursor.parentId ? history.byId.get(cursor.parentId) : null
+    }
+    branch.reverse()
+    const messages = branch
+      .filter((entry) => entry?.type === 'message')
+      .map((entry, index) => serializeMessage(entry.message, index))
+      .filter(Boolean)
+    const assets = this.assetIndex.assets
+      .filter((asset) => asset.sessionId === id && asset.source === 'agent' && /^(?:image|video)\//.test(asset.mimeType || ''))
+      .sort((left, right) => new Date(left.created).getTime() - new Date(right.created).getTime())
+    return attachGeneratedAssets(messages, assets)
+  }
+
+  async getSessionMessagePage(id, { before, limit = DEFAULT_MESSAGE_PAGE_SIZE } = {}) {
+    const messages = await this.getSessionHistoryMessages(id)
+    const pageSize = Math.min(MAX_MESSAGE_PAGE_SIZE, Math.max(1, Number.parseInt(limit, 10) || DEFAULT_MESSAGE_PAGE_SIZE))
+    const requestedEnd = before == null || before === '' ? messages.length : Number.parseInt(before, 10)
+    const end = Number.isFinite(requestedEnd) ? Math.min(messages.length, Math.max(0, requestedEnd)) : messages.length
+    const start = Math.max(0, end - pageSize)
+    return {
+      messages: messages.slice(start, end),
+      pageInfo: {
+        start,
+        end,
+        total: messages.length,
+        hasMore: start > 0,
+        nextCursor: start > 0 ? String(start) : null,
+      },
+    }
+  }
+
   async getSessionLive(id) {
     const active = this.sessions.get(id)
     const live = this.liveSessions.get(id)
-    const messages = await this.getSessionMessages(id)
+    const page = await this.getSessionMessagePage(id, { limit: LIVE_MESSAGE_PAGE_SIZE })
+    const messages = page.messages
     const streaming = Boolean(active?.session.isStreaming || live?.streaming)
     if (streaming && live) {
       const lastUserIndex = messages.findLastIndex((message) => message.role === 'user')
@@ -639,6 +731,7 @@ export class AgentRuntimeService {
       cwd: active?.cwd || this.sessionMeta[id]?.cwd || this.cwd,
       permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
       approvals: this.permissions.getPending(id),
+      pageInfo: page.pageInfo,
     }
   }
 
@@ -1019,6 +1112,8 @@ export class AgentRuntimeService {
       this.sessions.delete(id)
     }
     if (!sessionFile) sessionFile = (await this.findSessionInfo(id))?.path
+    this.sessionHistoryPaths.delete(id)
+    if (sessionFile) this.sessionHistoryCache.delete(sessionFile)
     if (!sessionFile) {
       if (this.sessionMeta[id]) {
         delete this.sessionMeta[id]

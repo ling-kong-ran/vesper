@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
@@ -30,4 +30,65 @@ test('live session snapshot restores partial assistant output and tool state', a
   assert.equal(live.messages.at(-1).text, '正在处理剩余测试…')
   assert.deepEqual(live.tools, [{ id: 'tool-1', name: 'bash', status: 'running' }])
   assert.equal(live.model, 'openai/gpt-5.4')
+})
+
+test('session messages are returned newest-first by bounded cursor pages', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-message-pages-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  runtime.sessions.set('session-pages', {
+    cwd: directory,
+    session: {
+      isStreaming: false,
+      model: { provider: 'openai', id: 'gpt-5.4' },
+      messages: Array.from({ length: 95 }, (_, index) => ({
+        role: index % 2 ? 'assistant' : 'user',
+        content: `message-${index}`,
+        timestamp: index + 1,
+      })),
+    },
+  })
+
+  const latest = await runtime.getSessionMessagePage('session-pages', { limit: 20 })
+  assert.equal(latest.messages.length, 20)
+  assert.equal(latest.messages[0].text, 'message-75')
+  assert.equal(latest.messages.at(-1).text, 'message-94')
+  assert.deepEqual(latest.pageInfo, { start: 75, end: 95, total: 95, hasMore: true, nextCursor: '75' })
+
+  const older = await runtime.getSessionMessagePage('session-pages', { limit: 20, before: latest.pageInfo.nextCursor })
+  assert.equal(older.messages[0].text, 'message-55')
+  assert.equal(older.messages.at(-1).text, 'message-74')
+  assert.equal(older.pageInfo.nextCursor, '55')
+
+  const oldest = await runtime.getSessionMessagePage('session-pages', { limit: 20, before: 15 })
+  assert.equal(oldest.messages.length, 15)
+  assert.equal(oldest.messages[0].text, 'message-0')
+  assert.equal(oldest.pageInfo.hasMore, false)
+  assert.equal(oldest.pageInfo.nextCursor, null)
+})
+
+test('session history pagination follows the persisted branch across compaction', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-persisted-history-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const path = join(directory, 'session.jsonl')
+  const entries = [
+    { type: 'session', version: 3, id: 'session-history', timestamp: '2026-01-01T00:00:00.000Z', cwd: directory },
+    { type: 'message', id: 'message-1', parentId: 'session-history', message: { role: 'user', content: 'old-user', timestamp: 1 } },
+    { type: 'message', id: 'message-2', parentId: 'message-1', message: { role: 'assistant', content: 'old-agent', timestamp: 2 } },
+    { type: 'compaction', id: 'compact-1', parentId: 'message-2', summary: 'compressed context' },
+    { type: 'message', id: 'message-3', parentId: 'compact-1', message: { role: 'user', content: 'new-user', timestamp: 3 } },
+    { type: 'message', id: 'message-4', parentId: 'message-3', message: { role: 'assistant', content: 'new-agent', timestamp: 4 } },
+  ]
+  await writeFile(path, `${entries.map((entry) => JSON.stringify(entry)).join('\n')}\n`, 'utf8')
+  const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  runtime.findSessionInfo = async () => ({ path })
+
+  const latest = await runtime.getSessionMessagePage('session-history', { limit: 2 })
+  assert.deepEqual(latest.messages.map((message) => message.text), ['new-user', 'new-agent'])
+  assert.equal(latest.pageInfo.total, 4)
+  assert.equal(latest.pageInfo.nextCursor, '2')
+
+  const older = await runtime.getSessionMessagePage('session-history', { limit: 2, before: latest.pageInfo.nextCursor })
+  assert.deepEqual(older.messages.map((message) => message.text), ['old-user', 'old-agent'])
+  assert.equal(older.pageInfo.hasMore, false)
 })

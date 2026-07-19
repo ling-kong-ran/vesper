@@ -291,7 +291,10 @@ export function createApiHandler(runtime) {
       }
       const messagesMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/messages$/)
       if (req.method === 'GET' && messagesMatch) {
-        json(res, 200, { messages: await runtime.getSessionMessages(decodeURIComponent(messagesMatch[1])) })
+        json(res, 200, await runtime.getSessionMessagePage(decodeURIComponent(messagesMatch[1]), {
+          before: url.searchParams.get('before'),
+          limit: url.searchParams.get('limit'),
+        }))
         return true
       }
       const liveSessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/live$/)

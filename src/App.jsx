@@ -1,4 +1,4 @@
-import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
   ArrowDown,
@@ -54,6 +54,22 @@ const LazyMarkdownMessage = lazy(() => import('./components/MarkdownMessage.jsx'
 
 const EMPTY_LIST = []
 const USAGE_UPDATED_EVENT = 'pi-coder:usage-updated'
+const FOCUS_MESSAGE_PAGE_SIZE = 40
+const GRID_MESSAGE_PAGE_SIZE = 16
+
+function latestPageState(current, data) {
+  const incomingStart = Number(data.pageInfo?.start) || 0
+  const currentStart = Number.isInteger(current.messageStart) ? current.messageStart : null
+  const preservePrefix = currentStart != null && currentStart <= incomingStart
+  const prefixLength = preservePrefix ? Math.max(0, incomingStart - currentStart) : 0
+  const messageStart = preservePrefix ? currentStart : incomingStart
+  return {
+    messages: preservePrefix ? [...current.messages.slice(0, prefixLength), ...data.messages] : data.messages,
+    messageStart,
+    hasOlder: messageStart > 0,
+    olderCursor: messageStart > 0 ? String(messageStart) : null,
+  }
+}
 
 function hasUsableProvider(config) {
   return Boolean(config?.providers?.some((provider) => provider.configured && provider.enabled && provider.models.some((model) => model.kind === 'chat')))
@@ -415,7 +431,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   const updateSessionState = useCallback((id, update) => {
     if (!id) return
     const current = sessionStatesRef.current
-    const previous = current[id] || { messages: [], tools: [], approvals: [], streaming: false, error: '', loaded: false }
+    const previous = current[id] || { messages: [], tools: [], approvals: [], streaming: false, error: '', loaded: false, messageStart: null, hasOlder: false, olderCursor: null }
     const next = typeof update === 'function' ? update(previous) : { ...previous, ...update }
     const states = { ...current, [id]: next }
     sessionStatesRef.current = states
@@ -428,7 +444,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/live`)
       updateSessionState(id, (current) => ({
         ...current,
-        messages: data.messages,
+        ...latestPageState(current, data),
         tools: data.tools || [],
         streaming: data.streaming,
         recovering: data.streaming,
@@ -446,21 +462,47 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     }
   }, [updateSessionState])
 
-  const loadSessionMessages = useCallback(async (id, force = false) => {
+  const loadSessionMessages = useCallback(async (id, { force = false, limit = FOCUS_MESSAGE_PAGE_SIZE } = {}) => {
     if (!id) return
     const current = sessionStatesRef.current[id]
     if (current?.recovering) { await syncLiveSession(id); return }
-    if (!force && (current?.loaded || current?.loading || current?.streaming)) return
+    if (!force && (current?.loading || current?.streaming || (current?.loaded && (current.pageSize || 0) >= limit))) return
     updateSessionState(id, { loading: true })
     try {
-      const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/messages`)
+      const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/messages?limit=${limit}`)
       updateSessionState(id, (latest) => latest.streaming
-        ? { ...latest, loaded: true, loading: false }
-        : { ...latest, messages: data.messages, loaded: true, loading: false, error: '' })
+        ? { ...latest, loaded: true, loading: false, pageSize: Math.max(latest.pageSize || 0, limit) }
+        : { ...latest, ...latestPageState(latest, data), loaded: true, loading: false, pageSize: Math.max(latest.pageSize || 0, limit), error: '', olderError: '' })
     } catch (caught) {
       updateSessionState(id, { loading: false, error: caught.message })
     }
   }, [syncLiveSession, updateSessionState])
+
+  const loadOlderMessages = useCallback(async (id) => {
+    const current = sessionStatesRef.current[id]
+    if (!id || !current?.hasOlder || !current.olderCursor || current.loadingOlder) return false
+    updateSessionState(id, { loadingOlder: true, olderError: '' })
+    try {
+      const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/messages?limit=${FOCUS_MESSAGE_PAGE_SIZE}&before=${encodeURIComponent(current.olderCursor)}`)
+      updateSessionState(id, (latest) => {
+        const existingIds = new Set(latest.messages.map((message) => message.id))
+        const older = data.messages.filter((message) => !existingIds.has(message.id))
+        return {
+          ...latest,
+          messages: [...older, ...latest.messages],
+          messageStart: data.pageInfo.start,
+          hasOlder: data.pageInfo.hasMore,
+          olderCursor: data.pageInfo.nextCursor,
+          loadingOlder: false,
+          olderError: '',
+        }
+      })
+      return data.messages.length > 0
+    } catch (caught) {
+      updateSessionState(id, { loadingOlder: false, olderError: caught.message })
+      return false
+    }
+  }, [updateSessionState])
 
   useEffect(() => {
     if (activeId) localStorage.setItem('pi-coder-active-session', activeId)
@@ -483,7 +525,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       setError('')
       const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: '新会话' }) })
       setActiveId(created.id)
-      updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', streaming: false, error: '', loaded: true })
+      updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null })
       setTiledSessionIds((current) => current.includes(created.id) ? current : [...current, created.id])
       setMode('focus')
       await refreshSessions(created.id)
@@ -538,11 +580,11 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   }, [updateSessionState])
 
   useEffect(() => {
-    loadSessionMessages(activeId)
+    loadSessionMessages(activeId, { limit: FOCUS_MESSAGE_PAGE_SIZE })
   }, [activeId, loadSessionMessages])
 
   useEffect(() => {
-    for (const id of tiledSessionIds) loadSessionMessages(id)
+    for (const id of tiledSessionIds) loadSessionMessages(id, { limit: GRID_MESSAGE_PAGE_SIZE })
   }, [tiledSessionIds, loadSessionMessages])
 
   useEffect(() => {
@@ -739,7 +781,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     tiledSessionIds.includes(session.id) && `${session.name} ${session.firstMessage}`.toLowerCase().includes(query.toLowerCase()),
   ), [remoteSessions, query, tiledSessionIds])
   const activeSession = remoteSessions.find((session) => session.id === activeId)
-  const activeState = sessionStates[activeId] || { messages: [], tools: [], approvals: [], streaming: false, error: '', loading: false, switchingModel: false, switchingCwd: false, switchingPermission: false }
+  const activeState = sessionStates[activeId] || { messages: [], tools: [], approvals: [], streaming: false, error: '', loading: false, switchingModel: false, switchingCwd: false, switchingPermission: false, messageStart: null, hasOlder: false, olderCursor: null }
 
   useEffect(() => {
     document.title = activeSession?.name ? `${activeSession.name} · Pi Coder` : 'Pi Coder'
@@ -757,7 +799,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         <div className="session-grid">
           {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} permissionMode={sessionStates[session.id]?.permissionMode || session.permissionMode || 'auto'} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(session.id, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(session.id, approvalId, approved)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
         </div>
-      ) : <FocusSession session={activeSession} messages={activeState.messages} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} onAssetConsumed={onAssetConsumed} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} />}
+      ) : <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} />}
     </div>
     {workspaceSession && <WorkspacePicker session={workspaceSession} onClose={() => setWorkspaceSession(null)} onSelect={(cwd) => switchSessionCwd(workspaceSession, cwd)} />}
     </>
@@ -767,11 +809,11 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
 function SessionCard({ session, state, model, permissionMode, availableModels, onModelChange, onPermissionChange, onApproval, onWorkspace, onOpen, onRename, onSend, onAbort }) {
   const [value, setValue] = useState('')
   const selection = useAttachmentSelection()
-  const messages = state?.messages || EMPTY_LIST
+  const messages = (state?.messages || EMPTY_LIST).slice(-GRID_MESSAGE_PAGE_SIZE)
   const tools = state?.tools || EMPTY_LIST
   const streaming = Boolean(state?.streaming)
   const lastMessage = messages[messages.length - 1]
-  const liveVersion = `${messages.length}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${state?.error || ''}`
+  const liveVersion = `${session.id}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${state?.error || ''}`
   const { scrollRef: liveRef, onScroll: onLiveScroll, scrollToBottom } = useAutoScroll(liveVersion)
   const submit = (event) => {
     event.preventDefault()
@@ -903,14 +945,33 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, model, permissionMode, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, approvals, error, pendingAsset, onAssetConsumed, onModelChange, onPermissionChange, onApproval, onWorkspace, onRename, onSend, onAbort }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, approvals, error, pendingAsset, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onApproval, onWorkspace, onRename, onSend, onAbort }) {
   const [value, setValue] = useState('')
   const selection = useAttachmentSelection()
   const addSelectedAttachments = selection.addAttachments
   const promptRef = useRef(null)
+  const prependSnapshot = useRef(null)
   const lastMessage = messages[messages.length - 1]
-  const transcriptVersion = `${messages.length}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${error || ''}`
+  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${error || ''}`
   const { scrollRef: transcriptRef, onScroll: onTranscriptScroll, hasUnread, scrollToBottom } = useAutoScroll(transcriptVersion)
+  const loadOlder = useCallback(async () => {
+    const node = transcriptRef.current
+    if (!node || !hasOlder || loadingOlder || prependSnapshot.current) return
+    prependSnapshot.current = { scrollHeight: node.scrollHeight, scrollTop: node.scrollTop }
+    const loaded = await onLoadOlder?.()
+    if (!loaded) prependSnapshot.current = null
+  }, [hasOlder, loadingOlder, onLoadOlder, transcriptRef])
+  const handleTranscriptScroll = useCallback((event) => {
+    onTranscriptScroll(event)
+    if (event.currentTarget.scrollTop <= 96) void loadOlder()
+  }, [loadOlder, onTranscriptScroll])
+  useLayoutEffect(() => {
+    const snapshot = prependSnapshot.current
+    const node = transcriptRef.current
+    if (!snapshot || !node) return
+    node.scrollTop = snapshot.scrollTop + node.scrollHeight - snapshot.scrollHeight
+    prependSnapshot.current = null
+  }, [messageStart, transcriptRef])
   useEffect(() => {
     if (!pendingAsset) return
     addSelectedAttachments([pendingAsset])
@@ -928,7 +989,8 @@ function FocusSession({ session, messages, model, permissionMode, cwd, available
   return (
     <Panel className="focus-session">
       <div className="card-head"><div><div className="editable-session-title"><h3 title={session?.name}>{session?.name || '新会话'}</h3><button className="icon-button" title="重命名会话" onClick={onRename}><Pencil size={13} /></button></div><div className="session-runtime-meta"><span className={streaming ? 'success' : ''}>{streaming ? 'Agent 运行中' : '等待输入'}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd)}</button></div></div>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={12} />停止</button> : <MoreHorizontal size={17} />}</div>
-      <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll}>
+      <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
+        {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />重试加载更早消息</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />正在加载更早消息…</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />加载更早消息</button>}</div>}
         {!messages.length && <div className="agent-welcome"><Bot size={22} /><h2>准备好开始编码</h2><p>Agent 可以读取当前工作区、搜索代码并持续处理任务。默认使用只读工具权限。</p></div>}
         {messages.map((message) => <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? 'Agent' : 'You'}</span><div className="message-content"><MarkdownMessage>{message.text || (message.streaming ? '正在思考…' : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}{message.streaming && <i className="typing-dot" />}</div></div>)}
         {tools.length > 0 && <div className="tool-trace"><strong>工具执行</strong>{tools.map((tool) => <span key={tool.id} className={tool.status}><Wrench size={12} />{tool.name}<em>{tool.status === 'running' ? '运行中' : tool.status === 'done' ? '完成' : '失败'}</em></span>)}</div>}
