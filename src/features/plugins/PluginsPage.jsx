@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, CircleDot, Eye, FileCode2, FolderOpen, Image, Pencil, Plug, RefreshCw, Save, Search, Server, ShieldCheck } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Segmented, Toggle } from '../../components/ui.jsx'
 import { apiJson } from '../../lib/api.js'
 import { relativeTime } from '../../lib/format.js'
+import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
 
 const FILTERS = ['全部', '文件系统', '搜索', '终端', '视觉', '高风险', '已禁用']
 const PRESETS = {
@@ -25,14 +26,13 @@ function pluginStatus(tools) {
   return { enabled: tools.filter((tool) => tool.enabled).length, total: tools.length }
 }
 
-export function PluginsPage({ query, notify, saveSignal, onStatusChange }) {
+export function PluginsPage({ query, notify, registerPrimaryAction, onStatusChange }) {
   const [data, setData] = useState(null)
   const [draft, setDraft] = useState([])
   const [selectedId, setSelectedId] = useState('read')
   const [tab, setTab] = useState('全部')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
-  const handledSaveSignal = useRef(saveSignal)
 
   useEffect(() => {
     apiJson('/api/plugins').then((result) => {
@@ -67,12 +67,7 @@ export function PluginsPage({ query, notify, saveSignal, onStatusChange }) {
     }
   }, [data, dirty, draft, notify, onStatusChange])
 
-  useEffect(() => {
-    if (saveSignal > 0 && saveSignal !== handledSaveSignal.current) {
-      handledSaveSignal.current = saveSignal
-      save()
-    }
-  }, [saveSignal, save])
+  usePagePrimaryAction(registerPrimaryAction, save)
 
   if (!data) return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在加载工具插件</h2><p>读取 Agent 当前注册工具与权限…</p>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}</Panel>
 

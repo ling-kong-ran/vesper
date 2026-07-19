@@ -1,38 +1,20 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
-  Bell,
+  ArrowDown,
   Bot,
-  Brain,
   Check,
   ChevronDown,
   ChevronRight,
-  CircleDot,
-  Clock3,
-  Code2,
-  Copy,
   Download,
-  Eye,
-  ExternalLink,
   File,
-  FileCode2,
-  FileImage,
-  FileVideo,
   FolderOpen,
-  GitBranch,
   Grid2X2,
-  Image,
-  KeyRound,
   Link2,
   Menu,
-  MessageSquare,
   Monitor,
   Moon,
   MoreHorizontal,
-  Network,
-  Package,
   Paperclip,
   Pencil,
   Play,
@@ -42,48 +24,36 @@ import {
   Save,
   Search,
   Send,
-  Server,
   ShieldCheck,
-  Sparkles,
   Square,
   Sun,
   Trash2,
-  Upload,
   Wrench,
   X,
-  Zap,
 } from 'lucide-react'
 import { NAV_ITEMS, PAGE_META } from './app/navigation.jsx'
-import { AppDialog, Badge, InputLabel, Metric, Panel, PreviewNotice, SectionTitle, Segmented, SelectLabel, Toast, Toggle } from './components/ui.jsx'
+import { AppDialog, InputLabel, Panel, SectionTitle, Segmented, SelectLabel, Toast } from './components/ui.jsx'
 import { useAttachmentSelection } from './features/chat/attachments.js'
-import { PluginsPage } from './features/plugins/PluginsPage.jsx'
-import { ChannelsPage } from './features/channels/ChannelsPage.jsx'
-import { NotificationSettings } from './features/config/NotificationSettings.jsx'
-import { MemoryPage } from './features/memory/MemoryPage.jsx'
-import { SchedulesPage } from './features/schedules/SchedulesPage.jsx'
+import { useAutoScroll } from './hooks/useAutoScroll.js'
+import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, consumeEventStream } from './lib/api.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
 
-const toolRows = [
-  ['get_editor_state', 'Pencil · 读取画布状态', '低风险', true],
-  ['batch_design', 'Pencil · 修改 .pen 文件', '高风险', true],
-  ['read_file', 'Filesystem · 读取工作区文件', '中风险', true],
-  ['write_file', 'Filesystem · 写入文件', '高风险', true],
-  ['create_issue', 'GitHub · 创建 issue', '中风险', false],
-  ['search_docs', 'Hermes Docs · 搜索文档', '低风险', true],
-  ['query_table', 'Database · 读取数据表', '高风险', false],
-]
-
-const skillInstalled = [
-  ['imagegen', '生成或编辑位图视觉资产', Image, true],
-  ['openai-docs', '官方 OpenAI 文档查询', FileCode2, true],
-  ['plugin-creator', '创建 Codex 插件结构', Package, true],
-  ['skill-creator', '创建和维护技能', Wrench, true],
-  ['skill-installer', '从市场安装技能', Upload, false],
-]
+const PluginsPage = lazy(() => import('./features/plugins/PluginsPage.jsx').then((module) => ({ default: module.PluginsPage })))
+const ChannelsPage = lazy(() => import('./features/channels/ChannelsPage.jsx').then((module) => ({ default: module.ChannelsPage })))
+const ConfigPage = lazy(() => import('./features/config/ConfigPage.jsx').then((module) => ({ default: module.ConfigPage })))
+const MemoryPage = lazy(() => import('./features/memory/MemoryPage.jsx').then((module) => ({ default: module.MemoryPage })))
+const SchedulesPage = lazy(() => import('./features/schedules/SchedulesPage.jsx').then((module) => ({ default: module.SchedulesPage })))
+const AssetsPage = lazy(() => import('./features/assets/AssetsPage.jsx').then((module) => ({ default: module.AssetsPage })))
+const McpPage = lazy(() => import('./features/workflows/PreviewPages.jsx').then((module) => ({ default: module.McpPage })))
+const SkillsPage = lazy(() => import('./features/workflows/PreviewPages.jsx').then((module) => ({ default: module.SkillsPage })))
+const WorkflowsPage = lazy(() => import('./features/workflows/PreviewPages.jsx').then((module) => ({ default: module.WorkflowsPage })))
+const WorkflowBuilder = lazy(() => import('./features/workflows/PreviewPages.jsx').then((module) => ({ default: module.WorkflowBuilder })))
+const LazyMarkdownMessage = lazy(() => import('./components/MarkdownMessage.jsx'))
 
 const EMPTY_LIST = []
+const USAGE_UPDATED_EVENT = 'pi-coder:usage-updated'
 
 function hasUsableProvider(config) {
   return Boolean(config?.providers?.some((provider) => provider.configured && provider.enabled && provider.models.some((model) => model.kind === 'chat')))
@@ -116,6 +86,10 @@ function resolveDark(mode) {
   return mode === 'dark' || (mode === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches)
 }
 
+function isEditableTarget(target) {
+  return target instanceof HTMLElement && (target.matches('input, textarea, select') || target.isContentEditable)
+}
+
 function App() {
   const initialPage = window.location.hash.slice(1)
   const [page, setPage] = useState(PAGE_META[initialPage] ? initialPage : 'chat')
@@ -124,20 +98,15 @@ function App() {
   const [mobileNav, setMobileNav] = useState(false)
   const [toast, setToast] = useState(null)
   const [modal, setModal] = useState(null)
-  const [chatCreateSignal, setChatCreateSignal] = useState(0)
-  const [configCreateSignal, setConfigCreateSignal] = useState(0)
   const [configSection, setConfigSection] = useState('models')
-  const [assetUploadSignal, setAssetUploadSignal] = useState(0)
-  const [pluginSaveSignal, setPluginSaveSignal] = useState(0)
-  const [channelCreateSignal, setChannelCreateSignal] = useState(0)
-  const [scheduleCreateSignal, setScheduleCreateSignal] = useState(0)
-  const [memoryCreateSignal, setMemoryCreateSignal] = useState(0)
   const [pendingAsset, setPendingAsset] = useState(null)
-  const [usage, setUsage] = useState(null)
   const [pluginStats, setPluginStats] = useState(null)
   const [startupReady, setStartupReady] = useState(false)
   const [notificationSettings, setNotificationSettings] = useState({ browser: { enabled: false }, templates: [] })
   const browserEventCursor = useRef('')
+  const primaryActionRef = useRef(null)
+  const queuedPrimaryActionRef = useRef(false)
+  const searchInputRef = useRef(null)
   const toastTimer = useRef(null)
   const appDialog = useAppDialog()
   const [theme, setTheme] = useState(() => {
@@ -157,14 +126,6 @@ function App() {
   }, [theme])
 
   const cycleTheme = () => setTheme((current) => THEME_SEQUENCE[(THEME_SEQUENCE.indexOf(current) + 1) % THEME_SEQUENCE.length])
-
-  const refreshUsage = useCallback(async () => {
-    try {
-      setUsage(await apiJson('/api/usage/today'))
-    } catch {
-      // The agent can still run when usage aggregation is temporarily unavailable.
-    }
-  }, [])
 
   const refreshPluginStats = useCallback(async () => {
     try {
@@ -205,12 +166,57 @@ function App() {
     showBrowserNotification(template.name, renderNotificationContent(content, data), options)
   }, [notificationSettings.templates, showBrowserNotification])
 
-  const navigate = (next) => {
+  const registerPrimaryAction = useCallback((action) => {
+    primaryActionRef.current = action
+    if (queuedPrimaryActionRef.current) {
+      queuedPrimaryActionRef.current = false
+      action()
+    }
+    return () => { if (primaryActionRef.current === action) primaryActionRef.current = null }
+  }, [])
+
+  const invokePrimaryAction = useCallback(() => {
+    if (primaryActionRef.current) primaryActionRef.current()
+    else queuedPrimaryActionRef.current = true
+  }, [])
+
+  const navigate = useCallback((next) => {
+    primaryActionRef.current = null
     setPage(next)
     window.location.hash = next
     setQuery('')
     setMobileNav(false)
-  }
+  }, [])
+
+  const handlePrimary = useCallback(() => {
+    if (page === 'config' && configSection !== 'models') return
+    if (['chat', 'config', 'assets', 'plugins', 'channels', 'schedules', 'memory'].includes(page)) invokePrimaryAction()
+    else if (page === 'workflows') navigate('workflowCreate')
+    else if (page === 'workflowCreate') notify('工作流运行时尚未接入，当前不会真实发布', 'info')
+    else if (page === 'mcp' || page === 'skills') notify('该页面当前为演示界面，功能尚未接入', 'info')
+    else setModal(page)
+  }, [configSection, invokePrimaryAction, navigate, notify, page])
+
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const modifier = event.metaKey || event.ctrlKey
+      if (modifier && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        searchInputRef.current?.focus()
+      } else if (modifier && event.key.toLowerCase() === 'n' && !isEditableTarget(event.target)) {
+        event.preventDefault()
+        handlePrimary()
+      } else if (event.key === '/' && !modifier && !event.altKey && !isEditableTarget(event.target)) {
+        event.preventDefault()
+        searchInputRef.current?.focus()
+      } else if (event.key === 'Escape' && !appDialog.dialog) {
+        if (modal) setModal(null)
+        else if (mobileNav) setMobileNav(false)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [appDialog.dialog, handlePrimary, modal, mobileNav])
 
   useEffect(() => {
     let active = true
@@ -218,9 +224,10 @@ function App() {
       .then((config) => {
         if (!active) return
         if (!hasUsableProvider(config)) {
+          primaryActionRef.current = null
+          queuedPrimaryActionRef.current = true
           setPage('config')
           window.location.hash = 'config'
-          setConfigCreateSignal((value) => value + 1)
         }
       })
       .catch(() => {})
@@ -231,24 +238,14 @@ function App() {
   useEffect(() => {
     const syncHash = () => {
       const next = window.location.hash.slice(1)
-      if (PAGE_META[next]) setPage(next)
+      if (PAGE_META[next]) {
+        primaryActionRef.current = null
+        setPage(next)
+      }
     }
     window.addEventListener('hashchange', syncHash)
     return () => window.removeEventListener('hashchange', syncHash)
   }, [])
-
-  useEffect(() => {
-    refreshUsage()
-    const timer = window.setInterval(refreshUsage, 15_000)
-    const refreshWhenVisible = () => {
-      if (document.visibilityState === 'visible') refreshUsage()
-    }
-    document.addEventListener('visibilitychange', refreshWhenVisible)
-    return () => {
-      window.clearInterval(timer)
-      document.removeEventListener('visibilitychange', refreshWhenVisible)
-    }
-  }, [refreshUsage])
 
   useEffect(() => {
     refreshPluginStats()
@@ -284,7 +281,7 @@ function App() {
   return (
     <div className="app-shell">
       <div className="app-body">
-        <Sidebar page={page} navigate={navigate} open={mobileNav} onClose={() => setMobileNav(false)} usage={usage} pluginStats={pluginStats} />
+        <Sidebar page={page} navigate={navigate} open={mobileNav} onClose={() => setMobileNav(false)} pluginStats={pluginStats} />
         <main className="main-surface">
           <PageHeader
             meta={activeMeta}
@@ -295,35 +292,24 @@ function App() {
             setChatMode={setChatMode}
             configSection={configSection}
             onMenu={() => setMobileNav(true)}
-            onPrimary={() => {
-              if (page === 'chat') setChatCreateSignal((value) => value + 1)
-              else if (page === 'config' && configSection === 'models') setConfigCreateSignal((value) => value + 1)
-              else if (page === 'assets') setAssetUploadSignal((value) => value + 1)
-              else if (page === 'plugins') setPluginSaveSignal((value) => value + 1)
-              else if (page === 'channels') setChannelCreateSignal((value) => value + 1)
-              else if (page === 'schedules') setScheduleCreateSignal((value) => value + 1)
-              else if (page === 'memory') setMemoryCreateSignal((value) => value + 1)
-              else if (page === 'workflows') navigate('workflowCreate')
-              else if (page === 'workflowCreate') notify('工作流运行时尚未接入，当前不会真实发布', 'info')
-              else if (page === 'mcp' || page === 'skills') notify('该页面当前为演示界面，功能尚未接入', 'info')
-              else setModal(page)
-            }}
+            onPrimary={handlePrimary}
             notify={notify}
+            searchInputRef={searchInputRef}
             theme={theme}
             onCycleTheme={cycleTheme}
           />
           <div className={`page-content page-${page}`}>
-            {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} createSignal={chatCreateSignal} onUsageChange={refreshUsage} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />}
-            {page === 'assets' && <AssetsPage query={query} notify={notify} createSignal={assetUploadSignal} requestConfirm={appDialog.confirm} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} />}
-            {page === 'channels' && <ChannelsPage notify={notify} createSignal={channelCreateSignal} requestConfirm={appDialog.confirm} />}
-            {page === 'schedules' && <SchedulesPage notify={notify} createSignal={scheduleCreateSignal} requestConfirm={appDialog.confirm} openNotificationSettings={() => { setConfigSection('notifications'); navigate('config') }} />}
-            {page === 'config' && <ConfigPage notify={notify} createSignal={configCreateSignal} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} requestConfirm={appDialog.confirm} />}
-            {page === 'plugins' && <PluginsPage query={query} notify={notify} saveSignal={pluginSaveSignal} onStatusChange={setPluginStats} />}
-            {page === 'memory' && <MemoryPage query={query} notify={notify} createSignal={memoryCreateSignal} requestConfirm={appDialog.confirm} />}
-            {page === 'mcp' && <McpPage notify={notify} />}
-            {page === 'skills' && <SkillsPage notify={notify} />}
-            {page === 'workflows' && <WorkflowsPage navigate={navigate} notify={notify} />}
-            {page === 'workflowCreate' && <WorkflowBuilder notify={notify} />}
+            {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} registerPrimaryAction={registerPrimaryAction} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />}
+            {page === 'assets' && <Suspense fallback={<PageLoader />}><AssetsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} /></Suspense>}
+            {page === 'channels' && <Suspense fallback={<PageLoader />}><ChannelsPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>}
+            {page === 'schedules' && <Suspense fallback={<PageLoader />}><SchedulesPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} openNotificationSettings={() => { setConfigSection('notifications'); navigate('config') }} /></Suspense>}
+            {page === 'config' && <Suspense fallback={<PageLoader />}><ConfigPage notify={notify} registerPrimaryAction={registerPrimaryAction} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} requestConfirm={appDialog.confirm} /></Suspense>}
+            {page === 'plugins' && <Suspense fallback={<PageLoader />}><PluginsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} onStatusChange={setPluginStats} /></Suspense>}
+            {page === 'memory' && <Suspense fallback={<PageLoader />}><MemoryPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>}
+            {page === 'mcp' && <Suspense fallback={<PageLoader />}><McpPage notify={notify} /></Suspense>}
+            {page === 'skills' && <Suspense fallback={<PageLoader />}><SkillsPage notify={notify} /></Suspense>}
+            {page === 'workflows' && <Suspense fallback={<PageLoader />}><WorkflowsPage navigate={navigate} notify={notify} /></Suspense>}
+            {page === 'workflowCreate' && <Suspense fallback={<PageLoader />}><WorkflowBuilder notify={notify} /></Suspense>}
           </div>
         </main>
       </div>
@@ -334,8 +320,28 @@ function App() {
   )
 }
 
-function Sidebar({ page, navigate, open, onClose, usage, pluginStats }) {
+function PageLoader() {
+  return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在加载页面</h2><p>按需加载功能模块…</p></Panel>
+}
+
+function Sidebar({ page, navigate, open, onClose, pluginStats }) {
+  const [usage, setUsage] = useState(null)
   const active = page === 'workflowCreate' ? 'workflows' : page
+  const refreshUsage = useCallback(async () => {
+    try { setUsage(await apiJson('/api/usage/today')) } catch {}
+  }, [])
+  useEffect(() => {
+    refreshUsage()
+    const timer = window.setInterval(refreshUsage, 15_000)
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') refreshUsage() }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener(USAGE_UPDATED_EVENT, refreshUsage)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener(USAGE_UPDATED_EVENT, refreshUsage)
+    }
+  }, [refreshUsage])
   const usageTitle = usage
     ? `输入 ${usage.input.toLocaleString()} · 输出 ${usage.output.toLocaleString()} · 推理 ${usage.reasoning.toLocaleString()} · 缓存读取 ${usage.cacheRead.toLocaleString()}`
     : '正在统计今日 Token 消耗'
@@ -360,7 +366,7 @@ function Sidebar({ page, navigate, open, onClose, usage, pluginStats }) {
   )
 }
 
-function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, notify, theme, onCycleTheme }) {
+function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, notify, theme, onCycleTheme, searchInputRef }) {
   const primary = page === 'config' && configSection !== 'models' ? null : ({
     chat: ['新会话', Plus], assets: ['添加链接', Link2], channels: ['连接渠道', Plus], schedules: ['新建任务', Plus],
     config: ['添加 Provider', Plus], plugins: ['保存策略', Save], memory: ['新建节点', Plus], mcp: ['添加服务', Plus],
@@ -380,16 +386,16 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
             <button className="button dark" onClick={() => notify('工作流运行时尚未接入，无法试运行', 'info')}><Play size={15} />试运行</button>
           </>
         ) : (
-          <label className="search-box"><Search size={15} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? '搜索会话' : page === 'mcp' ? '搜索服务或工具' : page === 'memory' ? '搜索节点或文件' : `搜索${meta[0]}`} /></label>
+          <label className="search-box" title="搜索（Ctrl/⌘ K 或 /）"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? '搜索会话' : page === 'mcp' ? '搜索服务或工具' : page === 'memory' ? '搜索节点或文件' : `搜索${meta[0]}`} /></label>
         )}
-        {primary && <button className="button primary" onClick={onPrimary}><PrimaryIcon size={15} />{primary[0]}</button>}
+        {primary && <button className="button primary" title={`${primary[0]}（Ctrl/⌘ N）`} onClick={onPrimary}><PrimaryIcon size={15} />{primary[0]}</button>}
         <button className="icon-button theme-toggle" title={`主题：${themeLabel}（点击切换）`} aria-label={`主题：${themeLabel}，点击切换主题`} onClick={onCycleTheme}><ThemeIcon size={16} /></button>
       </div>
     </header>
   )
 }
 
-function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, onUsageChange, pendingAsset, onAssetConsumed, requestConfirm, requestText }) {
+function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimaryAction, pendingAsset, onAssetConsumed, requestConfirm, requestText }) {
   const [remoteSessions, setRemoteSessions] = useState([])
   const [activeId, setActiveId] = useState(() => localStorage.getItem('pi-coder-active-session') || '')
   const [sessionStates, setSessionStates] = useState({})
@@ -400,8 +406,6 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
   const [workspaceSession, setWorkspaceSession] = useState(null)
   const [tiledSessionIds, setTiledSessionIds] = useState(() => readStoredArray('pi-coder-tiled-sessions'))
   const tiledStorageWasEmpty = useRef(localStorage.getItem('pi-coder-tiled-sessions') === null)
-  const createSessionRef = useRef(null)
-  const handledCreateSignal = useRef(createSignal)
   const sessionStatesRef = useRef(sessionStates)
 
   useEffect(() => {
@@ -490,7 +494,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
       return ''
     }
   }
-  createSessionRef.current = createSession
+  usePagePrimaryAction(registerPrimaryAction, createSession)
 
   useEffect(() => {
     let active = true
@@ -532,11 +536,6 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
       .finally(() => active && setLoading(false))
     return () => { active = false }
   }, [updateSessionState])
-
-  useEffect(() => {
-    if (createSignal > handledCreateSignal.current) createSessionRef.current?.()
-    handledCreateSignal.current = createSignal
-  }, [createSignal])
 
   useEffect(() => {
     loadSessionMessages(activeId)
@@ -619,7 +618,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
       updateSessionState(sessionId, (current) => ({ ...current, error: caught.message, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || caught.message } : item) }))
     } finally {
       updateSessionState(sessionId, { streaming: false })
-      onUsageChange?.()
+      window.dispatchEvent(new Event(USAGE_UPDATED_EVENT))
     }
   }
 
@@ -768,24 +767,24 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, createSignal, o
 function SessionCard({ session, state, model, permissionMode, availableModels, onModelChange, onPermissionChange, onApproval, onWorkspace, onOpen, onRename, onSend, onAbort }) {
   const [value, setValue] = useState('')
   const selection = useAttachmentSelection()
-  const liveRef = useRef(null)
   const messages = state?.messages || EMPTY_LIST
   const tools = state?.tools || EMPTY_LIST
   const streaming = Boolean(state?.streaming)
-  useEffect(() => {
-    liveRef.current?.scrollTo({ top: liveRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages, tools])
+  const lastMessage = messages[messages.length - 1]
+  const liveVersion = `${messages.length}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${state?.error || ''}`
+  const { scrollRef: liveRef, onScroll: onLiveScroll, scrollToBottom } = useAutoScroll(liveVersion)
   const submit = (event) => {
     event.preventDefault()
     if ((!value.trim() && !selection.attachments.length) || streaming) return
     onSend(value, selection.attachments)
+    scrollToBottom('smooth')
     setValue('')
     selection.clearAttachments()
   }
   return (
     <Panel className="session-card">
       <div className="card-head"><button className="session-title-button" onClick={onOpen}><h3 title={session.name}>{session.name}</h3><span className={streaming ? 'success' : ''}>{streaming ? 'Agent 运行中' : `${session.messageCount || messages.length} 条消息`} · {relativeTime(session.modified)}</span><small className="workspace-summary" title={state?.cwd || session.cwd}><FolderOpen size={10} />{workspaceName(state?.cwd || session.cwd)}</small></button><div className="card-head-actions"><button className="icon-button" title="设置工作目录" onClick={onWorkspace} disabled={streaming || state?.switchingCwd}><FolderOpen size={14} /></button><button className="icon-button" title="重命名会话" onClick={onRename}><Pencil size={14} /></button>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={11} />停止</button> : <button className="icon-button" onClick={onOpen}><MoreHorizontal size={17} /></button>}</div></div>
-      <div className="session-live-body" ref={liveRef}>
+      <div className="session-live-body" ref={liveRef} onScroll={onLiveScroll}>
         {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />加载消息…</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />开始一个新的编码任务</button> : messages.map((message) => <div className={`mini-message ${message.role}`} key={message.id}><span>{message.role === 'agent' ? 'Agent' : 'You'}</span><div className="mini-message-content"><MarkdownMessage>{message.text || (message.streaming ? '正在思考…' : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} compact />}</div></div>)}
         {tools.some((tool) => tool.status === 'running') && <div className="mini-tool-status"><Wrench size={11} />{tools.filter((tool) => tool.status === 'running').map((tool) => tool.name).join('、')} 运行中</div>}
         {state?.error && <div className="mini-session-error"><AlertTriangle size={11} />{state.error}</div>}
@@ -908,20 +907,20 @@ function FocusSession({ session, messages, model, permissionMode, cwd, available
   const [value, setValue] = useState('')
   const selection = useAttachmentSelection()
   const addSelectedAttachments = selection.addAttachments
-  const transcriptRef = useRef(null)
   const promptRef = useRef(null)
+  const lastMessage = messages[messages.length - 1]
+  const transcriptVersion = `${messages.length}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${error || ''}`
+  const { scrollRef: transcriptRef, onScroll: onTranscriptScroll, hasUnread, scrollToBottom } = useAutoScroll(transcriptVersion)
   useEffect(() => {
     if (!pendingAsset) return
     addSelectedAttachments([pendingAsset])
     onAssetConsumed?.()
   }, [pendingAsset, onAssetConsumed, addSelectedAttachments])
-  useEffect(() => {
-    transcriptRef.current?.scrollTo({ top: transcriptRef.current.scrollHeight, behavior: 'smooth' })
-  }, [messages, tools])
   const submit = (event) => {
     event.preventDefault()
     if (!value.trim() && !selection.attachments.length) return
     onSend(value, undefined, selection.attachments)
+    scrollToBottom('smooth')
     setValue('')
     if (promptRef.current) promptRef.current.style.height = 'auto'
     selection.clearAttachments()
@@ -929,325 +928,15 @@ function FocusSession({ session, messages, model, permissionMode, cwd, available
   return (
     <Panel className="focus-session">
       <div className="card-head"><div><div className="editable-session-title"><h3 title={session?.name}>{session?.name || '新会话'}</h3><button className="icon-button" title="重命名会话" onClick={onRename}><Pencil size={13} /></button></div><div className="session-runtime-meta"><span className={streaming ? 'success' : ''}>{streaming ? 'Agent 运行中' : '等待输入'}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd)}</button></div></div>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={12} />停止</button> : <MoreHorizontal size={17} />}</div>
-      <div className="transcript" ref={transcriptRef}>
+      <div className="transcript" ref={transcriptRef} onScroll={onTranscriptScroll}>
         {!messages.length && <div className="agent-welcome"><Bot size={22} /><h2>准备好开始编码</h2><p>Agent 可以读取当前工作区、搜索代码并持续处理任务。默认使用只读工具权限。</p></div>}
         {messages.map((message) => <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? 'Agent' : 'You'}</span><div className="message-content"><MarkdownMessage>{message.text || (message.streaming ? '正在思考…' : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}{message.streaming && <i className="typing-dot" />}</div></div>)}
         {tools.length > 0 && <div className="tool-trace"><strong>工具执行</strong>{tools.map((tool) => <span key={tool.id} className={tool.status}><Wrench size={12} />{tool.name}<em>{tool.status === 'running' ? '运行中' : tool.status === 'done' ? '完成' : '失败'}</em></span>)}</div>}
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
+      {hasUnread && <button type="button" className="button secondary jump-to-latest" onClick={() => scrollToBottom('smooth')}><ArrowDown size={14} />有新内容</button>}
       <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={streaming ? 'Agent 正在运行，可停止后继续输入' : '输入消息，Shift + Enter 换行'} disabled={streaming} /><button className="send-button" disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={16} /></button></div></form>
     </Panel>
-  )
-}
-
-function AssetsPage({ query, notify, createSignal, onUse, requestConfirm }) {
-  const [tab, setTab] = useState('全部')
-  const [assets, setAssets] = useState([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const handledCreateSignal = useRef(createSignal)
-  const [preview, setPreview] = useState(null)
-  const [linkModal, setLinkModal] = useState(false)
-
-  const loadAssets = useCallback(async () => {
-    setLoading(true)
-    setError('')
-    try {
-      const params = new URLSearchParams()
-      if (query) params.set('query', query)
-      if (tab === '图片') params.set('kind', 'image')
-      if (tab === '文件') params.set('kind', 'file')
-      if (tab === '链接') params.set('kind', 'link')
-      if (tab === '来自当前会话') params.set('sessionId', localStorage.getItem('pi-coder-active-session') || '__none__')
-      const data = await apiJson(`/api/assets?${params}`)
-      setAssets(data.assets)
-    } catch (caught) {
-      setError(caught.message)
-    } finally {
-      setLoading(false)
-    }
-  }, [query, tab])
-
-  useEffect(() => { loadAssets() }, [loadAssets])
-  useEffect(() => { if (createSignal > handledCreateSignal.current) setLinkModal(true); handledCreateSignal.current = createSignal }, [createSignal])
-
-  const deleteAsset = async (asset) => {
-    const approved = await requestConfirm({ title: '删除资产', message: `确定删除资产「${asset.name}」吗？`, confirmLabel: '删除' })
-    if (!approved) return
-    try {
-      await apiJson(`/api/assets/${encodeURIComponent(asset.id)}`, { method: 'DELETE' })
-      setAssets((current) => current.filter((item) => item.id !== asset.id))
-      notify('资产已删除')
-    } catch (caught) { setError(caught.message) }
-  }
-
-  const attachAsset = async (asset) => {
-    try {
-      const content = await apiJson(`/api/assets/${encodeURIComponent(asset.id)}/content`)
-      onUse(content)
-      notify(`${asset.name} 已加入对话`)
-    } catch (caught) { setError(caught.message) }
-  }
-
-  const previewAsset = async (asset) => {
-    let text = ''
-    if (asset.kind === 'link') text = asset.url
-    else if (asset.mimeType?.startsWith('text/') || ASSET_PREVIEW_TEXT_EXTENSIONS.has(fileExtension(asset.name))) {
-      const content = await apiJson(`/api/assets/${encodeURIComponent(asset.id)}/content`)
-      text = content.text || ''
-    }
-    setPreview({ ...asset, text })
-  }
-
-  return (
-    <div className="asset-page">
-      <div className="asset-toolbar"><Segmented options={['全部', '图片', '文件', '链接', '来自当前会话']} value={tab} onChange={setTab} /></div>
-      <div className="asset-summary"><span><strong>{assets.length}</strong> 个资产</span><span>对话附件和 Agent 生成文件会自动归档</span></div>
-      {error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}
-      {loading ? <Panel className="empty-state"><RefreshCw className="spin" size={23} /><h2>正在加载资产</h2></Panel> : assets.length ? <div className="asset-grid functional">{assets.map((asset) => {
-        const isVideo = asset.mimeType?.startsWith('video/')
-        const Icon = asset.kind === 'image' ? FileImage : isVideo ? FileVideo : asset.kind === 'link' ? Link2 : File
-        return <Panel className="asset-card functional" key={asset.id}><button className={`asset-preview ${asset.kind} ${isVideo ? 'video' : ''}`} onClick={() => previewAsset(asset)}>{asset.kind === 'image' ? <img src={`/api/assets/${encodeURIComponent(asset.id)}/download?inline=1`} alt="" /> : isVideo ? <video src={`/api/assets/${encodeURIComponent(asset.id)}/download?inline=1`} muted preload="metadata" /> : <Icon size={38} />}</button><div className="asset-card-copy"><strong title={asset.name}>{asset.name}</strong><span>{asset.kind === 'link' ? new URL(asset.url).hostname : formatFileSize(asset.size)} · {asset.source === 'agent' ? 'Agent 产物' : asset.source === 'attachment' ? '对话附件' : '手动上传'}</span>{asset.sessionName && <small title={asset.sessionName}>来自：{asset.sessionName}</small>}</div><div className="asset-card-actions"><button className="button tiny" onClick={() => previewAsset(asset)}><Eye size={13} />预览</button>{asset.kind === 'link' ? <a className="button tiny" href={asset.url} target="_blank" rel="noreferrer"><ExternalLink size={13} />打开</a> : <a className="button tiny" href={`/api/assets/${encodeURIComponent(asset.id)}/download`}><Download size={13} />下载</a>}<button className="button tiny primary" onClick={() => attachAsset(asset)}><Paperclip size={13} />用于对话</button><button className="icon-button danger" title="删除资产" onClick={() => deleteAsset(asset)}><Trash2 size={13} /></button></div></Panel>
-      })}</div> : <Panel className="empty-state"><FolderOpen size={25} /><h2>暂无资产</h2><p>添加链接，或在对话中使用附件后会自动出现在这里；Agent 生成文件也会自动登记。</p><button className="button primary" onClick={() => setLinkModal(true)}><Link2 size={14} />添加链接</button></Panel>}
-      {preview && <AssetPreviewModal asset={preview} onClose={() => setPreview(null)} onUse={() => attachAsset(preview)} />}
-      {linkModal && <AssetLinkModal onClose={() => setLinkModal(false)} onCreated={() => { setLinkModal(false); loadAssets(); notify('链接资产已添加') }} />}
-    </div>
-  )
-}
-
-const ASSET_PREVIEW_TEXT_EXTENSIONS = new Set(['txt', 'md', 'json', 'js', 'jsx', 'ts', 'tsx', 'css', 'html', 'xml', 'yaml', 'yml', 'csv', 'log', 'py', 'java', 'go', 'rs', 'sh', 'ps1', 'toml', 'sql'])
-
-function AssetPreviewModal({ asset, onClose, onUse }) {
-  const isVideo = asset.mimeType?.startsWith('video/')
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><section className="modal asset-preview-modal"><div className="card-head"><div><h2>{asset.name}</h2><p>{asset.kind === 'link' ? asset.url : `${asset.mimeType} · ${formatFileSize(asset.size)}`}</p></div><button className="icon-button" onClick={onClose}><X size={17} /></button></div><div className="asset-modal-content">{asset.kind === 'image' ? <img src={`/api/assets/${encodeURIComponent(asset.id)}/download?inline=1`} alt={asset.name} /> : isVideo ? <video controls src={`/api/assets/${encodeURIComponent(asset.id)}/download?inline=1`} /> : asset.kind === 'link' ? <a href={asset.url} target="_blank" rel="noreferrer"><ExternalLink size={16} />{asset.url}</a> : asset.text ? <pre>{asset.text}</pre> : <div className="asset-file-preview"><File size={42} /><strong>{asset.name}</strong><span>此类型可下载，支持的文档也可以直接加入对话分析。</span></div>}</div><div className="modal-actions">{asset.kind !== 'link' && <a className="button secondary" href={`/api/assets/${encodeURIComponent(asset.id)}/download`}><Download size={14} />下载</a>}<button className="button primary" onClick={onUse}><Paperclip size={14} />用于对话</button></div></section></div>
-}
-
-function AssetLinkModal({ onClose, onCreated }) {
-  const [name, setName] = useState('')
-  const [url, setUrl] = useState('')
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const submit = async (event) => {
-    event.preventDefault(); setSaving(true); setError('')
-    try { await apiJson('/api/assets', { method: 'POST', body: JSON.stringify({ kind: 'link', name, url, source: 'upload' }) }); onCreated() }
-    catch (caught) { setError(caught.message) } finally { setSaving(false) }
-  }
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal" onSubmit={submit}><div className="card-head"><div><h2>添加链接资产</h2><p>链接可以归档、打开，也可以作为上下文加入对话。</p></div><button type="button" className="icon-button" onClick={onClose}><X size={17} /></button></div><label className="field-label">名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如 OpenAI API 文档" /></label><label className="field-label">URL<input value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://example.com/docs" /></label>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>取消</button><button className="button primary" disabled={saving || !url.trim()}>{saving ? <RefreshCw className="spin" size={14} /> : <Plus size={14} />}{saving ? '添加中…' : '添加链接'}</button></div></form></div>
-}
-
-function configDraft(data, provider, preferredModel) {
-  const chatModels = provider?.models.filter((item) => item.kind === 'chat') || []
-  const model = chatModels.find((item) => item.id === preferredModel) || chatModels[0]
-  return {
-    provider: provider?.id || 'openai',
-    model: model?.id || '',
-    apiKey: '',
-    baseUrl: provider?.baseUrl || '',
-    modelBaseUrl: model?.baseUrlOverride || '',
-    organization: provider?.organization || '',
-    thinkingLevel: data.thinkingLevel || 'medium',
-    toolMode: data.toolMode || 'read-only',
-  }
-}
-
-function ConfigPage({ notify, createSignal, section, setSection, onBrowserNotificationChange, requestConfirm }) {
-  const [config, setConfig] = useState(null)
-  const [draft, setDraft] = useState(null)
-  const [saving, setSaving] = useState(false)
-  const [toggling, setToggling] = useState('')
-  const [error, setError] = useState('')
-  const [providerModal, setProviderModal] = useState(false)
-  const [modelModal, setModelModal] = useState(false)
-  const handledCreateSignal = useRef(createSignal)
-
-  useEffect(() => {
-    apiJson('/api/config')
-      .then((data) => {
-        setConfig(data)
-        const provider = data.providers.find((item) => item.id === data.provider) || data.providers[0]
-        setDraft(configDraft(data, provider, data.model))
-      })
-      .catch((caught) => setError(caught.message))
-  }, [])
-
-  useEffect(() => {
-    if (createSignal > handledCreateSignal.current) setProviderModal(true)
-    handledCreateSignal.current = createSignal
-  }, [createSignal])
-
-  const selectProvider = (provider) => {
-    setDraft((current) => ({ ...configDraft(config, provider), thinkingLevel: current.thinkingLevel, toolMode: current.toolMode }))
-  }
-
-  const selectModel = (modelId) => {
-    const provider = config.providers.find((item) => item.id === draft.provider)
-    const selectedModel = provider?.models.find((item) => item.id === modelId)
-    setDraft((current) => ({ ...current, model: modelId, modelBaseUrl: selectedModel?.baseUrlOverride || '' }))
-  }
-
-  const toggleProvider = async (provider, enabled) => {
-    setToggling(provider.id)
-    setError('')
-    try {
-      const updated = await apiJson(`/api/providers/${encodeURIComponent(provider.id)}/enabled`, { method: 'PUT', body: JSON.stringify({ enabled }) })
-      setConfig(updated)
-      notify(`${provider.name} 已${enabled ? '启用' : '停用'}`)
-    } catch (caught) {
-      setError(caught.message)
-    } finally {
-      setToggling('')
-    }
-  }
-
-  const deleteProvider = async (provider) => {
-    const approved = await requestConfirm({ title: '删除 Provider 连接', message: `确定删除「${provider.name}」吗？对应的模型配置和认证信息也会删除。`, confirmLabel: '删除' })
-    if (!approved) return
-    setError('')
-    try {
-      const updated = await apiJson(`/api/providers/${encodeURIComponent(provider.id)}`, { method: 'DELETE' })
-      setConfig(updated)
-      const nextProvider = updated.providers.find((item) => item.id === updated.provider) || updated.providers[0]
-      setDraft(configDraft(updated, nextProvider, updated.model))
-      notify('Provider 连接已删除')
-    } catch (caught) {
-      setError(caught.message)
-    }
-  }
-
-  const save = async () => {
-    setSaving(true)
-    setError('')
-    try {
-      const saved = await apiJson('/api/config', { method: 'PUT', body: JSON.stringify(draft) })
-      setConfig(saved)
-      const provider = saved.providers.find((item) => item.id === draft.provider) || saved.providers[0]
-      setDraft((current) => ({ ...configDraft(saved, provider, current.model), thinkingLevel: current.thinkingLevel, toolMode: current.toolMode }))
-      notify('Agent 配置已保存，新会话将使用该模型')
-    } catch (caught) {
-      setError(caught.message)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  if (!config || !draft) return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在加载模型目录</h2><p>读取 Provider 与认证状态…</p></Panel>
-  const selectedProvider = config.providers.find((item) => item.id === draft.provider) || config.providers[0]
-  const selectedModel = selectedProvider.models.find((item) => item.id === draft.model)
-  const chatModels = selectedProvider.models.filter((item) => item.kind === 'chat')
-  const visualModels = selectedProvider.models.filter((item) => item.kind !== 'chat')
-  const providerIcons = { openai: Bot, anthropic: Brain, google: Sparkles, deepseek: Code2, xai: Zap, openrouter: Network, 'kimi-coding': Sparkles, 'zai-coding-cn': Brain }
-  return (
-    <>
-    <div className="config-subnav"><button className={section === 'models' ? 'active' : ''} onClick={() => setSection('models')}>模型配置</button><button className={section === 'notifications' ? 'active' : ''} onClick={() => setSection('notifications')}>通知设置</button></div>
-    {section === 'notifications' ? <NotificationSettings notify={notify} onBrowserNotificationChange={onBrowserNotificationChange} /> : <>
-    <div className="split-list-detail config-layout">
-      <Panel className="selection-list"><div className="provider-list-heading"><SectionTitle title="Provider 连接" /><button className="icon-button" title="添加 Provider" onClick={() => setProviderModal(true)}><Plus size={15} /></button></div>{config.providers.map((provider) => { const Icon = providerIcons[provider.id] || Server; return <div className={`provider-list-item ${draft.provider === provider.id ? 'active' : ''} ${provider.enabled ? '' : 'disabled-provider'}`} key={provider.id}><button className="provider-select-main" onClick={() => selectProvider(provider)}><span className="list-icon"><Icon size={16} /></span><span><strong>{provider.name}</strong><small>{provider.id} · {provider.models.length} 个模型</small></span></button><div className="provider-list-control"><Badge tone={!provider.enabled ? 'gray' : provider.configured ? 'green' : 'amber'}>{!provider.enabled ? '已停用' : provider.configured ? '已配置' : '未认证'}</Badge><Toggle value={provider.enabled} disabled={!provider.configured || toggling === provider.id} onChange={(enabled) => toggleProvider(provider, enabled)} /></div></div> })}</Panel>
-      <div className="detail-stack">
-        <Panel>
-          <div className="card-head"><div><h2>{selectedProvider.name}</h2><p>{selectedProvider.id} · {selectedProvider.api} · 每个连接独立保存认证与地址</p></div><div className="provider-header-status"><Badge tone={!selectedProvider.enabled ? 'gray' : selectedProvider.configured ? 'green' : 'amber'}>{!selectedProvider.enabled ? '已停用' : selectedProvider.configured ? '认证可用' : '需要 API Key'}</Badge><Toggle value={selectedProvider.enabled} disabled={!selectedProvider.configured || toggling === selectedProvider.id} onChange={(enabled) => toggleProvider(selectedProvider, enabled)} />{selectedProvider.custom && <button className="icon-button danger" title="删除 Provider" onClick={() => deleteProvider(selectedProvider)}><Trash2 size={14} /></button>}</div></div>
-          <label className="field-label">API Key<span className="input-wrap"><input type="password" value={draft.apiKey} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} placeholder={selectedProvider.configured ? '已配置；留空将保持现有密钥' : '输入 Provider API Key'} /><KeyRound size={14} /></span></label>
-          <label className="field-label">Provider Base URL<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="此连接下模型默认使用的地址" /></label>
-          <label className="field-label">Organization<input value={draft.organization} onChange={(event) => setDraft({ ...draft, organization: event.target.value })} placeholder="可选，仅 OpenAI Organization 使用" /></label>
-          <div className="model-config-heading"><SectionTitle title="模型配置" /><button className="button secondary tiny" onClick={() => setModelModal(true)}><Plus size={13} />添加模型</button></div>
-          <label className="field-label">默认对话模型<span className="select-wrap"><select value={draft.model} onChange={(event) => selectModel(event.target.value)}>{chatModels.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select><ChevronDown size={13} /></span></label>
-          <label className="field-label">模型 Base URL<input value={draft.modelBaseUrl} onChange={(event) => setDraft({ ...draft, modelBaseUrl: event.target.value })} placeholder="可选；为当前模型覆盖 Provider Base URL" /></label>
-          <div className="tag-field"><Badge>{draft.provider}</Badge><Badge>{selectedModel?.reasoning ? '支持推理' : '标准模型'}</Badge><Badge tone="gray">{selectedModel?.contextWindow ? `${Math.round(selectedModel.contextWindow / 1000)}K context` : '自动上下文'}</Badge>{selectedModel?.baseUrlOverride && <Badge tone="amber">独立 Base URL</Badge>}</div>
-          {visualModels.length > 0 && <div className="visual-model-list"><span>视觉模型</span>{visualModels.map((model) => <Badge tone={model.kind === 'video' ? 'violet' : 'blue'} key={model.id}>{model.name} · {model.kind === 'video' ? '视频' : '图像'}</Badge>)}</div>}
-        </Panel>
-        <div className="config-bottom">
-          <Panel><SectionTitle title="Agent 运行策略" /><label className="field-label">思考强度<span className="select-wrap"><select value={draft.thinkingLevel} onChange={(event) => setDraft({ ...draft, thinkingLevel: event.target.value })}>{['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].map((level) => <option key={level}>{level}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">工具权限<span className="select-wrap"><select value={draft.toolMode} onChange={(event) => setDraft({ ...draft, toolMode: event.target.value })}><option value="read-only">只读：read / grep / find / ls</option><option value="workspace">工作区：允许 edit / write</option><option value="full">完整：允许 bash</option><option value="custom">自定义：在插件页逐项管理</option></select><ChevronDown size={13} /></span></label><div className="permission-note"><ShieldCheck size={16} /><span><strong>权限在服务端生效</strong><small>切换配置后，现有运行时会释放，新会话按最新策略创建。</small></span></div></Panel>
-          <Panel className="usage-card"><SectionTitle title="运行时状态" /><div className="usage-number"><span>Engine</span><strong>Pi 0.80</strong></div><div className="usage-number"><span>Provider</span><strong>{selectedProvider.name}</strong></div><div className="usage-number"><span>Models</span><strong>{selectedProvider.models.length}</strong></div><div className="usage-number"><span>状态</span><strong>{selectedProvider.enabled ? '启用' : '停用'}</strong></div>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}<button className="button primary wide" disabled={saving || !draft.model || !selectedProvider.enabled} onClick={save}>{saving ? <RefreshCw className="spin" size={14} /> : <Save size={14} />}{saving ? '保存中…' : selectedProvider.enabled ? '保存并设为默认' : '启用后可保存'}</button></Panel>
-        </div>
-      </div>
-    </div>
-    {providerModal && <ProviderConfigModal onClose={() => setProviderModal(false)} onCreated={(data) => { const provider = data.providers.find((item) => item.id === data.createdProviderId); setConfig(data); setDraft(configDraft(data, provider)); setProviderModal(false); notify('Provider 连接已创建') }} />}
-    {modelModal && <ProviderModelModal provider={selectedProvider} onClose={() => setModelModal(false)} onCreated={(data, modelId) => { const provider = data.providers.find((item) => item.id === selectedProvider.id); setConfig(data); setDraft((current) => ({ ...configDraft(data, provider, modelId), thinkingLevel: current.thinkingLevel, toolMode: current.toolMode })); setModelModal(false); notify('模型已添加') }} />}
-    </>}
-    </>
-  )
-}
-
-const PROVIDER_APIS = [
-  ['openai-responses', 'OpenAI Responses'],
-  ['openai-completions', 'OpenAI Chat Completions'],
-  ['anthropic-messages', 'Anthropic Messages'],
-  ['google-generative-ai', 'Google Generative AI'],
-]
-
-function ProviderConfigModal({ onClose, onCreated }) {
-  const [draft, setDraft] = useState({ name: '', id: '', api: 'openai-responses', baseUrl: '', apiKey: '', model: '', modelName: '', modelKind: 'auto', reasoning: true, enabled: true })
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const updateName = (name) => setDraft((current) => ({ ...current, name, id: current.id || name.toLowerCase().replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') }))
-  const submit = async (event) => {
-    event.preventDefault()
-    setSaving(true); setError('')
-    try {
-      onCreated(await apiJson('/api/providers', { method: 'POST', body: JSON.stringify(draft) }))
-    } catch (caught) { setError(caught.message) } finally { setSaving(false) }
-  }
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal provider-config-modal" onSubmit={submit}><div className="card-head"><div><h2>添加 Provider 连接</h2><p>同一种协议可创建多个连接，每个连接独立使用 Key 和 Base URL。</p></div><button type="button" className="icon-button" onClick={onClose}><X size={17} /></button></div><div className="form-grid"><label className="field-label">显示名称<input value={draft.name} onChange={(event) => updateName(event.target.value)} placeholder="例如 OpenAI 官方" /></label><label className="field-label">Provider ID<input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="openai-official" /></label></div><label className="field-label">API 协议<span className="select-wrap"><select value={draft.api} onChange={(event) => setDraft({ ...draft, api: event.target.value })}>{PROVIDER_APIS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">Base URL<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://api.openai.com/v1" /></label><label className="field-label">API Key<input type="password" value={draft.apiKey} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} placeholder="输入此连接使用的 API Key" /></label><div className="form-grid"><label className="field-label">初始模型 ID<input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} placeholder="gpt-5.4 或 gpt-image-1" /></label><label className="field-label">模型名称<input value={draft.modelName} onChange={(event) => setDraft({ ...draft, modelName: event.target.value })} placeholder="留空使用模型 ID" /></label></div><label className="field-label">模型用途<span className="select-wrap"><select value={draft.modelKind} onChange={(event) => setDraft({ ...draft, modelKind: event.target.value })}><option value="auto">自动识别</option><option value="chat">对话</option><option value="image">图像生成</option><option value="video">视频生成</option></select><ChevronDown size={13} /></span></label><div className="modal-toggle-row"><span><strong>创建后启用</strong><small>视觉模型由视觉生成工具自动选择，不会进入对话模型列表</small></span><Toggle value={draft.enabled} onChange={(enabled) => setDraft({ ...draft, enabled })} /></div>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>取消</button><button className="button primary" disabled={saving}>{saving ? <RefreshCw className="spin" size={14} /> : <Plus size={14} />}{saving ? '创建中…' : '创建连接'}</button></div></form></div>
-}
-
-function ProviderModelModal({ provider, onClose, onCreated }) {
-  const [draft, setDraft] = useState({ id: '', name: '', api: provider.api || 'openai-responses', baseUrl: '', kind: 'auto', reasoning: true })
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const submit = async (event) => {
-    event.preventDefault(); setSaving(true); setError('')
-    try {
-      const data = await apiJson(`/api/providers/${encodeURIComponent(provider.id)}/models`, { method: 'POST', body: JSON.stringify(draft) })
-      onCreated(data, draft.id)
-    } catch (caught) { setError(caught.message) } finally { setSaving(false) }
-  }
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal" onSubmit={submit}><div className="card-head"><div><h2>添加模型</h2><p>添加到 {provider.name}，可单独覆盖 Base URL。</p></div><button type="button" className="icon-button" onClick={onClose}><X size={17} /></button></div><div className="form-grid"><label className="field-label">模型 ID<input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="gpt-5.4-mini、gpt-image-1 或 sora-2" /></label><label className="field-label">显示名称<input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="留空使用模型 ID" /></label></div><label className="field-label">模型 Base URL<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="可选；留空继承 Provider Base URL" /></label><label className="field-label">API 协议<span className="select-wrap"><select value={draft.api} onChange={(event) => setDraft({ ...draft, api: event.target.value })}>{PROVIDER_APIS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">模型用途<span className="select-wrap"><select value={draft.kind} onChange={(event) => setDraft({ ...draft, kind: event.target.value })}><option value="auto">自动识别</option><option value="chat">对话</option><option value="image">图像生成</option><option value="video">视频生成</option></select><ChevronDown size={13} /></span></label>{draft.kind !== 'image' && draft.kind !== 'video' && <div className="modal-toggle-row"><span><strong>推理模型</strong><small>启用 reasoning effort / thinking level</small></span><Toggle value={draft.reasoning} onChange={(reasoning) => setDraft({ ...draft, reasoning })} /></div>}{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>取消</button><button className="button primary" disabled={saving || !draft.id.trim()}>{saving ? <RefreshCw className="spin" size={14} /> : <Plus size={14} />}{saving ? '添加中…' : '添加模型'}</button></div></form></div>
-}
-
-function McpPage({ notify }) {
-  const services = [['Pencil', 'mcp.pencil.local', '在线', 'green'], ['Filesystem', 'stdio://filesystem', '在线', 'green'], ['GitHub', 'https://mcp.github.com', '离线', 'red'], ['Browser', 'stdio://browser', '受限', 'amber'], ['Hermes Docs', 'https://mcp.hermesagent.org.cn/v1', '在线', 'green'], ['Database', 'stdio://postgres', '未授权', 'gray']]
-  const [selected, setSelected] = useState(0)
-  return (
-    <div className="preview-page"><PreviewNotice>MCP 页面当前展示的是交互原型数据，尚未连接真实服务状态。</PreviewNotice><div className="mcp-layout"><Panel className="selection-list"><SectionTitle title="服务" />{services.map((s, i) => <button className={`service-row ${selected === i ? 'active' : ''}`} onClick={() => setSelected(i)} key={s[0]}><span className="list-icon"><Server size={15} /></span><span><strong>{s[0]}</strong><small>{s[1]}</small></span><Badge tone={s[3]}>{s[2]}</Badge></button>)}</Panel><div className="mcp-center"><div className="metric-grid"><Metric value="6" label="在线服务" note="8 total" tone="blue" /><Metric value="38" label="可用工具" note="5 restricted" tone="green" /><Metric value="0.8%" label="错误率" note="24h" tone="amber" /></div><Panel><SectionTitle title="工具能力" />{toolRows.map((r) => <div className="tool-row" key={r[0]}><span className="list-icon"><Wrench size={15} /></span><span><strong>{r[0]}</strong><small>{r[1]}</small></span><Badge tone={r[2] === '高风险' ? 'red' : r[2] === '中风险' ? 'amber' : 'green'}>{r[2]}</Badge><Toggle defaultOn={r[3]} /></div>)}</Panel></div><div className="detail-stack"><Panel><SectionTitle title="当前服务" /><h2>{services[selected][0]}</h2><p className="muted-copy">用于读取、生成和验证 .pen 设计文件。当前连接稳定，允许设计编辑工具。</p>{[['Transport', 'Streamable HTTP'], ['Latency', '42 ms'], ['Last Ping', '12 seconds ago'], ['Auth', 'Local session']].map((r) => <div className="key-value" key={r[0]}><span>{r[0]}</span><strong>{r[1]}</strong></div>)}<button className="button secondary wide" onClick={() => notify('演示页面尚未连接真实 MCP 服务', 'info')}><RefreshCw size={14} />测试连接</button></Panel><Panel><SectionTitle title="最近调用" />{[['snapshot_layout', '14:28 · OK'], ['batch_design', '14:26 · OK'], ['get_screenshot', '14:22 · OK'], ['export_html', '14:18 · Skipped']].map((a) => <div className="activity-row" key={a[0]}><CircleDot size={14} /><span><strong>{a[0]}</strong><small>{a[1]}</small></span></div>)}</Panel></div></div></div>
-  )
-}
-
-function SkillsPage({ notify }) {
-  const [selected, setSelected] = useState(0)
-  const [enabled, setEnabled] = useState(skillInstalled.map((x) => x[3]))
-  return (
-    <div className="skills-page"><PreviewNotice>Skills 页面当前展示的是交互原型，安装数量和市场内容不是实时数据。</PreviewNotice><Segmented options={['全部', '已安装', '可安装', '设计', '代码', '文档', '高权限']} value="全部" onChange={() => {}} /><div className="skills-layout"><Panel><SectionTitle title="已安装技能" />{skillInstalled.map((s, i) => { const Icon = s[2]; return <button className={`skill-row ${selected === i ? 'selected' : ''}`} onClick={() => setSelected(i)} key={s[0]}><span className="list-icon"><Icon size={15} /></span><span><strong>{s[0]}</strong><small>{s[1]}</small></span><Toggle value={enabled[i]} onChange={() => setEnabled(enabled.map((e, x) => x === i ? !e : e))} /></button>})}</Panel><Panel><div className="card-head"><SectionTitle title="技能市场" /><a>18 available</a></div>{[['browser-research', '网页调研、引用整理与资料归档', 'Research'], ['figma-import', '同步 Figma 组件并生成设计 token', 'Design'], ['db-admin', '读取 schema、生成安全 SQL 草案', 'Data'], ['release-writer', '根据 commits 生成 changelog 和发布说明', '已安装'], ['test-author', '为变更生成 focused tests', 'Code'], ['prompt-auditor', '检查系统 prompt 漏洞和冲突', 'Safety']].map((s) => <div className="market-row" key={s[0]}><span className="list-icon"><Sparkles size={15} /></span><span><strong>{s[0]}</strong><small>{s[1]}</small></span><Badge tone={s[2] === '已安装' ? 'green' : 'blue'}>{s[2]}</Badge></div>)}</Panel><div className="detail-stack"><Panel><SectionTitle title="选中技能" /><h2>{skillInstalled[selected][0]}</h2><p className="muted-copy">当任务需要 AI 生成位图、编辑图片、做贴图或视觉素材时自动触发。</p>{[['触发方式', '自动 + 手动'], ['权限', '生成图片'], ['版本', 'system / latest'], ['来源', '内置技能']].map((r) => <div className="key-value" key={r[0]}><span>{r[0]}</span><strong>{r[1]}</strong></div>)}<button className="button primary wide" onClick={() => notify('演示页面尚未接入技能运行时', 'info')}><Save size={14} />保存设置</button></Panel><Panel><SectionTitle title="触发条件" />{['请求生成图片', '编辑已有图片', '需要 SVG 图标', '仅文本解释'].map((x, i) => <label className="check-row" key={x}><input type="checkbox" defaultChecked={i < 2} /><span>{x}</span></label>)}</Panel></div></div></div>
-  )
-}
-
-function WorkflowsPage({ navigate, notify }) {
-  const templates = [['代码审查', '读取 diff → 运行测试 → 生成 review', Code2], ['PR 修复', '定位失败 → 修改代码 → 回归测试', GitBranch], ['资料调研', '搜索资料 → 提取引用 → 写入记忆', Search], ['日报周报', '汇总会话 → 生成摘要 → 渠道通知', File], ['资产生成', '生成图片 → 存入资产库 → 通知验收', Image], ['发布准备', '版本检查 → changelog → 创建发布单', Rocket]]
-  return (
-    <div className="workflows-page"><PreviewNotice>Workflows 页面当前是产品原型，运行数、队列和进度均为演示数据。</PreviewNotice><Segmented options={['全部', '预设', '自定义', '运行中', '失败', '草稿']} value="全部" onChange={() => {}} /><div className="workflow-top"><Panel><div className="card-head"><SectionTitle title="常见预设" /><a>6 templates</a></div><div className="template-grid">{templates.map((t) => { const Icon = t[2]; return <button onClick={() => { navigate('workflowCreate'); notify(`已载入「${t[0]}」演示模板`, 'info') }} key={t[0]}><span className="list-icon"><Icon size={15} /></span><span><strong>{t[0]}</strong><small>{t[1]}</small></span><ChevronRight size={14} /></button>})}</div></Panel><Panel className="workflow-preview"><div className="card-head"><SectionTitle title="自定义工作流" /><button className="text-button" onClick={() => navigate('workflowCreate')}>空白创建</button></div><WorkflowMiniMap /></Panel></div><div className="workflow-bottom"><Panel><div className="card-head"><SectionTitle title="并行运行" /><a>3 running · 5 queued</a></div>{[['PR 修复 #284', '回归测试', 72, 'blue'], ['资料调研：MCP Auth', '整理引用', 46, 'violet'], ['资产生成：活动页', '等待验收', 88, 'green'], ['发布准备 v2.8', '生成 changelog', 31, 'amber']].map((r) => <div className="run-row" key={r[0]}><span><strong>{r[0]}</strong><small>{r[1]}</small></span><div className="run-progress"><i className={r[3]} style={{ width: `${r[2]}%` }} /></div><em>{r[2]}%</em><button onClick={() => notify('演示任务没有真实运行实例', 'info')}><Square size={12} />停止</button></div>)}</Panel><Panel><SectionTitle title="队列与限制" />{[['最大并发', '4', '当前 3 个运行'], ['失败重试', '2 次', '指数退避'], ['默认模型', 'GPT-5-Codex', '可按步骤覆盖'], ['完成推送', '已启用', '工作流结束后发送模板消息']].map((r) => <div className="setting-row" key={r[0]}><span><strong>{r[0]}</strong><small>{r[2]}</small></span><button>{r[1]} <ChevronDown size={12} /></button></div>)}</Panel></div></div>
-  )
-}
-
-function WorkflowBuilder({ notify }) {
-  const canvasRef = useRef(null)
-  const [nodes, setNodes] = useState([
-    { id: 1, label: 'Git push', type: '触发器', x: 65, y: 45 }, { id: 2, label: '读取 diff', type: '任务', x: 235, y: 45 },
-    { id: 3, label: '是否需要测试', type: '判断', x: 405, y: 45 }, { id: 4, label: '测试 + lint', type: '并行', x: 235, y: 160 },
-    { id: 5, label: '生成修复计划', type: '任务', x: 405, y: 160 }, { id: 6, label: '修改代码', type: '任务', x: 235, y: 280 },
-    { id: 7, label: '人工确认', type: '审批', x: 405, y: 280 }, { id: 8, label: '发送结果', type: '通知', x: 320, y: 385 },
-  ])
-  const [selected, setSelected] = useState(6)
-  const palette = [['Git Push', Zap], ['定时', Clock3], ['手动输入', Pencil], ['运行 Prompt', Bot], ['读写文件', FileCode2], ['调用 MCP', Server], ['发送通知', Bell], ['条件判断', GitBranch], ['并行分支', Network], ['等待审批', ShieldCheck]]
-  const drop = (e) => {
-    e.preventDefault()
-    const data = JSON.parse(e.dataTransfer.getData('text/plain') || '{}')
-    const box = canvasRef.current.getBoundingClientRect()
-    const x = Math.max(10, e.clientX - box.left - 60)
-    const y = Math.max(10, e.clientY - box.top - 25)
-    if (data.id) setNodes(nodes.map((n) => n.id === data.id ? { ...n, x, y } : n))
-    else if (data.label) { const id = Date.now(); setNodes([...nodes, { id, label: data.label, type: '节点', x, y }]); setSelected(id) }
-  }
-  const current = nodes.find((n) => n.id === selected) || nodes[0]
-  return (
-    <div className="preview-page"><PreviewNotice>工作流编辑器当前仅用于交互预览，发布和试运行不会启动真实工作流。</PreviewNotice><div className="builder-layout"><Panel className="node-library"><SectionTitle title="节点库" />{palette.map(([label, Icon], i) => <div key={label}><small>{[0, 3, 7].includes(i) ? ['触发', '动作', '控制'][[0, 3, 7].indexOf(i)] : ''}</small><button draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', JSON.stringify({ label }))}><Icon size={15} />{label}<span>拖拽</span></button></div>)}</Panel><Panel className="builder-canvas" ref={canvasRef} onDragOver={(e) => e.preventDefault()} onDrop={drop}><div className="canvas-tools"><button><Plus size={14} /></button><button>−</button><button><Grid2X2 size={13} /></button></div><svg viewBox="0 0 620 520"><path d="M125 70 H235 M355 70 H405 M465 95 L465 160 M405 185 H355 M295 210 V280 M355 305 H405 M465 330 L380 385 M295 330 L320 385" /></svg>{nodes.map((n) => <button draggable onDragStart={(e) => e.dataTransfer.setData('text/plain', JSON.stringify({ id: n.id }))} onClick={() => setSelected(n.id)} className={`flow-node ${selected === n.id ? 'active' : ''} type-${n.type}`} style={{ left: n.x, top: n.y }} key={n.id}><small>{n.type}</small><strong>{n.label}</strong></button>)}</Panel><div className="detail-stack inspector"><Panel><SectionTitle title="完成后通知" /><div className="toggle-line"><span><MessageSquare size={15} />微信研发群</span><Toggle defaultOn /></div><div className="toggle-line"><span><Send size={15} />飞书 On-call</span><Toggle defaultOn /></div><label className="field-label">模板<textarea defaultValue="{{workflow.name}} 已完成，耗时 {{duration}}，产物 {{asset.count}} 个。" /></label></Panel><Panel><SectionTitle title="选中节点" /><h2>{current.label}</h2><p className="muted-copy">配置该步骤使用的模型、插件权限、输入输出和失败处理。</p><SelectLabel label="模型" options={['GPT-5-Codex', 'GPT-5', 'DeepSeek']} /><InputLabel label="插件" value="Read, Write, Grep" /><InputLabel label="超时" value="20 分钟" /><SelectLabel label="失败处理" options={['重试 2 次', '立即停止', '跳过']} /><label className="field-label">Prompt<textarea defaultValue="根据测试结果和 diff 修改代码，保留用户已有改动，不执行破坏性命令。" /></label><div className="button-row"><button className="button secondary" onClick={() => { const id = Date.now(); setNodes([...nodes, { ...current, id, x: current.x + 25, y: current.y + 25 }]); notify('节点已复制', 'info') }}><Copy size={14} />复制节点</button><button className="button danger" onClick={() => { setNodes(nodes.filter((n) => n.id !== selected)); setSelected(nodes[0]?.id); notify('节点已删除', 'info') }}><Trash2 size={14} />删除节点</button></div></Panel></div></div></div>
   )
 }
 
@@ -1256,15 +945,8 @@ function QuickCreate({ type, close, notify }) {
   return <div className="modal-backdrop" onMouseDown={close}><form className="modal" onMouseDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); notify(`${titles[type]}成功`); close() }}><div className="card-head"><div><h2>{titles[type]}</h2><p>填写基本信息后即可继续配置。</p></div><button type="button" className="icon-button" onClick={close}><X size={17} /></button></div><InputLabel label="名称" value="" placeholder="输入名称" /><InputLabel label="描述" value="" placeholder="补充简短描述" /><SelectLabel label="类型" options={['默认', '自定义', '从模板创建']} /><div className="modal-actions"><button type="button" className="button secondary" onClick={close}>取消</button><button className="button primary"><Plus size={14} />确认创建</button></div></form></div>
 }
 
-function WorkflowMiniMap() {
-  return <div className="workflow-mini-map"><svg viewBox="0 0 520 170"><path d="M90 85 H190 M250 85 H330 M390 85 H460 M220 110 V142 H330" /></svg>{[['触发器', 'Git push'], ['任务', '运行测试'], ['判断', '测试通过?'], ['任务', '生成报告'], ['通知', '飞书 + 微信']].map((n, i) => <span className={`mini-node mn-${i}`} key={n[1]}><small>{n[0]}</small><strong>{n[1]}</strong></span>)}</div>
-}
-
 function MarkdownMessage({ children }) {
-  return <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{
-    a: ({ children: label, ...props }) => <a {...props} target="_blank" rel="noreferrer">{label}</a>,
-    code: ({ children: code, className, ...props }) => <code className={className || ''} {...props}>{code}</code>,
-  }}>{children}</ReactMarkdown></div>
+  return <Suspense fallback={<div className="markdown-body markdown-loading">{children}</div>}><LazyMarkdownMessage>{children}</LazyMarkdownMessage></Suspense>
 }
 
 function AttachmentTray({ attachments, onRemove, compact = false }) {

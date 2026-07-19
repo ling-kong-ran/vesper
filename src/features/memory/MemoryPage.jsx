@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, FileCode2, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { Panel, SectionTitle } from '../../components/ui.jsx'
 import { apiJson } from '../../lib/api.js'
+import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
 
 const GRAPH_POINTS = [
   [300, 202], [138, 104], [465, 103], [150, 322], [470, 315], [300, 62], [65, 230], [540, 220],
@@ -17,7 +18,7 @@ function graphNodes(nodes, selectedId) {
   return ordered.slice(0, GRAPH_POINTS.length)
 }
 
-export function MemoryPage({ notify, query, createSignal, requestConfirm }) {
+export function MemoryPage({ notify, query, registerPrimaryAction, requestConfirm }) {
   const [data, setData] = useState({ spaces: [], nodes: [], links: [], selectedSpaceId: '' })
   const [spaceId, setSpaceId] = useState('')
   const [selectedId, setSelectedId] = useState('')
@@ -26,7 +27,7 @@ export function MemoryPage({ notify, query, createSignal, requestConfirm }) {
   const [zoom, setZoom] = useState(1)
   const [nodeModal, setNodeModal] = useState(null)
   const [spaceModal, setSpaceModal] = useState(null)
-  const handledCreateSignal = useRef(createSignal)
+  usePagePrimaryAction(registerPrimaryAction, () => setNodeModal({ spaceId: spaceId || data.selectedSpaceId }))
 
   const load = useCallback(async (requestedSpaceId = '') => {
     setLoading(true)
@@ -47,12 +48,6 @@ export function MemoryPage({ notify, query, createSignal, requestConfirm }) {
   }, [query])
 
   useEffect(() => { load(spaceId) }, [load, spaceId])
-
-  useEffect(() => {
-    if (!createSignal || createSignal === handledCreateSignal.current) return
-    handledCreateSignal.current = createSignal
-    setNodeModal({ spaceId: spaceId || data.selectedSpaceId })
-  }, [createSignal, data.selectedSpaceId, spaceId])
 
   const selected = data.nodes.find((node) => node.id === selectedId) || null
   const visibleNodes = useMemo(() => graphNodes(data.nodes, selectedId), [data.nodes, selectedId])

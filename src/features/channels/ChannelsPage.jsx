@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Bot, CheckCircle2, ChevronDown, ExternalLink, FolderOpen, MessageCircle, MessageSquare, Plus, RefreshCw, ShieldCheck, Trash2, Unplug, X, Zap } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Toggle } from '../../components/ui.jsx'
 import { apiJson } from '../../lib/api.js'
 import { relativeTime } from '../../lib/format.js'
+import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
 
 const PROVIDERS = {
   feishu: { name: '飞书', title: '飞书应用机器人', Icon: Bot, tone: 'blue', transport: 'WebSocket 长连接', capability: '私聊、群聊 @、图片和文件' },
@@ -18,7 +19,7 @@ function expiresIn(value) {
   return seconds >= 60 ? `${Math.ceil(seconds / 60)} 分钟后` : `${seconds} 秒后`
 }
 
-export function ChannelsPage({ notify, createSignal, requestConfirm }) {
+export function ChannelsPage({ notify, registerPrimaryAction, requestConfirm }) {
   const [data, setData] = useState({ providers: [], connections: {}, scopes: [], models: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -27,7 +28,6 @@ export function ChannelsPage({ notify, createSignal, requestConfirm }) {
   const [starting, setStarting] = useState('')
   const [saving, setSaving] = useState(false)
   const [cwd, setCwd] = useState('')
-  const handledCreateSignal = useRef(createSignal)
 
   const load = useCallback(async () => {
     try {
@@ -40,7 +40,6 @@ export function ChannelsPage({ notify, createSignal, requestConfirm }) {
   }, [selectedPlatform])
 
   useEffect(() => { load() }, [load])
-  useEffect(() => { if (createSignal > handledCreateSignal.current) beginOnboarding(selectedPlatform); handledCreateSignal.current = createSignal }, [createSignal]) // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!onboarding?.id || ['completed', 'failed', 'cancelled'].includes(onboarding.status)) return undefined
     const timer = window.setInterval(async () => {
@@ -74,6 +73,8 @@ export function ChannelsPage({ notify, createSignal, requestConfirm }) {
     } catch (caught) { setOnboarding({ platform, status: 'failed', error: caught.message }) }
     finally { setStarting('') }
   }
+
+  usePagePrimaryAction(registerPrimaryAction, () => beginOnboarding(selectedPlatform))
 
   const closeOnboarding = async () => {
     if (onboarding?.id && !['completed', 'failed', 'cancelled'].includes(onboarding.status)) await apiJson(`/api/channels/${onboarding.platform}/onboarding/${encodeURIComponent(onboarding.id)}`, { method: 'DELETE' }).catch(() => {})

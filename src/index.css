@@ -2,7 +2,7 @@
 
 :root {
   color-scheme: light;
-  font-family: Inter, "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: var(--text);
   background: var(--bg);
   font-synthesis: none;
@@ -91,6 +91,14 @@
   --ink-strong: #111827;
   --code-text: #e5edf7;
   --code-inline-bg: rgba(15, 23, 42, .08);
+  --code-toolbar-bg: rgba(15, 23, 42, .72);
+  --code-toolbar-border: #243147;
+  --code-toolbar-text: #cbd5e1;
+  --code-keyword: #c084fc;
+  --code-string: #86efac;
+  --code-title: #7dd3fc;
+  --code-number: #fbbf24;
+  --code-comment: #94a3b8;
   --status-blue: #3b82f6;
   --status-green: #22c55e;
   --status-muted: #94a3b8;
@@ -188,6 +196,14 @@
     --ink-strong: #020617;
     --code-text: #e2e8f0;
     --code-inline-bg: rgba(255, 255, 255, .1);
+    --code-toolbar-bg: rgba(2, 6, 23, .72);
+    --code-toolbar-border: #334155;
+    --code-toolbar-text: #cbd5e1;
+    --code-keyword: #d8b4fe;
+    --code-string: #86efac;
+    --code-title: #7dd3fc;
+    --code-number: #fcd34d;
+    --code-comment: #94a3b8;
     --status-blue: #60a5fa;
     --status-green: #4ade80;
     --status-muted: #94a3b8;
@@ -416,6 +432,20 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .markdown-body th { background: var(--surface-highlight); font-weight: 700; }
 .markdown-body hr { margin: .8em 0; border: 0; border-top: 1px solid var(--control-muted); }
 .markdown-body img { max-width: 100%; border-radius: 7px; }
+.markdown-loading { white-space: pre-wrap; }
+.code-block { overflow: hidden; margin: .65em 0; border: 1px solid var(--code-border); border-radius: 8px; background: var(--ink-strong); }
+.code-block-toolbar { display: flex; min-height: 34px; align-items: center; justify-content: space-between; gap: 8px; border-bottom: 1px solid var(--code-toolbar-border); background: var(--code-toolbar-bg); padding: 0 8px 0 10px; color: var(--code-toolbar-text); font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; font-size: 11px; text-transform: lowercase; }
+.code-block-toolbar button { display: inline-flex; min-height: 32px; align-items: center; gap: 5px; border: 0; border-radius: 6px; background: transparent; color: inherit; padding: 0 7px; font-size: 11px; font-weight: 700; }
+.code-block-toolbar button:hover { background: var(--surface-highlight); color: var(--on-ink); }
+.code-block pre { max-width: none; overflow: auto; margin: 0; border: 0; border-radius: 0; background: transparent; padding: 10px; }
+.code-block code { display: block; min-width: max-content; background: transparent; color: var(--code-text); }
+.code-block .hljs-comment,.code-block .hljs-quote { color: var(--code-comment); }
+.code-block .hljs-keyword,.code-block .hljs-selector-tag,.code-block .hljs-literal { color: var(--code-keyword); }
+.code-block .hljs-string,.code-block .hljs-doctag,.code-block .hljs-regexp { color: var(--code-string); }
+.code-block .hljs-title,.code-block .hljs-title.class_,.code-block .hljs-title.function_ { color: var(--code-title); }
+.code-block .hljs-number,.code-block .hljs-attribute,.code-block .hljs-symbol { color: var(--code-number); }
+.code-block .hljs-built_in,.code-block .hljs-type,.code-block .hljs-variable,.code-block .hljs-params { color: var(--code-toolbar-text); }
+.jump-to-latest { align-self: center; flex: none; min-height: 32px; margin: -2px auto 6px; border-color: var(--accent-border); color: var(--blue); box-shadow: 0 8px 18px -14px var(--shadow); }
 .empty-state { display: grid; grid-column: 1/-1; min-height: 300px; place-content: center; justify-items: center; color: var(--muted); }
 .empty-state h2 { margin-top: 10px; color: var(--text); }
 .empty-state p { margin-top: 5px; font-size: 13px; }
