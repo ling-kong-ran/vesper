@@ -51,16 +51,6 @@ function publicScope(key, scope) {
   }
 }
 
-function migrateLegacyBrandNames(state) {
-  let changed = false
-  for (const connection of Object.values(state.connections || {})) {
-    if (connection?.name !== 'Pi Coder Agent') continue
-    connection.name = 'Vesper Agent'
-    changed = true
-  }
-  return changed
-}
-
 function normalizeState(stored) {
   if (stored?.version === 3) return {
     version: 3,
@@ -105,8 +95,7 @@ export class ChannelService {
     const stored = await readJson(this.path, defaultState())
     this.state = normalizeState(stored)
     const hasLegacyTemplateTargets = Object.values(stored?.templates || {}).some((template) => Object.values(template?.channels || {}).some((variant) => Object.hasOwn(variant || {}, 'targets')))
-    const hasLegacyBrandName = migrateLegacyBrandNames(this.state)
-    if (stored?.version !== 3 || hasLegacyTemplateTargets || hasLegacyBrandName) await this.save()
+    if (stored?.version !== 3 || hasLegacyTemplateTargets) await this.save()
     for (const platform of PLATFORMS) {
       const connection = this.state.connections[platform]
       if (connection && connection.enabled !== false) void this.connect(platform).catch(() => {})

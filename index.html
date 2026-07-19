@@ -7,14 +7,6 @@
     <title>Vesper</title>
     <script>
       try {
-        for (const suffix of ['theme', 'chat-mode', 'active-session', 'tiled-sessions']) {
-          const legacyKey = `pi-coder-${suffix}`
-          const key = `vesper-${suffix}`
-          const legacyValue = localStorage.getItem(legacyKey)
-          if (legacyValue === null) continue
-          if (localStorage.getItem(key) === null) localStorage.setItem(key, legacyValue)
-          localStorage.removeItem(legacyKey)
-        }
         const stored = localStorage.getItem('vesper-theme')
         const dark = stored === 'dark' || (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
         document.documentElement.dataset.theme = dark ? 'dark' : 'light'

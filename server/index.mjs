@@ -6,7 +6,6 @@ import { createServer as createViteServer } from 'vite'
 import { createApiHandler } from './http/api-handler.mjs'
 import { createStaticHandler } from './http/static-handler.mjs'
 import { AgentRuntimeService } from './runtime/agent-runtime.mjs'
-import { VESPER_CONFIG_DIR, migrateLegacyAppDataEntries, migrateLegacyUserDirectory } from './storage/vesper-migration.mjs'
 
 process.env.PI_SKIP_VERSION_CHECK ||= '1'
 process.env.PI_TELEMETRY ||= '0'
@@ -14,17 +13,10 @@ process.env.PI_TELEMETRY ||= '0'
 const serverDir = dirname(fileURLToPath(import.meta.url))
 const root = resolve(serverDir, '..')
 const configuredDataDir = process.env.VESPER_AGENT_DIR
-const defaultDataDir = join(homedir(), VESPER_CONFIG_DIR, 'agent')
-if (!configuredDataDir) {
-  const migration = await migrateLegacyUserDirectory()
-  if (migration.copied) console.log(`Copied legacy user data to ${migration.target}`)
-}
-const dataDir = configuredDataDir ? resolve(configuredDataDir) : defaultDataDir
+const dataDir = configuredDataDir ? resolve(configuredDataDir) : join(homedir(), '.vesper', 'agent')
 // The bundled Pi runtime reads this environment variable internally. Keep it
 // scoped to this process while directing all of Vesper's data to .vesper.
 process.env.PI_CODING_AGENT_DIR = dataDir
-const migratedEntries = await migrateLegacyAppDataEntries(dataDir)
-if (migratedEntries.length) console.log(`Renamed ${migratedEntries.length} legacy Vesper data entries`)
 const production = process.argv.includes('--production')
 const port = Number(process.env.PORT || 5173)
 const host = process.env.HOST || '127.0.0.1'
