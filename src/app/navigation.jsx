@@ -9,7 +9,7 @@ export const NAV_GROUPS = [
   ]],
   ['能力', [
     ['plugins', '插件', Plug],
-    ['memory', '记忆', Brain],
+    ['memory', '星忆', Brain],
     ['mcp', 'MCP', Server],
     ['skills', '技能', Sparkles],
     ['workflows', '工作流', Workflow],
@@ -29,7 +29,7 @@ export const PAGE_META = {
   schedules: ['定时任务', '周期性 prompt 自动执行'],
   config: ['配置', '模型、运行参数与通知设置'],
   plugins: ['插件', '控制 agent 可使用的工具与插件权限'],
-  memory: ['记忆', 'Wiki 可视化图谱与节点文件管理'],
+  memory: ['星忆', '让思考、文件与决策在星图中持续闪耀'],
   mcp: ['MCP', 'MCP 服务、工具能力与连接健康管理'],
   skills: ['技能', '技能安装、启用与触发条件管理'],
   workflows: ['工作流', '预设流程、自定义编排与多工作流并行运行'],

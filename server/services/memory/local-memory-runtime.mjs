@@ -143,7 +143,7 @@ export class LocalMemoryRuntime {
     if (existing) return 'global'
     const now = new Date().toISOString()
     db.prepare('INSERT INTO memory_spaces (id, name, kind, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .run('global', '用户记忆', 'global', '', now, now)
+      .run('global', '全局星域', 'global', '', now, now)
     return 'global'
   }
 
@@ -172,7 +172,7 @@ export class LocalMemoryRuntime {
 
   createSpace(input = {}) {
     const name = cleanText(input.name, 80)
-    if (!name) throw new Error('记忆空间名称不能为空。')
+    if (!name) throw new Error('星域名称不能为空。')
     const kind = MEMORY_SCOPES.has(input.kind) ? input.kind : 'custom'
     const rootPath = kind === 'project' && input.rootPath ? resolve(String(input.rootPath)) : ''
     const id = randomUUID()
@@ -181,7 +181,7 @@ export class LocalMemoryRuntime {
       this.requireDb().prepare('INSERT INTO memory_spaces (id, name, kind, root_path, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)')
         .run(id, name, kind, rootPath, now, now)
     } catch (error) {
-      if (String(error).includes('UNIQUE')) throw new Error('该工作目录已经存在记忆空间。')
+      if (String(error).includes('UNIQUE')) throw new Error('该工作目录已经存在星域。')
       throw error
     }
     return this.getSpace(id)
@@ -200,7 +200,7 @@ export class LocalMemoryRuntime {
     const current = this.getSpace(id)
     if (!current) return null
     const name = cleanText(input.name ?? current.name, 80)
-    if (!name) throw new Error('记忆空间名称不能为空。')
+    if (!name) throw new Error('星域名称不能为空。')
     const now = new Date().toISOString()
     this.requireDb().prepare('UPDATE memory_spaces SET name = ?, updated_at = ? WHERE id = ?').run(name, now, id)
     return this.getSpace(id)
@@ -209,7 +209,7 @@ export class LocalMemoryRuntime {
   deleteSpace(id) {
     const space = this.getSpace(id)
     if (!space) return false
-    if (space.kind === 'global') throw new Error('用户记忆空间不能删除。')
+    if (space.kind === 'global') throw new Error('全局星域不能删除。')
     return this.requireDb().prepare('DELETE FROM memory_spaces WHERE id = ?').run(id).changes > 0
   }
 
@@ -267,9 +267,9 @@ export class LocalMemoryRuntime {
     const db = this.requireDb()
     const title = redactSecrets(cleanText(input.title, 140))
     const content = redactSecrets(cleanText(input.content, 12_000))
-    if (!title || !content) throw new Error('记忆标题和内容不能为空。')
+    if (!title || !content) throw new Error('星辰名称和星忆内容不能为空。')
     const spaceId = String(input.spaceId || '')
-    if (!this.getSpace(spaceId)) throw new Error('记忆空间不存在。')
+    if (!this.getSpace(spaceId)) throw new Error('星域不存在。')
     const type = MEMORY_TYPES.has(input.type) ? input.type : 'concept'
     const importance = Math.min(1, Math.max(0, Number(input.importance ?? 0.5)))
     const vector = localEmbedding(`${title}\n${content}`)
@@ -312,10 +312,10 @@ export class LocalMemoryRuntime {
     const current = this.getMemory(id)
     if (!current) return null
     const nextSpaceId = input.spaceId || current.spaceId
-    if (!this.getSpace(nextSpaceId)) throw new Error('记忆空间不存在。')
+    if (!this.getSpace(nextSpaceId)) throw new Error('星域不存在。')
     const title = redactSecrets(cleanText(input.title ?? current.title, 140))
     const content = redactSecrets(cleanText(input.content ?? current.content, 12_000))
-    if (!title || !content) throw new Error('记忆标题和内容不能为空。')
+    if (!title || !content) throw new Error('星辰名称和星忆内容不能为空。')
     const type = MEMORY_TYPES.has(input.type) ? input.type : current.type
     const importance = Math.min(1, Math.max(0, Number(input.importance ?? current.importance)))
     const now = new Date().toISOString()

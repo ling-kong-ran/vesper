@@ -5,21 +5,21 @@ export const manifests = [
   {
     id: 'memory_search',
     name: 'Memory Search',
-    category: '记忆',
+    category: '星忆',
     risk: '低风险',
-    description: '搜索用户级和当前工作目录下的长期记忆。',
-    scope: '用户记忆与当前项目记忆空间',
-    capability: '读取相关偏好、事实、决策和任务经验，不修改记忆',
+    description: '搜索全局与当前项目中的长期星忆。',
+    scope: '全局星域与当前项目星域',
+    capability: '读取相关偏好、事实、决策和任务星忆，不修改星忆',
     source: 'app',
   },
   {
     id: 'memory_remember',
     name: 'Memory Remember',
-    category: '记忆',
+    category: '星忆',
     risk: '中风险',
-    description: '将用户明确要求记住或未来可复用的信息保存为长期记忆。',
-    scope: '用户记忆或当前项目记忆空间',
-    capability: '新增或合并长期记忆，自动隐藏常见密钥格式',
+    description: '将用户明确要求记住或未来可复用的信息点亮为长期星忆。',
+    scope: '全局星域或当前项目星域',
+    capability: '新增或合并长期星忆，自动隐藏常见密钥格式',
     source: 'app',
   },
 ]
@@ -42,7 +42,7 @@ export function createMemorySearchTool({ cwd, memoryRuntime }) {
       const memories = memoryRuntime.search(params.query, { cwd, limit: params.limit || 6 })
       const text = memories.length
         ? memories.map((memory) => `[${memory.id}] [${memory.type}] ${memory.title}\n${memory.content}`).join('\n\n')
-        : '没有找到相关长期记忆。'
+        : '没有找到相关星忆。'
       return { content: [{ type: 'text', text }], details: { count: memories.length, memories } }
     },
   })
@@ -60,8 +60,8 @@ export function createMemoryRememberTool({ cwd, memoryRuntime }) {
       'Use global scope only for preferences that apply across projects; use project scope for codebase-specific facts and decisions.',
     ],
     parameters: Type.Object({
-      title: Type.String({ minLength: 1, description: '简短、可辨识的记忆标题' }),
-      content: Type.String({ minLength: 1, description: '独立可理解、未来可复用的记忆内容' }),
+      title: Type.String({ minLength: 1, description: '简短、可辨识的星辰名称' }),
+      content: Type.String({ minLength: 1, description: '独立可理解、未来可复用的星忆内容' }),
       type: Type.Optional(Type.Union([
         Type.Literal('preference'), Type.Literal('decision'), Type.Literal('fact'), Type.Literal('risk'), Type.Literal('task'),
       ])),
@@ -77,7 +77,7 @@ export function createMemoryRememberTool({ cwd, memoryRuntime }) {
         sourceType: 'agent',
       })
       return {
-        content: [{ type: 'text', text: `已保存长期记忆：${memory.title}\n记忆 ID：${memory.id}` }],
+        content: [{ type: 'text', text: `已点亮星辰：${memory.title}\n星辰 ID：${memory.id}` }],
         details: memory,
       }
     },

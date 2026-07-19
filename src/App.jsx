@@ -443,7 +443,7 @@ function Sidebar({ page, navigate, setChatMode, open, onClose, pluginStats }) {
 function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, notify, theme, onCycleTheme, searchInputRef }) {
   const primary = page === 'config' && configSection !== 'models' ? null : ({
     chat: ['新会话', Plus], chatHistory: ['新会话', Plus], assets: ['添加链接', Link2], channels: ['连接渠道', Plus], schedules: ['新建任务', Plus],
-    config: ['添加 Provider', Plus], plugins: ['保存策略', Save], memory: ['新建节点', Plus], mcp: ['添加服务', Plus],
+    config: ['添加 Provider', Plus], plugins: ['保存策略', Save], memory: ['点亮星辰', Plus], mcp: ['添加服务', Plus],
     skills: ['安装技能', Plus], workflows: ['新建工作流', Plus], workflowCreate: ['发布', Rocket],
   }[page])
   const PrimaryIcon = primary?.[1]
@@ -460,7 +460,7 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
             <button className="button dark" onClick={() => notify('工作流运行时尚未接入，无法试运行', 'info')}><Play size={15} />试运行</button>
           </>
         ) : page === 'chat' && chatMode === 'focus' ? null : (
-          <label className="search-box" title="搜索（Ctrl/⌘ K 或 /）"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? '搜索平铺会话' : page === 'mcp' ? '搜索服务或工具' : page === 'memory' ? '搜索节点或文件' : `搜索${meta[0]}`} /></label>
+          <label className="search-box" title="搜索（Ctrl/⌘ K 或 /）"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? '搜索平铺会话' : page === 'mcp' ? '搜索服务或工具' : page === 'memory' ? '搜索星辰或文件' : `搜索${meta[0]}`} /></label>
         )}
         {primary && <button className="button primary" title={`${primary[0]}（Ctrl/⌘ N）`} onClick={onPrimary}><PrimaryIcon size={15} />{primary[0]}</button>}
         <button className="icon-button theme-toggle" title={`主题：${themeLabel}（点击切换）`} aria-label={`主题：${themeLabel}，点击切换主题`} onClick={onCycleTheme}><ThemeIcon size={16} /></button>
@@ -1086,7 +1086,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
 }
 
 function QuickCreate({ type, close, notify }) {
-  const titles = { chat: '新建会话', assets: '导出资产', channels: '连接渠道', schedules: '新建定时任务', config: '添加 Provider', plugins: '保存插件策略', memory: '新建记忆节点', mcp: '添加 MCP 服务', skills: '安装技能' }
+  const titles = { chat: '新建会话', assets: '导出资产', channels: '连接渠道', schedules: '新建定时任务', config: '添加 Provider', plugins: '保存插件策略', memory: '点亮星辰', mcp: '添加 MCP 服务', skills: '安装技能' }
   return <div className="modal-backdrop" onMouseDown={close}><form className="modal" onMouseDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); notify(`${titles[type]}成功`); close() }}><div className="card-head"><div><h2>{titles[type]}</h2><p>填写基本信息后即可继续配置。</p></div><button type="button" className="icon-button" onClick={close}><X size={17} /></button></div><InputLabel label="名称" value="" placeholder="输入名称" /><InputLabel label="描述" value="" placeholder="补充简短描述" /><SelectLabel label="类型" options={['默认', '自定义', '从模板创建']} /><div className="modal-actions"><button type="button" className="button secondary" onClick={close}>取消</button><button className="button primary"><Plus size={14} />确认创建</button></div></form></div>
 }
 
