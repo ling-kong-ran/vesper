@@ -35,6 +35,7 @@ import { APP_NAME } from './app/brand.js'
 import { STORAGE_KEYS } from './app/storage.js'
 import { NAV_GROUPS, PAGE_META } from './app/navigation.jsx'
 import { BrandLogo } from './components/BrandLogo.jsx'
+import { StarOrbit } from './components/StarOrbit.jsx'
 import { AppDialog, InputLabel, Panel, SectionTitle, Segmented, SelectLabel, Toast } from './components/ui.jsx'
 import { useAttachmentSelection } from './features/chat/attachments.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
@@ -1066,6 +1067,6 @@ function ImageLightbox({ attachment, source, onClose }) {
   return <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片大屏预览" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="image-lightbox-toolbar"><span title={attachment.name}>{attachment.name || '生成图片'}</span><div><a className="button secondary" href={attachment.downloadUrl || source} download={attachment.name || 'generated-image'}><Download size={14} />下载原图</a><button type="button" className="icon-button" aria-label="关闭预览" onClick={onClose}><X size={18} /></button></div></div><img src={source} alt={attachment.name || '生成图片'} /></div>
 }
 
-function TiledEmptyState({ hasQuery }) { return <Panel className="empty-state"><Grid2X2 size={24} /><h2>{hasQuery ? '没有匹配的平铺会话' : '尚未选择平铺会话'}</h2><p>{hasQuery ? '更换搜索关键词，或从历史会话中加入其他会话。' : '点击历史会话右侧的平铺图标，把需要并行关注的会话加入这里。'}</p></Panel> }
+function TiledEmptyState({ hasQuery }) { return <Panel className="empty-state"><StarOrbit size={48} /><h2>{hasQuery ? '没有匹配的平铺会话' : '尚未选择平铺会话'}</h2><p>{hasQuery ? '更换搜索关键词，或从历史会话中加入其他会话。' : '点击历史会话右侧的平铺图标，把需要并行关注的会话加入这里。'}</p></Panel> }
 
 export default App

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, FileCode2, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { Panel, SectionTitle } from '../../components/ui.jsx'
+import { StarOrbit } from '../../components/StarOrbit.jsx'
 import { apiJson } from '../../lib/api.js'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
 
@@ -110,7 +111,7 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
           title={node.content}
           key={node.id}
         >{node.title}</button>)}
-        {!loading && !visibleNodes.length && <div className="memory-empty">当前空间暂无记忆节点</div>}
+        {!loading && !visibleNodes.length && <div className="memory-empty"><StarOrbit size={44} /><span>当前空间暂无记忆节点</span></div>}
       </Panel>
       <div className="detail-stack">
         <Panel>

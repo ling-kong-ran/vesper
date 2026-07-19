@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useState } from 'react'
-import { AlertTriangle, Download, ExternalLink, Eye, File, FileImage, FileVideo, FolderOpen, Link2, Paperclip, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { AlertTriangle, Download, ExternalLink, Eye, File, FileImage, FileVideo, Link2, Paperclip, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { STORAGE_KEYS } from '../../app/storage.js'
 import { Panel, Segmented } from '../../components/ui.jsx'
+import { StarOrbit } from '../../components/StarOrbit.jsx'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
 import { apiJson } from '../../lib/api.js'
 import { formatFileSize } from '../../lib/format.js'
@@ -78,7 +79,7 @@ export function AssetsPage({ query, notify, registerPrimaryAction, onUse, reques
       const isVideo = asset.mimeType?.startsWith('video/')
       const Icon = asset.kind === 'image' ? FileImage : isVideo ? FileVideo : asset.kind === 'link' ? Link2 : File
       return <Panel className="asset-card functional" key={asset.id}><button className={`asset-preview ${asset.kind} ${isVideo ? 'video' : ''}`} onClick={() => previewAsset(asset)}>{asset.kind === 'image' ? <img src={`/api/assets/${encodeURIComponent(asset.id)}/download?inline=1`} alt="" /> : isVideo ? <video src={`/api/assets/${encodeURIComponent(asset.id)}/download?inline=1`} muted preload="metadata" /> : <Icon size={38} />}</button><div className="asset-card-copy"><strong title={asset.name}>{asset.name}</strong><span>{asset.kind === 'link' ? new URL(asset.url).hostname : formatFileSize(asset.size)} · {asset.source === 'agent' ? 'Agent 产物' : asset.source === 'attachment' ? '对话附件' : '手动上传'}</span>{asset.sessionName && <small title={asset.sessionName}>来自：{asset.sessionName}</small>}</div><div className="asset-card-actions"><button className="button tiny" onClick={() => previewAsset(asset)}><Eye size={13} />预览</button>{asset.kind === 'link' ? <a className="button tiny" href={asset.url} target="_blank" rel="noreferrer"><ExternalLink size={13} />打开</a> : <a className="button tiny" href={`/api/assets/${encodeURIComponent(asset.id)}/download`}><Download size={13} />下载</a>}<button className="button tiny primary" onClick={() => attachAsset(asset)}><Paperclip size={13} />用于对话</button><button className="icon-button danger" title="删除资产" onClick={() => deleteAsset(asset)}><Trash2 size={13} /></button></div></Panel>
-    })}</div> : <Panel className="empty-state"><FolderOpen size={25} /><h2>暂无资产</h2><p>添加链接，或在对话中使用附件后会自动出现在这里；Agent 生成文件也会自动登记。</p><button className="button primary" onClick={() => setLinkModal(true)}><Link2 size={14} />添加链接</button></Panel>}
+    })}</div> : <Panel className="empty-state"><StarOrbit size={46} /><h2>暂无资产</h2><p>添加链接，或在对话中使用附件后会自动出现在这里；Agent 生成文件也会自动登记。</p><button className="button primary" onClick={() => setLinkModal(true)}><Link2 size={14} />添加链接</button></Panel>}
     {preview && <AssetPreviewModal asset={preview} onClose={() => setPreview(null)} onUse={() => attachAsset(preview)} />}
     {linkModal && <AssetLinkModal onClose={() => setLinkModal(false)} onCreated={() => { setLinkModal(false); loadAssets(); notify('链接资产已添加') }} />}
   </div>
