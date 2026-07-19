@@ -6,6 +6,8 @@ const STATE_LABELS = {
   thinking: 'Agent 思考中',
 }
 
+const BODY_PATH = 'M20 4.1C27.4 3.7 32.8 8.4 34 15.2C35.4 22.8 31.2 30.2 24.1 33.1C17.2 35.9 9.3 32.8 5.9 26.3C2.8 20.3 4.3 12.6 9.7 7.8C12.5 5.4 16 4.3 20 4.1Z'
+
 function clamp(value, min, max) {
   return Math.min(max, Math.max(min, value))
 }
@@ -13,16 +15,16 @@ function clamp(value, min, max) {
 export function AgentStatusAvatar({ state = 'idle', size = 32, className = '' }) {
   const [gaze, setGaze] = useState({ x: 0, y: 0 })
   const id = useId().replaceAll(':', '')
-  const gradientId = `agent-orb-${id}`
-  const haloId = `agent-halo-${id}`
+  const bodyGradientId = `agent-body-${id}`
+  const warmthGradientId = `agent-warmth-${id}`
   const shadowId = `agent-shadow-${id}`
   const resolvedState = STATE_LABELS[state] ? state : 'idle'
   const label = STATE_LABELS[resolvedState]
 
   const updateGaze = (event) => {
     const rect = event.currentTarget.getBoundingClientRect()
-    const x = clamp(((event.clientX - rect.left) / rect.width - 0.5) * 2.4, -1.2, 1.2)
-    const y = clamp(((event.clientY - rect.top) / rect.height - 0.5) * 1.8, -0.9, 0.9)
+    const x = clamp(((event.clientX - rect.left) / rect.width - 0.5) * 2.2, -1.1, 1.1)
+    const y = clamp(((event.clientY - rect.top) / rect.height - 0.5) * 1.6, -0.8, 0.8)
     setGaze({ x, y })
   }
 
@@ -41,36 +43,50 @@ export function AgentStatusAvatar({ state = 'idle', size = 32, className = '' })
       onPointerMove={updateGaze}
       onPointerLeave={() => setGaze({ x: 0, y: 0 })}
     >
-      <svg viewBox="0 0 36 36" aria-hidden="true" focusable="false">
+      <svg viewBox="0 0 40 40" aria-hidden="true" focusable="false">
         <defs>
-          <radialGradient id={gradientId} cx="10" cy="8" r="31" gradientUnits="userSpaceOnUse">
-            <stop offset="0" stopColor="#75E5FF" />
-            <stop offset="0.38" stopColor="#4EA4FF" />
-            <stop offset="0.72" stopColor="#5F72F6" />
-            <stop offset="1" stopColor="#8A63F6" />
-          </radialGradient>
-          <linearGradient id={haloId} x1="5" y1="5" x2="31" y2="32" gradientUnits="userSpaceOnUse">
-            <stop stopColor="#84EEFF" />
-            <stop offset="0.5" stopColor="#6797FF" />
-            <stop offset="1" stopColor="#A36CFF" />
+          <linearGradient id={bodyGradientId} x1="8" y1="6" x2="31" y2="34" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stopColor="#FFE382" />
+            <stop offset="0.48" stopColor="#FF9EAC" />
+            <stop offset="1" stopColor="#9B82F6" />
           </linearGradient>
+          <radialGradient id={warmthGradientId} cx="0" cy="0" r="1" gradientTransform="translate(12 10) rotate(48) scale(23 21)" gradientUnits="userSpaceOnUse">
+            <stop stopColor="#FFF8D6" stopOpacity="0.78" />
+            <stop offset="0.55" stopColor="#FFFFFF" stopOpacity="0.12" />
+            <stop offset="1" stopColor="#7B5AD9" stopOpacity="0.16" />
+          </radialGradient>
           <filter id={shadowId} x="-45%" y="-45%" width="190%" height="190%" colorInterpolationFilters="sRGB">
-            <feDropShadow dx="0" dy="2" stdDeviation="2.2" floodColor="#4E78E8" floodOpacity="0.34" />
+            <feDropShadow dx="0" dy="2" stdDeviation="2" floodColor="#B46D9D" floodOpacity="0.26" />
           </filter>
         </defs>
 
-        <circle className="agent-status-halo" cx="18" cy="18" r="16" fill="none" stroke={`url(#${haloId})`} strokeWidth="1.3" />
-        <g className="agent-status-orb-shell" filter={`url(#${shadowId})`}>
-          <circle className="agent-status-orb" cx="18" cy="18" r="14.5" fill={`url(#${gradientId})`} />
-          <ellipse className="agent-status-highlight" cx="12.2" cy="9.6" rx="7.4" ry="4.8" fill="#FFFFFF" opacity="0.16" transform="rotate(-18 12.2 9.6)" />
-          <path className="agent-status-soft-light" d="M5.8 20.8C8.7 27.7 16.9 31.1 24.3 28.1C27.7 26.8 30.3 24.1 31.6 20.9C30.2 28.1 23.9 32.5 17.3 32.5C10.9 32.5 5.7 28.6 4.1 23.3C3.8 22.1 4.8 20.5 5.8 20.8Z" fill="#3454C9" opacity="0.18" />
+        <path className="agent-status-aura" d={BODY_PATH} fill="none" stroke="#F5A7C8" strokeWidth="1.5" />
+        <g className="agent-status-body-shell" filter={`url(#${shadowId})`}>
+          <path className="agent-status-body" d={BODY_PATH} fill={`url(#${bodyGradientId})`} stroke="#FFFFFF" strokeOpacity="0.72" strokeWidth="0.8" />
+          <path d={BODY_PATH} fill={`url(#${warmthGradientId})`} />
+          <ellipse className="agent-status-shine" cx="12.7" cy="9.8" rx="6.8" ry="3.7" fill="#FFFFFF" opacity="0.24" transform="rotate(-18 12.7 9.8)" />
+        </g>
+
+        <g className="agent-status-cheeks" fill="#F65F80" opacity="0.32">
+          <ellipse cx="10.2" cy="23.1" rx="2.2" ry="1.25" />
+          <ellipse cx="29.3" cy="23.1" rx="2.2" ry="1.25" />
         </g>
 
         <g className="agent-status-gaze">
-          <g className="agent-status-eyes" fill="#FFFFFF">
-            <rect x="11.1" y="13" width="3.5" height="8.2" rx="1.75" />
-            <rect x="21.4" y="13" width="3.5" height="8.2" rx="1.75" />
+          <g className="agent-status-eyes">
+            <rect x="12.2" y="14.2" width="3.8" height="6.8" rx="1.9" fill="#3D3454" />
+            <rect x="23.3" y="14.2" width="3.8" height="6.8" rx="1.9" fill="#3D3454" />
+            <circle cx="13.5" cy="15.6" r="0.65" fill="#FFFFFF" opacity="0.9" />
+            <circle cx="24.6" cy="15.6" r="0.65" fill="#FFFFFF" opacity="0.9" />
           </g>
+        </g>
+
+        <path className="agent-status-mouth-smile" d="M17.6 24.1C18.9 25.3 21 25.3 22.3 24.1" fill="none" stroke="#4A3B5E" strokeWidth="1.25" strokeLinecap="round" />
+        <ellipse className="agent-status-mouth-think" cx="20" cy="24.5" rx="1.25" ry="1.55" fill="#4A3B5E" />
+
+        <g className="agent-status-spark" fill="#FFF3A7" stroke="#F4A84A" strokeWidth="0.45" strokeLinejoin="round">
+          <path d="M33.1 3.9C33.5 5.5 34.4 6.4 36 6.8C34.4 7.2 33.5 8.1 33.1 9.7C32.7 8.1 31.8 7.2 30.2 6.8C31.8 6.4 32.7 5.5 33.1 3.9Z" />
+          <circle cx="29.2" cy="4.1" r="0.7" stroke="none" />
         </g>
       </svg>
     </span>

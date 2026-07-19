@@ -471,28 +471,40 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .message.user .markdown-body code { background: var(--user-bubble-code); }
 .message.agent .message-content > .markdown-body { width: 100%; max-width: 100%; border: 1px solid var(--stroke-soft); border-radius: var(--r-md); background: var(--solid); padding: 10px 16px; }
 .message.has-error .message-content > .markdown-body { background: var(--danger-soft); color: var(--danger); }
-.agent-status-avatar { --agent-avatar-size: 32px; --agent-gaze-x: 0px; --agent-gaze-y: 0px; display: inline-grid; width: var(--agent-avatar-size); height: var(--agent-avatar-size); flex: none; place-items: center; border-radius: 50%; cursor: default; filter: saturate(.98); transition: transform var(--d1) var(--ease-out), filter var(--d1) var(--ease-out); }
-.agent-status-avatar:hover { transform: translateY(-1px) scale(1.045); filter: saturate(1.08); }
+.agent-status-avatar { --agent-avatar-size: 32px; --agent-gaze-x: 0px; --agent-gaze-y: 0px; display: inline-grid; width: var(--agent-avatar-size); height: var(--agent-avatar-size); flex: none; place-items: center; cursor: default; transition: transform var(--d1) var(--ease-out), filter var(--d1) var(--ease-out); }
+.agent-status-avatar:hover { transform: translateY(-1px) rotate(-2deg) scale(1.055); filter: saturate(1.06); }
+.agent-status-avatar:active { transform: translateY(0) rotate(1deg) scale(.94); }
 .agent-status-avatar svg { display: block; width: 100%; height: 100%; overflow: visible; }
-.agent-status-orb-shell,.agent-status-halo { transform-box: view-box; transform-origin: center; }
-.agent-status-highlight { transform-box: fill-box; transform-origin: center; }
-.agent-status-halo { opacity: .08; }
+.agent-status-body-shell,.agent-status-aura { transform-box: view-box; transform-origin: center; }
+.agent-status-shine,.agent-status-spark,.agent-status-eyes,.agent-status-cheeks,.agent-status-mouth-think { transform-box: fill-box; transform-origin: center; }
+.agent-status-aura { opacity: .08; }
 .agent-status-gaze { transform: translate(var(--agent-gaze-x),var(--agent-gaze-y)); transition: transform 120ms var(--ease-out); }
-.agent-status-eyes { transform-box: fill-box; transform-origin: center; }
-.agent-status-avatar.is-waiting .agent-status-orb-shell { animation: agent-orb-breathe 3.4s ease-in-out infinite; }
-.agent-status-avatar.is-waiting .agent-status-halo { opacity: .22; animation: agent-halo-breathe 3.4s ease-in-out infinite; }
-.agent-status-avatar.is-waiting .agent-status-eyes { animation: agent-eye-blink 4.8s ease-in-out infinite; }
-.agent-status-avatar.is-thinking .agent-status-orb-shell { animation: agent-orb-think 1.35s ease-in-out infinite; }
-.agent-status-avatar.is-thinking .agent-status-halo { opacity: .52; stroke-dasharray: 3 5; animation: agent-halo-spin 1.65s linear infinite; }
-.agent-status-avatar.is-thinking .agent-status-eyes { animation: agent-eyes-scan 1.45s ease-in-out infinite; }
-.agent-status-avatar.is-thinking .agent-status-highlight { animation: agent-highlight-think 1.35s ease-in-out infinite; }
-@keyframes agent-orb-breathe { 0%,100% { transform: scale(.965); } 50% { transform: scale(1.02); } }
-@keyframes agent-halo-breathe { 0%,100% { opacity: .12; transform: scale(.94); } 50% { opacity: .32; transform: scale(1.04); } }
-@keyframes agent-eye-blink { 0%,43%,47%,100% { transform: scaleY(1); } 45% { transform: scaleY(.12); } }
-@keyframes agent-orb-think { 0%,100% { transform: rotate(-3deg) scale(.98); } 50% { transform: rotate(4deg) scale(1.025); } }
-@keyframes agent-halo-spin { to { transform: rotate(360deg); } }
-@keyframes agent-eyes-scan { 0%,100% { transform: translateX(-1px) scaleY(1); } 35% { transform: translateX(1.25px) scaleY(.92); } 68% { transform: translateX(.2px) scaleY(1); } }
-@keyframes agent-highlight-think { 0%,100% { opacity: .1; transform: rotate(-18deg) translateX(-.4px); } 50% { opacity: .24; transform: rotate(-8deg) translateX(1px); } }
+.agent-status-mouth-smile,.agent-status-mouth-think { transition: opacity var(--d1) var(--ease-out), transform var(--d1) var(--ease-out); }
+.agent-status-mouth-think { opacity: 0; transform: scale(.4); }
+.agent-status-spark { transform-origin: 33px 7px; }
+.agent-status-avatar.is-waiting .agent-status-body-shell { animation: agent-mochi-breathe 3.2s ease-in-out infinite; }
+.agent-status-avatar.is-waiting .agent-status-aura { animation: agent-aura-breathe 3.2s ease-in-out infinite; }
+.agent-status-avatar.is-waiting .agent-status-eyes { animation: agent-eye-blink 4.6s ease-in-out infinite; }
+.agent-status-avatar.is-waiting .agent-status-spark { animation: agent-spark-twinkle 2.8s ease-in-out infinite; }
+.agent-status-avatar.is-thinking .agent-status-body-shell { animation: agent-mochi-think 1.3s ease-in-out infinite; }
+.agent-status-avatar.is-thinking .agent-status-aura { animation: agent-aura-think 1.3s ease-in-out infinite; }
+.agent-status-avatar.is-thinking .agent-status-eyes { animation: agent-eyes-wonder 1.45s ease-in-out infinite; }
+.agent-status-avatar.is-thinking .agent-status-cheeks { animation: agent-cheeks-think 1.3s ease-in-out infinite; }
+.agent-status-avatar.is-thinking .agent-status-spark { animation: agent-spark-think 1.45s ease-in-out infinite; }
+.agent-status-avatar.is-thinking .agent-status-shine { animation: agent-shine-think 1.3s ease-in-out infinite; }
+.agent-status-avatar.is-thinking .agent-status-mouth-smile { opacity: 0; }
+.agent-status-avatar.is-thinking .agent-status-mouth-think { opacity: .82; transform: scale(1); animation: agent-mouth-think 1.3s ease-in-out infinite; }
+@keyframes agent-mochi-breathe { 0%,100% { transform: translateY(.3px) scale(.975,1.015); } 50% { transform: translateY(-.5px) scale(1.02,.985); } }
+@keyframes agent-aura-breathe { 0%,100% { opacity: .06; transform: scale(.94); } 50% { opacity: .24; transform: scale(1.045); } }
+@keyframes agent-eye-blink { 0%,44%,48%,100% { transform: scaleY(1); } 46% { transform: scaleY(.12); } }
+@keyframes agent-spark-twinkle { 0%,100% { opacity: .62; transform: rotate(-7deg) scale(.82); } 50% { opacity: 1; transform: rotate(7deg) scale(1.08); } }
+@keyframes agent-mochi-think { 0%,100% { transform: rotate(-2deg) scale(1.015,.98); } 50% { transform: rotate(2.5deg) scale(.98,1.025); } }
+@keyframes agent-aura-think { 0%,100% { opacity: .1; transform: scale(.94) rotate(-2deg); } 50% { opacity: .3; transform: scale(1.06) rotate(2deg); } }
+@keyframes agent-eyes-wonder { 0%,100% { transform: translate(-.7px,.2px) scaleY(1); } 35% { transform: translate(1px,-.8px) scaleY(.94); } 68% { transform: translate(.1px,.45px) scaleY(1); } }
+@keyframes agent-cheeks-think { 0%,100% { opacity: .24; transform: scale(.92); } 50% { opacity: .46; transform: scale(1.08); } }
+@keyframes agent-spark-think { 0%,100% { transform: translate(0,0) rotate(-8deg) scale(.9); } 35% { transform: translate(-1.7px,1px) rotate(9deg) scale(1.08); } 70% { transform: translate(.7px,-1.2px) rotate(-3deg) scale(.96); } }
+@keyframes agent-shine-think { 0%,100% { opacity: .16; transform: rotate(-18deg) translateX(-.3px); } 50% { opacity: .32; transform: rotate(-11deg) translateX(.8px); } }
+@keyframes agent-mouth-think { 0%,100% { transform: scale(.82); } 50% { transform: scale(1.08); } }
 .agent-welcome { display: grid; min-height: 100%; place-content: center; justify-items: center; color: var(--muted); text-align: center; }
 .agent-welcome .welcome-logo { color: var(--text); }
 .agent-welcome .welcome-logo .logo-star { animation: star-twinkle 3s ease-in-out infinite; }
