@@ -17,10 +17,10 @@ async function listen(handler) {
 }
 
 async function fixture(provider) {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-visual-test-'))
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-visual-test-'))
   const modelsPath = join(directory, 'models.json')
   const authPath = join(directory, 'auth.json')
-  const appConfigPath = join(directory, 'pi-coder.json')
+  const appConfigPath = join(directory, 'vesper.json')
   await writeFile(modelsPath, JSON.stringify({ providers: { [provider.id]: provider.config } }))
   await writeFile(authPath, JSON.stringify({ [provider.id]: { type: 'api_key', key: 'test-key' } }))
   await writeFile(appConfigPath, JSON.stringify({ disabledProviders: [] }))

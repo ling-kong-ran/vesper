@@ -39,7 +39,7 @@ class FakeGateway {
 }
 
 async function fixture({ agent = {}, stored } = {}) {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-channels-'))
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-channels-'))
   const path = join(directory, 'channels.json')
   if (stored) await writeFile(path, JSON.stringify(stored))
   const gateways = {}

@@ -6,7 +6,7 @@ import test from 'node:test'
 import { AgentRuntimeService } from '../runtime/agent-runtime.mjs'
 
 test('live session snapshot restores partial assistant output and tool state', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-live-session-'))
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-live-session-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
   runtime.sessions.set('session-live', {
@@ -33,7 +33,7 @@ test('live session snapshot restores partial assistant output and tool state', a
 })
 
 test('session messages are returned newest-first by bounded cursor pages', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-message-pages-'))
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-message-pages-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
   runtime.sessions.set('session-pages', {
@@ -68,7 +68,7 @@ test('session messages are returned newest-first by bounded cursor pages', async
 })
 
 test('session history pagination follows the persisted branch across compaction', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-persisted-history-'))
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-persisted-history-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const path = join(directory, 'session.jsonl')
   const entries = [
@@ -94,7 +94,7 @@ test('session history pagination follows the persisted branch across compaction'
 })
 
 test('empty active sessions tolerate a JSONL file that has not been created yet', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-empty-session-'))
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-empty-session-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
   runtime.sessions.set('session-empty', {

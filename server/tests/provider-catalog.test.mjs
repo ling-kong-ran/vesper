@@ -6,7 +6,7 @@ import test from 'node:test'
 import { AgentRuntimeService } from '../runtime/agent-runtime.mjs'
 
 test('model configuration exposes built-in Kimi and GLM providers', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-provider-catalog-'))
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-provider-catalog-'))
   const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
   t.after(async () => {
     await runtime.dispose()

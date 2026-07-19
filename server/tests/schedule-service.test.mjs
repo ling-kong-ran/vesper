@@ -23,7 +23,7 @@ test('next run calculation supports daily, weekly and monthly schedules', () => 
 })
 
 test('scheduled tasks persist, execute with the selected model and notify multiple targets', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-schedules-'))
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-schedules-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const prompts = []
   const notifications = []
@@ -55,7 +55,7 @@ test('scheduled tasks persist, execute with the selected model and notify multip
 })
 
 test('failure-only tasks suppress success notifications and send failure templates', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-schedules-failure-'))
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-schedules-failure-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const notifications = []
   let shouldFail = false

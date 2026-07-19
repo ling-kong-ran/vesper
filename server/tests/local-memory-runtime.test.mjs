@@ -10,7 +10,7 @@ import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
 import { toolsFromConfig } from '../tools/registry.mjs'
 
 async function withMemory(run) {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-memory-'))
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-memory-'))
   const cwd = join(directory, 'project')
   const memory = new LocalMemoryRuntime({ path: join(directory, 'memory.sqlite'), cwd })
   try {
@@ -105,8 +105,8 @@ test('conversation memory extraction accepts only structured durable memories', 
 })
 
 test('memory tools migrate once and can still be disabled in plugin settings', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-tools-'))
-  const path = join(directory, 'pi-coder.json')
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-tools-'))
+  const path = join(directory, 'vesper.json')
   try {
     await writeJsonAtomic(path, { toolMode: 'custom', enabledTools: ['read', 'bash'] })
     const service = new ToolPluginService(path)
