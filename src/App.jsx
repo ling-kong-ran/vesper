@@ -4,13 +4,11 @@ import {
   ArrowDown,
   Bot,
   Check,
-  ChevronLeft,
+  ChevronDown,
   ChevronRight,
   Download,
   File,
   FolderOpen,
-  Grid2X2,
-  History,
   Link2,
   Menu,
   Monitor,
@@ -28,7 +26,6 @@ import {
   ShieldCheck,
   Square,
   Sun,
-  Trash2,
   Wrench,
   X,
 } from 'lucide-react'
@@ -37,8 +34,10 @@ import { STORAGE_KEYS } from './app/storage.js'
 import { NAV_GROUPS, PAGE_META } from './app/navigation.jsx'
 import { BrandLogo } from './components/BrandLogo.jsx'
 import { StarOrbit } from './components/StarOrbit.jsx'
-import { AppDialog, InputLabel, Panel, SectionTitle, Segmented, SelectLabel, Toast } from './components/ui.jsx'
+import { AppDialog, InputLabel, Panel, Segmented, SelectLabel, Toast } from './components/ui.jsx'
 import { useAttachmentSelection } from './features/chat/attachments.js'
+import { ChatHistoryPage } from './features/chat/ChatHistoryPage.jsx'
+import { ACTIVE_SESSION_CHANGED_EVENT, SESSION_SELECTED_EVENT, SESSIONS_UPDATED_EVENT, announceActiveSession, announceSessionsUpdated, requestSessionSelection } from './features/chat/events.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, consumeEventStream } from './lib/api.js'
@@ -163,6 +162,7 @@ function App() {
   const setChatMode = (nextMode) => {
     setChatModeState(nextMode)
     localStorage.setItem(STORAGE_KEYS.chatMode, nextMode)
+    if (nextMode === 'focus') setQuery('')
   }
 
   const notify = useCallback((message, tone = 'success') => {
@@ -212,6 +212,7 @@ function App() {
   const handlePrimary = useCallback(() => {
     if (page === 'config' && configSection !== 'models') return
     if (['chat', 'config', 'assets', 'plugins', 'channels', 'schedules', 'memory'].includes(page)) invokePrimaryAction()
+    else if (page === 'chatHistory') { navigate('chat'); invokePrimaryAction() }
     else if (page === 'workflows') navigate('workflowCreate')
     else if (page === 'workflowCreate') notify('工作流运行时尚未接入，当前不会真实发布', 'info')
     else if (page === 'mcp' || page === 'skills') notify('该页面当前为演示界面，功能尚未接入', 'info')
@@ -219,17 +220,23 @@ function App() {
   }, [configSection, invokePrimaryAction, navigate, notify, page])
 
   useEffect(() => {
+    const focusSearch = () => {
+      if (page === 'chat' && chatMode === 'focus') {
+        navigate('chatHistory')
+        requestAnimationFrame(() => requestAnimationFrame(() => searchInputRef.current?.focus()))
+      } else searchInputRef.current?.focus()
+    }
     const onKeyDown = (event) => {
       const modifier = event.metaKey || event.ctrlKey
       if (modifier && event.key.toLowerCase() === 'k') {
         event.preventDefault()
-        searchInputRef.current?.focus()
+        focusSearch()
       } else if (modifier && event.key.toLowerCase() === 'n' && !isEditableTarget(event.target)) {
         event.preventDefault()
         handlePrimary()
       } else if (event.key === '/' && !modifier && !event.altKey && !isEditableTarget(event.target)) {
         event.preventDefault()
-        searchInputRef.current?.focus()
+        focusSearch()
       } else if (event.key === 'Escape' && !appDialog.dialog) {
         if (modal) setModal(null)
         else if (mobileNav) setMobileNav(false)
@@ -237,7 +244,7 @@ function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [appDialog.dialog, handlePrimary, modal, mobileNav])
+  }, [appDialog.dialog, chatMode, handlePrimary, modal, mobileNav, navigate, page])
 
   useEffect(() => {
     let active = true
@@ -302,7 +309,7 @@ function App() {
   return (
     <div className="app-shell">
       <div className="app-body">
-        <Sidebar page={page} navigate={navigate} open={mobileNav} onClose={() => setMobileNav(false)} pluginStats={pluginStats} />
+        <Sidebar page={page} navigate={navigate} setChatMode={setChatMode} open={mobileNav} onClose={() => setMobileNav(false)} pluginStats={pluginStats} />
         <main className="main-surface">
           <PageHeader
             meta={activeMeta}
@@ -320,7 +327,8 @@ function App() {
             onCycleTheme={cycleTheme}
           />
           <div className={`page-content page-${page}`} key={page}>
-            {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} registerPrimaryAction={registerPrimaryAction} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />}
+            {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} registerPrimaryAction={registerPrimaryAction} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestText={appDialog.prompt} />}
+            {page === 'chatHistory' && <ChatHistoryPage query={query} navigate={navigate} setChatMode={setChatMode} notify={notify} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />}
             {page === 'assets' && <Suspense fallback={<PageLoader />}><AssetsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} /></Suspense>}
             {page === 'channels' && <Suspense fallback={<PageLoader />}><ChannelsPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>}
             {page === 'schedules' && <Suspense fallback={<PageLoader />}><SchedulesPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} openNotificationSettings={() => { setConfigSection('notifications'); navigate('config') }} /></Suspense>}
@@ -345,12 +353,24 @@ function PageLoader() {
   return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在加载页面</h2><p>按需加载功能模块…</p></Panel>
 }
 
-function Sidebar({ page, navigate, open, onClose, pluginStats }) {
+function Sidebar({ page, navigate, setChatMode, open, onClose, pluginStats }) {
   const [usage, setUsage] = useState(null)
-  const active = page === 'workflowCreate' ? 'workflows' : page
+  const [sessions, setSessions] = useState([])
+  const [historyExpanded, setHistoryExpanded] = useState(false)
+  const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
+  const active = page === 'workflowCreate' ? 'workflows' : page === 'chatHistory' ? 'chat' : page
+
   const refreshUsage = useCallback(async () => {
     try { setUsage(await apiJson('/api/usage/today')) } catch {}
   }, [])
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      const data = await apiJson('/api/sessions')
+      setSessions([...(data.sessions || [])].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified)))
+    } catch {}
+  }, [])
+
   useEffect(() => {
     refreshUsage()
     const timer = window.setInterval(refreshUsage, 15_000)
@@ -363,9 +383,36 @@ function Sidebar({ page, navigate, open, onClose, pluginStats }) {
       window.removeEventListener(USAGE_UPDATED_EVENT, refreshUsage)
     }
   }, [refreshUsage])
+
+  useEffect(() => {
+    refreshSessions()
+    const timer = window.setInterval(refreshSessions, 20_000)
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') refreshSessions() }
+    const syncActive = (event) => setActiveSessionId(event.detail?.id || localStorage.getItem(STORAGE_KEYS.activeSession) || '')
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener(SESSIONS_UPDATED_EVENT, refreshSessions)
+    window.addEventListener(SESSION_SELECTED_EVENT, syncActive)
+    window.addEventListener(ACTIVE_SESSION_CHANGED_EVENT, syncActive)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener(SESSIONS_UPDATED_EVENT, refreshSessions)
+      window.removeEventListener(SESSION_SELECTED_EVENT, syncActive)
+      window.removeEventListener(ACTIVE_SESSION_CHANGED_EVENT, syncActive)
+    }
+  }, [refreshSessions])
+
+  const openRecentSession = (id) => {
+    setActiveSessionId(id)
+    setChatMode('focus')
+    requestSessionSelection(id)
+    navigate('chat')
+  }
+
   const usageTitle = usage
     ? `输入 ${usage.input.toLocaleString()} · 输出 ${usage.output.toLocaleString()} · 推理 ${usage.reasoning.toLocaleString()} · 缓存读取 ${usage.cacheRead.toLocaleString()}`
     : '正在统计今日 Token 消耗'
+
   return (
     <>
       {open && <button className="nav-scrim" aria-label="关闭导航" onClick={onClose} />}
@@ -375,10 +422,20 @@ function Sidebar({ page, navigate, open, onClose, pluginStats }) {
           {NAV_GROUPS.map(([group, items]) => (
             <div className="nav-group" key={group}>
               <span className="nav-group-label">{group}</span>
-              {items.map(([id, label, Icon]) => (
-                <button key={id} className={active === id ? 'active' : ''} onClick={() => navigate(id)}>
-                  <Icon size={16} /><span>{label}</span>
-                </button>
+              {items.map(([id, label, Icon]) => id === 'chat' ? (
+                <div className={`nav-chat-block ${historyExpanded ? 'is-expanded' : ''}`} key={id}>
+                  <div className="nav-chat-entry">
+                    <button className={`nav-main nav-chat-main ${active === id ? 'active' : ''}`} onClick={() => navigate(id)}><Icon size={16} /><span>{label}</span></button>
+                    <button className="nav-history-toggle" title={historyExpanded ? '收起最近会话' : '展开最近会话'} aria-label={historyExpanded ? '收起最近会话' : '展开最近会话'} aria-expanded={historyExpanded} onClick={() => setHistoryExpanded((value) => !value)}><ChevronDown className={historyExpanded ? 'is-open' : ''} size={14} /></button>
+                  </div>
+                  {historyExpanded && <div className="nav-history-preview">
+                    {sessions.slice(0, 4).map((session) => <button className={`nav-history-item ${session.id === activeSessionId ? 'active-session' : ''}`} title={session.name || '未命名会话'} onClick={() => openRecentSession(session.id)} key={session.id}><span>{session.name || '未命名会话'}</span><small>{relativeTime(session.modified)}</small></button>)}
+                    {!sessions.length && <span className="nav-history-empty">暂无历史会话</span>}
+                    <button className="nav-history-all" onClick={() => navigate('chatHistory')}><span>查看全部{sessions.length ? ` · ${sessions.length}` : ''}</span><ChevronRight size={12} /></button>
+                  </div>}
+                </div>
+              ) : (
+                <button className={`nav-main ${active === id ? 'active' : ''}`} key={id} onClick={() => navigate(id)}><Icon size={16} /><span>{label}</span></button>
               ))}
             </div>
           ))}
@@ -394,7 +451,7 @@ function Sidebar({ page, navigate, open, onClose, pluginStats }) {
 
 function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, notify, theme, onCycleTheme, searchInputRef }) {
   const primary = page === 'config' && configSection !== 'models' ? null : ({
-    chat: ['新会话', Plus], assets: ['添加链接', Link2], channels: ['连接渠道', Plus], schedules: ['新建任务', Plus],
+    chat: ['新会话', Plus], chatHistory: ['新会话', Plus], assets: ['添加链接', Link2], channels: ['连接渠道', Plus], schedules: ['新建任务', Plus],
     config: ['添加 Provider', Plus], plugins: ['保存策略', Save], memory: ['新建节点', Plus], mcp: ['添加服务', Plus],
     skills: ['安装技能', Plus], workflows: ['新建工作流', Plus], workflowCreate: ['发布', Rocket],
   }[page])
@@ -411,8 +468,8 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
             <button className="button secondary" onClick={() => notify('当前为演示编辑器，草稿不会持久化', 'info')}><Save size={15} />保存草稿</button>
             <button className="button dark" onClick={() => notify('工作流运行时尚未接入，无法试运行', 'info')}><Play size={15} />试运行</button>
           </>
-        ) : (
-          <label className="search-box" title="搜索（Ctrl/⌘ K 或 /）"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? '搜索会话' : page === 'mcp' ? '搜索服务或工具' : page === 'memory' ? '搜索节点或文件' : `搜索${meta[0]}`} /></label>
+        ) : page === 'chat' && chatMode === 'focus' ? null : (
+          <label className="search-box" title="搜索（Ctrl/⌘ K 或 /）"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? '搜索平铺会话' : page === 'mcp' ? '搜索服务或工具' : page === 'memory' ? '搜索节点或文件' : `搜索${meta[0]}`} /></label>
         )}
         {primary && <button className="button primary" title={`${primary[0]}（Ctrl/⌘ N）`} onClick={onPrimary}><PrimaryIcon size={15} />{primary[0]}</button>}
         <button className="icon-button theme-toggle" title={`主题：${themeLabel}（点击切换）`} aria-label={`主题：${themeLabel}，点击切换主题`} onClick={onCycleTheme}><ThemeIcon size={16} /></button>
@@ -421,7 +478,7 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
   )
 }
 
-function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimaryAction, pendingAsset, onAssetConsumed, requestConfirm, requestText }) {
+function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimaryAction, pendingAsset, onAssetConsumed, requestText }) {
   const [remoteSessions, setRemoteSessions] = useState([])
   const [activeId, setActiveId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
   const [sessionStates, setSessionStates] = useState({})
@@ -431,13 +488,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   const [availableModels, setAvailableModels] = useState([])
   const [workspaceSession, setWorkspaceSession] = useState(null)
   const [tiledSessionIds, setTiledSessionIds] = useState(() => readStoredArray(STORAGE_KEYS.tiledSessions))
-  const [historyOpen, setHistoryOpen] = useState(() => localStorage.getItem(STORAGE_KEYS.chatHistory) === '1')
   const tiledStorageWasEmpty = useRef(localStorage.getItem(STORAGE_KEYS.tiledSessions) === null)
   const sessionStatesRef = useRef(sessionStates)
-
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.chatHistory, historyOpen ? '1' : '0')
-  }, [historyOpen])
 
   useEffect(() => {
     sessionStatesRef.current = sessionStates
@@ -520,7 +572,19 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   }, [updateSessionState])
 
   useEffect(() => {
+    const selectSession = (event) => {
+      const id = event.detail?.id
+      if (!id) return
+      setActiveId(id)
+      setMode('focus')
+    }
+    window.addEventListener(SESSION_SELECTED_EVENT, selectSession)
+    return () => window.removeEventListener(SESSION_SELECTED_EVENT, selectSession)
+  }, [setMode])
+
+  useEffect(() => {
     if (activeId) localStorage.setItem(STORAGE_KEYS.activeSession, activeId)
+    announceActiveSession(activeId)
   }, [activeId])
 
   useEffect(() => {
@@ -532,6 +596,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     setRemoteSessions(data.sessions)
     if (preferredId) setActiveId(preferredId)
     else setActiveId((current) => data.sessions.some((session) => session.id === current) ? current : (data.sessions[0]?.id || ''))
+    announceSessionsUpdated()
     return data.sessions
   }
 
@@ -575,6 +640,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         }
         if (!active) return
         setRemoteSessions(list)
+        announceSessionsUpdated()
         for (const session of list) {
           if (session.streaming) updateSessionState(session.id, { streaming: true, recovering: true, loaded: false, error: '' })
         }
@@ -686,10 +752,6 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     notify('已停止当前运行', 'info')
   }
 
-  const toggleTiledSession = (id) => {
-    setTiledSessionIds((current) => current.includes(id) ? current.filter((item) => item !== id) : [...current, id])
-  }
-
   const switchSessionModel = async (sessionId, nextModel) => {
     const selected = availableModels.find((item) => item.key === nextModel)
     if (!sessionId || !selected || sessionStatesRef.current[sessionId]?.streaming) return
@@ -761,32 +823,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         body: JSON.stringify({ name }),
       })
       setRemoteSessions((current) => current.map((item) => item.id === session.id ? { ...item, name: updated.name } : item))
+      announceSessionsUpdated()
       notify('会话标题已更新')
-    } catch (caught) {
-      setError(caught.message)
-    }
-  }
-
-  const deleteSession = async (session) => {
-    const approved = await requestConfirm({ title: '删除会话', message: `确定删除会话「${session.name}」吗？此操作会删除本地历史记录。`, confirmLabel: '删除' })
-    if (!approved) return
-    try {
-      await apiJson(`/api/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' })
-      const remaining = remoteSessions.filter((item) => item.id !== session.id)
-      setRemoteSessions(remaining)
-      setTiledSessionIds((current) => current.filter((id) => id !== session.id))
-      setSessionStates((current) => {
-        const next = { ...current }
-        delete next[session.id]
-        return next
-      })
-      if (activeId === session.id) {
-        setActiveId(remaining[0]?.id || '')
-        if (remaining[0]?.id) localStorage.setItem(STORAGE_KEYS.activeSession, remaining[0].id)
-        else localStorage.removeItem(STORAGE_KEYS.activeSession)
-      }
-      notify('会话已删除')
-      if (!remaining.length) await createSession()
     } catch (caught) {
       setError(caught.message)
     }
@@ -805,15 +843,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
 
   return (
     <>
-    <div className={`chat-layout mode-${mode} ${historyOpen ? '' : 'history-closed'}`}>
-      {historyOpen ? (
-      <Panel className="history-panel">
-        <div className="history-head"><SectionTitle title="历史对话" /><span>{tiledSessionIds.length} 个平铺</span><button className="history-collapse" title="收起历史对话" aria-label="收起历史对话" onClick={() => setHistoryOpen(false)}><ChevronLeft size={14} /></button></div>
-        {remoteSessions.map((session) => <div className={`history-row ${activeId === session.id ? 'active' : ''}`} key={session.id}><button className="history-item" onClick={() => { setActiveId(session.id); setMode('focus') }}><strong title={session.name}>{session.name}</strong><span>{relativeTime(session.modified)} · {session.messageCount} messages</span></button><div className="history-actions"><button className={tiledSessionIds.includes(session.id) ? 'is-tiled' : ''} title={tiledSessionIds.includes(session.id) ? '移出平铺' : '加入平铺'} aria-label={tiledSessionIds.includes(session.id) ? '移出平铺' : '加入平铺'} onClick={() => toggleTiledSession(session.id)}>{tiledSessionIds.includes(session.id) ? <Check size={12} /> : <Grid2X2 size={12} />}</button><button title="重命名会话" aria-label="重命名会话" onClick={() => renameSession(session)}><Pencil size={12} /></button><button className="delete" title="删除会话" aria-label="删除会话" onClick={() => deleteSession(session)}><Trash2 size={12} /></button></div></div>)}
-      </Panel>
-      ) : (
-      <button className="history-rail" title="展开历史对话" aria-label={`展开历史对话，共 ${remoteSessions.length} 个会话`} onClick={() => setHistoryOpen(true)}><History size={16} /><em>{remoteSessions.length}</em></button>
-      )}
+    <div className={`chat-layout mode-${mode}`}>
       {loading ? <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在启动 Agent</h2><p>加载模型目录与历史会话…</p></Panel> : mode === 'grid' ? (
         <div className="session-grid">
           {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} permissionMode={sessionStates[session.id]?.permissionMode || session.permissionMode || 'auto'} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(session.id, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(session.id, approvalId, approved)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
