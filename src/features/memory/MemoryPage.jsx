@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FileCode2, Pencil, Plus, RefreshCw, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { Panel, SectionTitle } from '../../components/ui.jsx'
 import { StarOrbit } from '../../components/StarOrbit.jsx'
@@ -11,6 +11,12 @@ const GOLDEN_ANGLE = Math.PI * (3 - Math.sqrt(5))
 
 const TYPE_LABELS = {
   concept: '概念', file: '文件', risk: '风险', preference: '偏好', decision: '决策', fact: '事实', task: '任务',
+}
+
+// 与 index.css 中的 --g-* 星辰色保持一致，用于连线渐变
+const STAR_COLORS = {
+  concept: '#6eb5ff', file: '#4ade80', risk: '#fb7185', preference: '#c4b5fd',
+  decision: '#fbbf24', fact: '#e2e8f0', task: '#67e8f9',
 }
 
 function hashSeed(text) {
@@ -52,6 +58,17 @@ function spaceLabel(space) {
   return space?.kind === 'global' ? '全局星域' : (space?.name || '')
 }
 
+// 关联线使用贝塞尔曲线：沿垂直方向轻微弯曲，相邻线交错方向，看起来更柔和
+function linkCurve(source, target, seed) {
+  const dx = target.x - source.x
+  const dy = target.y - source.y
+  const length = Math.hypot(dx, dy) || 1
+  const bend = Math.min(24, length * 0.16) * (seed % 2 === 0 ? 1 : -1)
+  const cx = (source.x + target.x) / 2 - (dy / length) * bend
+  const cy = (source.y + target.y) / 2 + (dx / length) * bend
+  return `M ${source.x.toFixed(1)} ${source.y.toFixed(1)} Q ${cx.toFixed(1)} ${cy.toFixed(1)} ${target.x.toFixed(1)} ${target.y.toFixed(1)}`
+}
+
 export function MemoryPage({ notify, query, registerPrimaryAction, requestConfirm }) {
   const [data, setData] = useState({ spaces: [], nodes: [], links: [], selectedSpaceId: '' })
   const [spaceId, setSpaceId] = useState('')
@@ -61,7 +78,29 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
   const [zoom, setZoom] = useState(1)
   const [nodeModal, setNodeModal] = useState(null)
   const [spaceModal, setSpaceModal] = useState(null)
+  const [hoveredId, setHoveredId] = useState('')
+  const stageRef = useRef(null)
+  const parallaxFrame = useRef(0)
   usePagePrimaryAction(registerPrimaryAction, () => setNodeModal({ spaceId: spaceId || data.selectedSpaceId }))
+
+  // 鼠标视差：星辰与连线按深度分层缓动跟随，rAF 节流避免高频写入
+  const handleParallax = (event) => {
+    const stage = stageRef.current
+    if (!stage) return
+    const rect = stage.getBoundingClientRect()
+    const px = ((event.clientX - rect.left) / rect.width - 0.5) * 2
+    const py = ((event.clientY - rect.top) / rect.height - 0.5) * 2
+    cancelAnimationFrame(parallaxFrame.current)
+    parallaxFrame.current = requestAnimationFrame(() => {
+      stage.style.setProperty('--px', px.toFixed(3))
+      stage.style.setProperty('--py', py.toFixed(3))
+    })
+  }
+  const resetParallax = () => {
+    cancelAnimationFrame(parallaxFrame.current)
+    stageRef.current?.style.setProperty('--px', '0')
+    stageRef.current?.style.setProperty('--py', '0')
+  }
 
   const load = useCallback(async (requestedSpaceId = '') => {
     setLoading(true)
@@ -93,6 +132,13 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
   const relatedNodeIds = new Set(data.links.flatMap((link) => {
     if (link.sourceId === selectedId) return [link.targetId]
     if (link.targetId === selectedId) return [link.sourceId]
+    return []
+  }))
+  // 聚焦模式：悬停优先于选中，聚焦星的关系网保持明亮，其余星辰淡出
+  const focusId = hoveredId || selectedId
+  const focusRelatedIds = new Set(data.links.flatMap((link) => {
+    if (link.sourceId === focusId) return [link.targetId]
+    if (link.targetId === focusId) return [link.sourceId]
     return []
   }))
   const relatedFiles = data.nodes.filter((node) => node.type === 'file' && (relatedNodeIds.has(node.id) || node.id === selectedId))
@@ -133,44 +179,69 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
           <div className="galaxy-legend">{Object.entries(TYPE_LABELS).map(([type, label]) => <span key={type}><i className={`g-dot g-${type}`} />{label}</span>)}</div>
         </Panel>
       </div>
-      <Panel className="graph-panel galaxy-panel">
+      <Panel className="graph-panel galaxy-panel" onPointerMove={handleParallax} onPointerLeave={resetParallax}>
         <div className="graph-toolbar">
           <button title="点亮星辰" onClick={() => setNodeModal({ spaceId })}><Plus size={14} /></button>
           <button title="放大" onClick={() => setZoom((value) => Math.min(1.6, Number((value + 0.15).toFixed(2))))}><ZoomIn size={13} /></button>
           <button title="缩小" onClick={() => setZoom((value) => Math.max(0.7, Number((value - 0.15).toFixed(2))))}><ZoomOut size={13} /></button>
           <button title="刷新" onClick={() => load(spaceId)}><RefreshCw className={loading ? 'spin' : ''} size={13} /></button>
         </div>
-        <div className="galaxy-stage" style={{ transform: `scale(${zoom})` }}>
+        <div className={`galaxy-stage ${focusId ? 'has-focus' : ''}`} ref={stageRef} style={{ transform: `scale(${zoom})` }}>
           <i className="galaxy-spiral" aria-hidden="true" />
+          <i className="galaxy-core" aria-hidden="true" />
           <i className="galaxy-aurora galaxy-aurora-one" aria-hidden="true" />
           <i className="galaxy-aurora galaxy-aurora-two" aria-hidden="true" />
+          <i className="galaxy-aurora galaxy-aurora-three" aria-hidden="true" />
           <svg viewBox="0 0 600 420" preserveAspectRatio="none" aria-hidden="true">
             <g className="galaxy-orbits">
               <ellipse cx="300" cy="206" rx="205" ry="122" transform="rotate(-8 300 206)" />
               <ellipse cx="300" cy="206" rx="154" ry="88" transform="rotate(18 300 206)" />
               <ellipse cx="300" cy="206" rx="95" ry="54" transform="rotate(-24 300 206)" />
             </g>
-            {visibleLinks.map((link) => {
+            <defs>
+              {visibleLinks.map((link, index) => {
+                const source = starById.get(link.sourceId)
+                const target = starById.get(link.targetId)
+                if (!source || !target) return null
+                return <linearGradient id={`lg-${index}`} gradientUnits="userSpaceOnUse" x1={source.x} y1={source.y} x2={target.x} y2={target.y} key={link.id}>
+                  <stop offset="0" stopColor={STAR_COLORS[source.node.type] || '#93b4ff'} />
+                  <stop offset="1" stopColor={STAR_COLORS[target.node.type] || '#93b4ff'} />
+                </linearGradient>
+              })}
+            </defs>
+            {visibleLinks.map((link, index) => {
               const source = starById.get(link.sourceId)
               const target = starById.get(link.targetId)
               if (!source || !target) return null
-              return <line className={link.sourceId === selectedId || link.targetId === selectedId ? 'active' : ''} x1={source.x} y1={source.y} x2={target.x} y2={target.y} key={link.id} />
+              const active = link.sourceId === focusId || link.targetId === focusId
+              const path = linkCurve(source, target, hashSeed(link.id))
+              return <g key={link.id}>
+                <path className={`link-path ${active ? 'active' : ''}`} d={path} stroke={`url(#lg-${index})`} />
+                {active && <circle className="link-pulse" r="2.1"><animateMotion dur="2.8s" repeatCount="indefinite" path={path} /></circle>}
+              </g>
             })}
           </svg>
           <i className="galaxy-meteor" aria-hidden="true" />
-          {stars.map(({ node, x, y, twinkle }) => <button
-            className={`galaxy-star star-${node.type} ${selectedId === node.id ? 'active' : ''}`}
+          <i className="galaxy-meteor meteor-two" aria-hidden="true" />
+          <i className="galaxy-meteor meteor-three" aria-hidden="true" />
+          {stars.map(({ node, x, y, twinkle }, index) => <button
+            className={`galaxy-star star-${node.type} ${selectedId === node.id ? 'active' : ''} ${focusId && node.id !== focusId && !focusRelatedIds.has(node.id) ? 'dimmed' : ''}`}
             onClick={() => setSelectedId(node.id)}
+            onMouseEnter={() => setHoveredId(node.id)}
+            onMouseLeave={() => setHoveredId('')}
             style={{
               left: `${(x / GALAXY_VIEW.width) * 100}%`,
               top: `${(y / GALAXY_VIEW.height) * 100}%`,
               '--star-size': `${10 + Math.round((node.importance || 0.5) * 9)}px`,
               '--twinkle-delay': `${twinkle}s`,
+              '--enter-delay': `${index * 55}ms`,
+              '--depth': (hashSeed(node.id) % 100) / 100,
             }}
             title={node.content}
             key={node.id}
           >
             {selectedId === node.id && <i className="orbit-ring" aria-hidden="true" />}
+            {selectedId === node.id && <i className="dash-ring" aria-hidden="true" />}
             <svg className="star-core" viewBox="0 0 32 32" aria-hidden="true">
               <path className="star-ray" d="M16 0 L19.7 12.3 L32 16 L19.7 19.7 L16 32 L12.3 19.7 L0 16 L12.3 12.3 Z" />
               <path className="star-shape" d="M16 2 L18.8 13.2 L30 16 L18.8 18.8 L16 30 L13.2 18.8 L2 16 L13.2 13.2 Z" />
