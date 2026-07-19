@@ -6,6 +6,15 @@ const MAX_TEXT_CHARS = 200_000
 const TEXT_EXTENSIONS = new Set(['txt', 'md', 'json', 'js', 'jsx', 'ts', 'tsx', 'css', 'html', 'xml', 'yaml', 'yml', 'csv', 'log', 'py', 'java', 'go', 'rs', 'sh', 'ps1', 'toml', 'sql'])
 const DOCUMENT_EXTENSIONS = new Set(['pdf', 'docx', 'pptx', 'xlsx', 'odt', 'odp', 'ods', 'rtf', 'epub'])
 
+export function clipboardImageFiles(clipboardData) {
+  const files = [...(clipboardData?.files || [])].filter((file) => file.type?.startsWith('image/'))
+  if (files.length) return files
+  return [...(clipboardData?.items || [])]
+    .filter((item) => item.kind === 'file' && item.type?.startsWith('image/'))
+    .map((item) => item.getAsFile?.())
+    .filter(Boolean)
+}
+
 function fileExtension(name) {
   return name.includes('.') ? name.split('.').pop().toLowerCase() : ''
 }
@@ -46,30 +55,54 @@ async function prepareFiles(fileList) {
 export function useAttachmentSelection() {
   const [attachments, setAttachments] = useState([])
   const [attachmentError, setAttachmentError] = useState('')
+  const attachmentsRef = useRef([])
   const inputRef = useRef(null)
-  const chooseFiles = async (event) => {
+
+  const replaceAttachments = useCallback((items) => {
+    attachmentsRef.current = items
+    setAttachments(items)
+  }, [])
+
+  const addFiles = useCallback(async (fileList) => {
     try {
       setAttachmentError('')
-      const prepared = await prepareFiles(event.target.files || [])
-      const combined = [...attachments, ...prepared].slice(0, 8)
+      const prepared = await prepareFiles(fileList || [])
+      const combined = [...attachmentsRef.current, ...prepared].slice(0, 8)
       if (combined.reduce((total, item) => total + item.size, 0) > MAX_TOTAL_ATTACHMENT_BYTES) throw new Error('附件总大小不能超过 20 MB')
-      setAttachments(combined)
+      replaceAttachments(combined)
+      return true
     } catch (error) {
       setAttachmentError(error.message)
-    } finally {
-      event.target.value = ''
+      return false
     }
-  }
-  const removeAttachment = (id) => setAttachments((current) => current.filter((item) => item.id !== id))
-  const clearAttachments = () => setAttachments([])
+  }, [replaceAttachments])
+
+  const chooseFiles = useCallback(async (event) => {
+    const input = event.currentTarget
+    await addFiles(input.files || [])
+    input.value = ''
+  }, [addFiles])
+
+  const pasteImages = useCallback((event) => {
+    const images = clipboardImageFiles(event.clipboardData)
+    if (!images.length) return
+    event.preventDefault()
+    void addFiles(images)
+  }, [addFiles])
+
+  const removeAttachment = useCallback((id) => {
+    replaceAttachments(attachmentsRef.current.filter((item) => item.id !== id))
+  }, [replaceAttachments])
+
+  const clearAttachments = useCallback(() => replaceAttachments([]), [replaceAttachments])
+
   const addAttachments = useCallback((items) => {
-    setAttachments((current) => {
-      const next = [...current]
-      for (const item of items) {
-        if (!next.some((existing) => existing.id === item.id)) next.push(item)
-      }
-      return next.slice(0, 8)
-    })
-  }, [])
-  return { attachments, attachmentError, inputRef, chooseFiles, removeAttachment, clearAttachments, addAttachments }
+    const next = [...attachmentsRef.current]
+    for (const item of items) {
+      if (!next.some((existing) => existing.id === item.id)) next.push(item)
+    }
+    replaceAttachments(next.slice(0, 8))
+  }, [replaceAttachments])
+
+  return { attachments, attachmentError, inputRef, chooseFiles, pasteImages, removeAttachment, clearAttachments, addAttachments }
 }
