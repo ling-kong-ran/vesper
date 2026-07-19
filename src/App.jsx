@@ -4,7 +4,6 @@ import {
   ArrowDown,
   Bot,
   Check,
-  ChevronDown,
   ChevronRight,
   Download,
   File,
@@ -356,7 +355,7 @@ function PageLoader() {
 function Sidebar({ page, navigate, setChatMode, open, onClose, pluginStats }) {
   const [usage, setUsage] = useState(null)
   const [sessions, setSessions] = useState([])
-  const [historyExpanded, setHistoryExpanded] = useState(false)
+  const [historyExpanded, setHistoryExpanded] = useState(true)
   const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
   const active = page === 'workflowCreate' ? 'workflows' : page === 'chatHistory' ? 'chat' : page
 
@@ -418,28 +417,26 @@ function Sidebar({ page, navigate, setChatMode, open, onClose, pluginStats }) {
       {open && <button className="nav-scrim" aria-label="关闭导航" onClick={onClose} />}
       <aside className={`sidebar ${open ? 'is-open' : ''}`}>
         <div className="brand"><BrandLogo size={22} /><strong>{APP_NAME}</strong><button className="mobile-close" onClick={onClose}><X size={18} /></button></div>
-        <nav className="nav-list" aria-label="主导航">
-          {NAV_GROUPS.map(([group, items]) => (
-            <div className="nav-group" key={group}>
-              <span className="nav-group-label">{group}</span>
-              {items.map(([id, label, Icon]) => id === 'chat' ? (
-                <div className={`nav-chat-block ${historyExpanded ? 'is-expanded' : ''}`} key={id}>
-                  <div className="nav-chat-entry">
-                    <button className={`nav-main nav-chat-main ${active === id ? 'active' : ''}`} onClick={() => navigate(id)}><Icon size={16} /><span>{label}</span></button>
-                    <button className="nav-history-toggle" title={historyExpanded ? '收起最近会话' : '展开最近会话'} aria-label={historyExpanded ? '收起最近会话' : '展开最近会话'} aria-expanded={historyExpanded} onClick={() => setHistoryExpanded((value) => !value)}><ChevronDown className={historyExpanded ? 'is-open' : ''} size={14} /></button>
-                  </div>
-                  {historyExpanded && <div className="nav-history-preview">
-                    {sessions.slice(0, 4).map((session) => <button className={`nav-history-item ${session.id === activeSessionId ? 'active-session' : ''}`} title={session.name || '未命名会话'} onClick={() => openRecentSession(session.id)} key={session.id}><span>{session.name || '未命名会话'}</span><small>{relativeTime(session.modified)}</small></button>)}
-                    {!sessions.length && <span className="nav-history-empty">暂无历史会话</span>}
-                    <button className="nav-history-all" onClick={() => navigate('chatHistory')}><span>查看全部{sessions.length ? ` · ${sessions.length}` : ''}</span><ChevronRight size={12} /></button>
-                  </div>}
-                </div>
-              ) : (
-                <button className={`nav-main ${active === id ? 'active' : ''}`} key={id} onClick={() => navigate(id)}><Icon size={16} /><span>{label}</span></button>
-              ))}
+        <div className="nav-list">
+          <nav className="nav-primary" aria-label="主导航">
+            {NAV_GROUPS.map(([group, items]) => (
+              <div className="nav-group" key={group}>
+                <span className="nav-group-label">{group}</span>
+                {items.map(([id, label, Icon]) => <button className={`nav-main ${active === id ? 'active' : ''}`} key={id} onClick={() => navigate(id)}><Icon size={16} /><span>{label}</span></button>)}
+              </div>
+            ))}
+          </nav>
+          <section className={`nav-history-section ${historyExpanded ? 'is-expanded' : ''}`} aria-label="最近会话">
+            <div className="nav-history-section-head">
+              <button className="nav-history-heading" aria-controls="sidebar-recent-sessions" aria-expanded={historyExpanded} onClick={() => setHistoryExpanded((value) => !value)}><span>最近会话</span><ChevronRight className={historyExpanded ? 'is-open' : ''} size={14} /></button>
+              <button className="nav-history-view-all" aria-label={`查看全部历史会话，共 ${sessions.length} 个`} onClick={() => navigate('chatHistory')}>查看全部</button>
             </div>
-          ))}
-        </nav>
+            {historyExpanded && <div className="nav-history-list" id="sidebar-recent-sessions">
+              {sessions.slice(0, 4).map((session) => <button className={`nav-history-item ${session.id === activeSessionId ? 'active-session' : ''}`} aria-current={session.id === activeSessionId ? 'page' : undefined} title={`${session.name || '未命名会话'} · ${relativeTime(session.modified)}`} onClick={() => openRecentSession(session.id)} key={session.id}><span>{session.name || '未命名会话'}</span></button>)}
+              {!sessions.length && <span className="nav-history-empty">暂无历史会话</span>}
+            </div>}
+          </section>
+        </div>
         <div className="sidebar-status">
           <span>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? '功能状态' : page === 'plugins' ? '插件状态' : '运行状态'}</span>
           <b>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? <>演示页面 <em className="amber">尚未接入</em></> : page === 'plugins' ? `已启用 ${pluginStats?.enabled ?? '—'} / ${pluginStats?.total ?? '—'}` : <>今日 tokens <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</b>
