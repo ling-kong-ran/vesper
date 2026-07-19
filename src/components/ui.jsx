@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ChevronDown, Eye, Info, X } from 'lucide-react'
 
 const BADGE_TONES = {
-  blue: 'bg-[var(--accent-soft)] text-[var(--accent-strong)]',
+  blue: 'bg-[var(--brand-blue-soft)] text-[var(--brand-blue-strong)]',
   green: 'bg-[var(--success-soft)] text-[var(--success-strong)]',
   red: 'bg-[var(--danger-soft)] text-[var(--danger)]',
   amber: 'bg-[var(--warning-soft)] text-[var(--warning-strong)]',
