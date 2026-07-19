@@ -92,3 +92,22 @@ test('session history pagination follows the persisted branch across compaction'
   assert.deepEqual(older.messages.map((message) => message.text), ['old-user', 'old-agent'])
   assert.equal(older.pageInfo.hasMore, false)
 })
+
+test('empty active sessions tolerate a JSONL file that has not been created yet', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-coder-empty-session-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  runtime.sessions.set('session-empty', {
+    cwd: directory,
+    session: {
+      sessionFile: join(directory, 'sessions', 'not-created-yet.jsonl'),
+      isStreaming: false,
+      model: { provider: 'openai', id: 'gpt-5.4' },
+      messages: [],
+    },
+  })
+
+  const page = await runtime.getSessionMessagePage('session-empty', { limit: 40 })
+  assert.deepEqual(page.messages, [])
+  assert.deepEqual(page.pageInfo, { start: 0, end: 0, total: 0, hasMore: false, nextCursor: null })
+})

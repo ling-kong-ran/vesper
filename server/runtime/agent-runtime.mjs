@@ -657,14 +657,23 @@ export class AgentRuntimeService {
   }
 
   async getSessionHistoryMessages(id) {
-    const activePath = this.sessions.get(id)?.session.sessionFile
+    const active = this.sessions.get(id)
+    const activePath = active?.session.sessionFile
     let path = activePath || this.sessionHistoryPaths.get(id)
     if (!path) {
       path = (await this.findSessionInfo(id))?.path
       if (path) this.sessionHistoryPaths.set(id, path)
     }
     if (!path) return this.getSessionMessages(id)
-    const history = await this.readSessionHistoryEntries(path)
+    let history
+    try {
+      history = await this.readSessionHistoryEntries(path)
+    } catch (error) {
+      if (error?.code !== 'ENOENT') throw error
+      this.sessionHistoryPaths.delete(id)
+      this.sessionHistoryCache.delete(path)
+      return active ? this.getSessionMessages(id) : []
+    }
     let cursor = [...history.entries].reverse().find((entry) => entry?.id)
     const branch = []
     const visited = new Set()
