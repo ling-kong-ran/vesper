@@ -29,6 +29,7 @@ import {
   X,
 } from 'lucide-react'
 import { APP_NAME } from './app/brand.js'
+import { createPrimaryActionRegistry } from './app/primary-action.js'
 import { STORAGE_KEYS } from './app/storage.js'
 import { NAV_GROUPS, PAGE_META } from './app/navigation.jsx'
 import { AgentStatusAvatar } from './components/AgentStatusAvatar.jsx'
@@ -38,6 +39,7 @@ import { AppDialog, InputLabel, Panel, Segmented, SelectLabel, Toast } from './c
 import { useAttachmentSelection } from './features/chat/attachments.js'
 import { ChatHistoryPage } from './features/chat/ChatHistoryPage.jsx'
 import { ACTIVE_SESSION_CHANGED_EVENT, SESSION_SELECTED_EVENT, SESSIONS_UPDATED_EVENT, announceActiveSession, announceSessionsUpdated, requestSessionSelection } from './features/chat/events.js'
+import { mergeSessionLists } from './features/chat/session-list.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, consumeEventStream } from './lib/api.js'
@@ -124,8 +126,7 @@ function App() {
   const [startupReady, setStartupReady] = useState(false)
   const [notificationSettings, setNotificationSettings] = useState({ browser: { enabled: false }, templates: [] })
   const browserEventCursor = useRef('')
-  const primaryActionRef = useRef(null)
-  const queuedPrimaryActionRef = useRef(false)
+  const [primaryActions] = useState(createPrimaryActionRegistry)
   const searchInputRef = useRef(null)
   const toastTimer = useRef(null)
   const appDialog = useAppDialog()
@@ -188,21 +189,14 @@ function App() {
   }, [notificationSettings.templates, showBrowserNotification])
 
   const registerPrimaryAction = useCallback((action) => {
-    primaryActionRef.current = action
-    if (queuedPrimaryActionRef.current) {
-      queuedPrimaryActionRef.current = false
-      action()
-    }
-    return () => { if (primaryActionRef.current === action) primaryActionRef.current = null }
-  }, [])
+    return primaryActions.register(action)
+  }, [primaryActions])
 
   const invokePrimaryAction = useCallback(() => {
-    if (primaryActionRef.current) primaryActionRef.current()
-    else queuedPrimaryActionRef.current = true
-  }, [])
+    primaryActions.invoke()
+  }, [primaryActions])
 
   const navigate = useCallback((next) => {
-    primaryActionRef.current = null
     setPage(next)
     window.location.hash = next
     setQuery('')
@@ -252,8 +246,8 @@ function App() {
       .then((config) => {
         if (!active) return
         if (!hasUsableProvider(config)) {
-          primaryActionRef.current = null
-          queuedPrimaryActionRef.current = true
+          primaryActions.clear()
+          primaryActions.invoke()
           setPage('config')
           window.location.hash = 'config'
         }
@@ -261,13 +255,12 @@ function App() {
       .catch(() => {})
       .finally(() => active && setStartupReady(true))
     return () => { active = false }
-  }, [])
+  }, [primaryActions])
 
   useEffect(() => {
     const syncHash = () => {
       const next = window.location.hash.slice(1)
       if (PAGE_META[next]) {
-        primaryActionRef.current = null
         setPage(next)
       }
     }
@@ -487,6 +480,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   const [workspaceSession, setWorkspaceSession] = useState(null)
   const [tiledSessionIds, setTiledSessionIds] = useState(() => readStoredArray(STORAGE_KEYS.tiledSessions))
   const tiledStorageWasEmpty = useRef(localStorage.getItem(STORAGE_KEYS.tiledSessions) === null)
+  const creatingSessionRef = useRef(null)
   const sessionStatesRef = useRef(sessionStates)
 
   useEffect(() => {
@@ -598,21 +592,34 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     return data.sessions
   }
 
-  const createSession = async () => {
-    try {
-      setError('')
-      const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: '新会话' }) })
-      setActiveId(created.id)
-      updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null })
-      setTiledSessionIds((current) => current.includes(created.id) ? current : [...current, created.id])
-      setMode('focus')
-      await refreshSessions(created.id)
-      notify('新会话已创建')
-      return created.id
-    } catch (caught) {
-      setError(caught.message)
-      return ''
-    }
+  const createSession = () => {
+    if (creatingSessionRef.current) return creatingSessionRef.current
+    const request = (async () => {
+      try {
+        setError('')
+        const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: '新会话' }) })
+        setActiveId(created.id)
+        setRemoteSessions((current) => mergeSessionLists(current, [created]))
+        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null })
+        setTiledSessionIds((current) => current.includes(created.id) ? current : [...current, created.id])
+        setMode('focus')
+        try {
+          await refreshSessions(created.id)
+        } catch (caught) {
+          setError(`会话已创建，但刷新列表失败：${caught.message}`)
+        }
+        notify('新会话已创建')
+        return created.id
+      } catch (caught) {
+        setError(caught.message)
+        return ''
+      }
+    })()
+    creatingSessionRef.current = request
+    void request.finally(() => {
+      if (creatingSessionRef.current === request) creatingSessionRef.current = null
+    })
+    return request
   }
   usePagePrimaryAction(registerPrimaryAction, createSession)
 
@@ -632,23 +639,29 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
             }))
           : []))
         let list = sessionData.sessions
+        if (!list.length && (creatingSessionRef.current || Object.keys(sessionStatesRef.current).length)) {
+          await creatingSessionRef.current
+          if (!active) return
+          list = (await apiJson('/api/sessions')).sessions
+        }
         if (!list.length) {
           const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: '新会话' }) })
           list = [created]
         }
         if (!active) return
-        setRemoteSessions(list)
+        setRemoteSessions((current) => mergeSessionLists(current, list))
         announceSessionsUpdated()
         for (const session of list) {
           if (session.streaming) updateSessionState(session.id, { streaming: true, recovering: true, loaded: false, error: '' })
         }
         const storedId = localStorage.getItem(STORAGE_KEYS.activeSession)
-        setActiveId(list.some((session) => session.id === storedId) ? storedId : (list[0]?.id || ''))
+        const knownIds = new Set([...list.map((session) => session.id), ...Object.keys(sessionStatesRef.current)])
+        setActiveId((current) => knownIds.has(current) ? current : (knownIds.has(storedId) ? storedId : (list[0]?.id || '')))
         setTiledSessionIds((current) => {
-          const valid = current.filter((id) => list.some((session) => session.id === id))
+          const valid = current.filter((id) => knownIds.has(id))
           if (tiledStorageWasEmpty.current) {
             tiledStorageWasEmpty.current = false
-            return list.slice(0, 4).map((session) => session.id)
+            return [...knownIds].slice(0, 4)
           }
           return valid
         })
