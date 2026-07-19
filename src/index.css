@@ -268,7 +268,8 @@ html, body, #root { width: 100%; min-width: 320px; min-height: 100%; margin: 0; 
 body { min-height: 100dvh; overflow: hidden; font-size: 13px; line-height: 1.5; }
 small { font-size: 12px !important; line-height: 1.45; }
 .app-startup { display: flex; width: 100%; min-height: 100vh; align-items: center; justify-content: center; gap: 10px; background: var(--bg); color: var(--muted); font-size: 13px; }
-.app-startup .brand-logo { margin-right: 4px; }
+.app-startup .startup-logo { margin-right: 2px; }
+.app-startup .logo-star { animation: star-twinkle 1.6s ease-in-out infinite; }
 button, input, textarea, select { font: inherit; }
 button { min-height: 32px; color: inherit; }
 button, a, select { -webkit-tap-highlight-color: transparent; }
@@ -281,7 +282,8 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 
 .sidebar { position: relative; z-index: 30; width: 236px; min-width: 236px; height: 100%; display: flex; flex-direction: column; gap: 18px; padding: 18px; border-right: 1px solid var(--stroke); background: var(--sidebar-bg); backdrop-filter: blur(20px); box-shadow: 0 14px 40px -18px var(--sidebar-shadow); }
 .brand { display: flex; height: 32px; align-items: center; gap: 9px; font-size: 13px; }
-.brand-logo { display: grid; width: 25px; height: 25px; place-items: center; border-radius: var(--r-sm); background: var(--ink-strong); color: var(--on-ink); font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; font-weight: 700; }
+.brand-logo-svg { display: block; flex: none; color: var(--text); }
+@keyframes star-twinkle { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 .mobile-close { display: none; margin-left: auto; border: 0; background: transparent; }
 .nav-list { display: flex; min-height: 0; flex-direction: column; gap: 3px; }
 .nav-list button { display: flex; width: 100%; height: 34px; align-items: center; gap: 10px; border: 0; border-radius: var(--r-sm); background: transparent; padding: 0 10px; color: var(--text-secondary); text-align: left; font-size: 12px; font-weight: 500; transition: var(--d1) var(--ease-out); }

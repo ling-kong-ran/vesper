@@ -34,6 +34,7 @@ import {
 import { APP_NAME } from './app/brand.js'
 import { STORAGE_KEYS } from './app/storage.js'
 import { NAV_ITEMS, PAGE_META } from './app/navigation.jsx'
+import { BrandLogo } from './components/BrandLogo.jsx'
 import { AppDialog, InputLabel, Panel, SectionTitle, Segmented, SelectLabel, Toast } from './components/ui.jsx'
 import { useAttachmentSelection } from './features/chat/attachments.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
@@ -294,7 +295,7 @@ function App() {
     ? ['对话', '聚集模式 · 单会话工作台']
     : PAGE_META[page]
 
-  if (!startupReady) return <div className="app-startup"><span className="brand-logo">V</span><RefreshCw className="spin" size={19} /><strong>正在检查 Agent 配置…</strong></div>
+  if (!startupReady) return <div className="app-startup"><BrandLogo size={30} className="startup-logo" /><strong>正在唤醒 Vesper…</strong></div>
 
   return (
     <div className="app-shell">
@@ -367,7 +368,7 @@ function Sidebar({ page, navigate, open, onClose, pluginStats }) {
     <>
       {open && <button className="nav-scrim" aria-label="关闭导航" onClick={onClose} />}
       <aside className={`sidebar ${open ? 'is-open' : ''}`}>
-        <div className="brand"><span className="brand-logo">V</span><strong>{APP_NAME}</strong><button className="mobile-close" onClick={onClose}><X size={18} /></button></div>
+        <div className="brand"><BrandLogo size={22} /><strong>{APP_NAME}</strong><button className="mobile-close" onClick={onClose}><X size={18} /></button></div>
         <nav className="nav-list" aria-label="主导航">
           {NAV_ITEMS.map(([id, label, Icon]) => (
             <button key={id} className={active === id ? 'active' : ''} onClick={() => navigate(id)}>
