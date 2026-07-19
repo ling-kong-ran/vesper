@@ -7,3 +7,7 @@ export function mergeSessionLists(current, incoming) {
 export function removeTiledSession(ids, sessionId) {
   return ids.filter((id) => id !== sessionId)
 }
+
+export function toggleTiledSession(ids, sessionId) {
+  return ids.includes(sessionId) ? removeTiledSession(ids, sessionId) : [...ids, sessionId]
+}

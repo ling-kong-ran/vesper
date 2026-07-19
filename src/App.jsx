@@ -8,6 +8,7 @@ import {
   Download,
   File,
   FolderOpen,
+  Grid2X2,
   Link2,
   Menu,
   Monitor,
@@ -39,7 +40,7 @@ import { AppDialog, InputLabel, Panel, Segmented, SelectLabel, Toast } from './c
 import { useAttachmentSelection } from './features/chat/attachments.js'
 import { ChatHistoryPage } from './features/chat/ChatHistoryPage.jsx'
 import { ACTIVE_SESSION_CHANGED_EVENT, SESSION_SELECTED_EVENT, SESSIONS_UPDATED_EVENT, announceActiveSession, announceSessionsUpdated, requestSessionSelection } from './features/chat/events.js'
-import { mergeSessionLists, removeTiledSession } from './features/chat/session-list.js'
+import { mergeSessionLists, toggleTiledSession } from './features/chat/session-list.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, consumeEventStream } from './lib/api.js'
@@ -844,9 +845,13 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   const visible = useMemo(() => remoteSessions.filter((session) =>
     tiledSessionIds.includes(session.id) && `${session.name} ${session.firstMessage}`.toLowerCase().includes(query.toLowerCase()),
   ), [remoteSessions, query, tiledSessionIds])
-  const removeFromTiled = useCallback((session) => {
-    setTiledSessionIds((current) => removeTiledSession(current, session.id))
-    notify(`已将「${session.name}」移出平铺`, 'info')
+  const toggleTiled = useCallback((session) => {
+    setTiledSessionIds((current) => {
+      const selected = current.includes(session.id)
+      const next = toggleTiledSession(current, session.id)
+      notify(selected ? `已将「${session.name}」移出平铺` : `已将「${session.name}」加入平铺`, 'info')
+      return next
+    })
   }, [notify])
   const activeSession = remoteSessions.find((session) => session.id === activeId)
   const activeState = sessionStates[activeId] || { messages: [], tools: [], approvals: [], streaming: false, error: '', loading: false, switchingModel: false, switchingCwd: false, switchingPermission: false, messageStart: null, hasOlder: false, olderCursor: null }
@@ -861,9 +866,9 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     <div className={`chat-layout mode-${mode}`}>
       {loading ? <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在启动 Agent</h2><p>加载模型目录与历史会话…</p></Panel> : mode === 'grid' ? (
         <div className="session-grid">
-          {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} permissionMode={sessionStates[session.id]?.permissionMode || session.permissionMode || 'auto'} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(session.id, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(session.id, approvalId, approved)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onRemoveFromTiled={() => removeFromTiled(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
+          {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} permissionMode={sessionStates[session.id]?.permissionMode || session.permissionMode || 'auto'} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(session.id, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(session.id, approvalId, approved)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onRemoveFromTiled={() => toggleTiled(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
         </div>
-      ) : <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} />}
+      ) : <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} />}
     </div>
     {workspaceSession && <WorkspacePicker session={workspaceSession} onClose={() => setWorkspaceSession(null)} onSelect={(cwd) => switchSessionCwd(workspaceSession, cwd)} />}
     </>
@@ -1018,7 +1023,7 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, approvals, error, pendingAsset, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onApproval, onWorkspace, onRename, onSend, onAbort }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort }) {
   const [value, setValue] = useState('')
   const selection = useAttachmentSelection()
   const addSelectedAttachments = selection.addAttachments
@@ -1071,7 +1076,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   }
   return (
     <Panel className="focus-session">
-      <div className="card-head"><div><div className="editable-session-title"><h3 title={session?.name}>{session?.name || '新会话'}</h3><button className="icon-button" title="重命名会话" onClick={onRename}><Pencil size={13} /></button></div><div className="session-runtime-meta"><span className={streaming ? 'success' : ''}>{streaming ? 'Agent 运行中' : '等待输入'}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd)}</button></div></div>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={12} />停止</button> : <MoreHorizontal size={17} />}</div>
+      <div className="card-head"><div className="session-runtime-meta"><span className={streaming ? 'success' : ''}>{streaming ? 'Agent 运行中' : '等待输入'}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />停止</button>}<SessionActionsMenu session={session} tiled={tiled} streaming={streaming} switchingCwd={switchingCwd} onToggleTiled={onToggleTiled} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
         {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />重试加载更早消息</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />正在加载更早消息…</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />加载更早消息</button>}</div>}
         {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>准备好开始编码</h2><p>Agent 可以读取当前工作区、搜索代码并持续处理任务。默认使用只读工具权限。</p><div className="welcome-chips">{WELCOME_CHIPS.map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
@@ -1087,6 +1092,30 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
       <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title="添加附件" aria-label="添加附件" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onPaste={selection.pasteImages} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={streaming ? 'Agent 正在运行，可停止后继续输入' : '输入消息，Shift + Enter 换行'} disabled={streaming} /><button className="send-button" title="发送消息" aria-label="发送消息" disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
     </Panel>
   )
+}
+
+function SessionActionsMenu({ session, tiled, streaming, switchingCwd, onToggleTiled, onWorkspace, onRename }) {
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef(null)
+
+  useEffect(() => {
+    if (!open) return undefined
+    const close = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false) }
+    const escape = (event) => { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [open])
+
+  const run = (action) => {
+    setOpen(false)
+    action?.()
+  }
+
+  return <div ref={rootRef} className="session-actions-menu-root"><button type="button" className="icon-button" title="会话操作" aria-label="打开会话操作菜单" aria-haspopup="menu" aria-expanded={open} disabled={!session} onClick={() => setOpen((visible) => !visible)}><MoreHorizontal size={17} /></button>{open && <div className="permission-mode-menu session-actions-menu" role="menu"><button type="button" role="menuitem" onClick={() => run(onToggleTiled)}><Grid2X2 size={15} /><span><strong>{tiled ? '移出平铺' : '加入平铺'}</strong><small>{tiled ? '保留历史记录，仅从平铺视图移除' : '在平铺模式中并行关注此会话'}</small></span>{tiled && <Check size={13} />}</button><button type="button" role="menuitem" disabled={streaming || switchingCwd} onClick={() => run(onWorkspace)}><FolderOpen size={15} /><span><strong>设置工作目录</strong><small>{streaming ? 'Agent 运行期间不能切换' : workspaceName(session?.cwd)}</small></span></button><button type="button" role="menuitem" onClick={() => run(onRename)}><Pencil size={15} /><span><strong>重命名会话</strong><small>{session?.name || '新会话'}</small></span></button></div>}</div>
 }
 
 function QuickCreate({ type, close, notify }) {

@@ -475,6 +475,10 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .editable-session-title h3 { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .editable-session-title .icon-button,.card-head-actions .icon-button { width: 32px; height: 32px; }
 .session-runtime-meta { display: flex; margin-top: 4px; align-items: center; gap: 6px; }
+.focus-session-head-actions { display: flex; align-items: center; gap: 6px; }
+.session-actions-menu-root { position: relative; flex: none; }
+.session-actions-menu { top: calc(100% + 8px); bottom: auto; width: 250px; }
+.session-actions-menu > button:disabled { cursor: not-allowed; opacity: .5; }
 .workspace-chip { display: flex; max-width: 260px; height: 32px; align-items: center; gap: 4px; overflow: hidden; border: 0; border-radius: var(--r-xs); background: var(--surface-muted); padding: 0 7px; color: var(--muted); font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .workspace-chip:hover { background: var(--surface-hover); color: var(--text); }
 .workspace-chip:disabled { cursor: not-allowed; opacity: .55; }
@@ -527,6 +531,7 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .focus-session { display: flex; height: 100%; min-height: 500px; flex-direction: column; }
 .mode-focus .focus-session { overflow: hidden; border: 1px solid var(--stroke-soft); border-radius: var(--r-md); background: var(--panel); padding: 0; box-shadow: none; }
 .mode-focus .focus-session > .card-head { min-height: 54px; flex: none; align-items: center; border-bottom: 1px solid var(--stroke-soft); background: var(--panel); padding: 8px 14px; }
+.mode-focus .focus-session > .card-head .session-runtime-meta { margin-top: 0; }
 .transcript { min-height: 0; flex: 1; overflow: auto; margin: 0; border: 0; padding: 26px max(24px,calc((100% - 960px)/2)); scroll-padding-bottom: 28px; }
 .history-page-loader { display: flex; width: min(960px,100%); min-height: 42px; align-items: center; justify-content: center; gap: 7px; margin: 0 auto 18px; color: var(--muted); font-size: 12px; }.history-page-loader .history-up-arrow { transform: rotate(180deg); }
 .message { display: flex; width: min(960px,100%); flex-direction: column; align-items: flex-start; gap: 6px; margin: 0 auto 24px; content-visibility: auto; contain-intrinsic-size: auto 120px; }

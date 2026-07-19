@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { createPrimaryActionRegistry } from '../../src/app/primary-action.js'
-import { mergeSessionLists, removeTiledSession } from '../../src/features/chat/session-list.js'
+import { mergeSessionLists, removeTiledSession, toggleTiledSession } from '../../src/features/chat/session-list.js'
 
 test('primary action remains callable until its page registration is disposed', () => {
   const registry = createPrimaryActionRegistry()
@@ -46,4 +46,9 @@ test('stale initial session lists preserve an optimistically created session', (
 
 test('removing a tiled session keeps the session itself available elsewhere', () => {
   assert.deepEqual(removeTiledSession(['first', 'second', 'third'], 'second'), ['first', 'third'])
+})
+
+test('a session can be added to and removed from the tiled set', () => {
+  assert.deepEqual(toggleTiledSession(['first'], 'second'), ['first', 'second'])
+  assert.deepEqual(toggleTiledSession(['first', 'second'], 'second'), ['first'])
 })
