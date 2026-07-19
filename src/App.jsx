@@ -31,6 +31,8 @@ import {
   Wrench,
   X,
 } from 'lucide-react'
+import { APP_NAME } from './app/brand.js'
+import { STORAGE_KEYS } from './app/storage.js'
 import { NAV_ITEMS, PAGE_META } from './app/navigation.jsx'
 import { AppDialog, InputLabel, Panel, SectionTitle, Segmented, SelectLabel, Toast } from './components/ui.jsx'
 import { useAttachmentSelection } from './features/chat/attachments.js'
@@ -53,7 +55,7 @@ const WorkflowBuilder = lazy(() => import('./features/workflows/PreviewPages.jsx
 const LazyMarkdownMessage = lazy(() => import('./components/MarkdownMessage.jsx'))
 
 const EMPTY_LIST = []
-const USAGE_UPDATED_EVENT = 'pi-coder:usage-updated'
+const USAGE_UPDATED_EVENT = 'vesper:usage-updated'
 const FOCUS_MESSAGE_PAGE_SIZE = 40
 const GRID_MESSAGE_PAGE_SIZE = 16
 
@@ -109,7 +111,7 @@ function isEditableTarget(target) {
 function App() {
   const initialPage = window.location.hash.slice(1)
   const [page, setPage] = useState(PAGE_META[initialPage] ? initialPage : 'chat')
-  const [chatMode, setChatModeState] = useState(() => localStorage.getItem('pi-coder-chat-mode') || 'focus')
+  const [chatMode, setChatModeState] = useState(() => localStorage.getItem(STORAGE_KEYS.chatMode) || 'focus')
   const [query, setQuery] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
   const [toast, setToast] = useState(null)
@@ -126,15 +128,15 @@ function App() {
   const toastTimer = useRef(null)
   const appDialog = useAppDialog()
   const [theme, setTheme] = useState(() => {
-    const stored = localStorage.getItem('pi-coder-theme')
+    const stored = localStorage.getItem(STORAGE_KEYS.theme)
     return THEME_SEQUENCE.includes(stored) ? stored : 'system'
   })
 
   useEffect(() => {
     const apply = () => { document.documentElement.dataset.theme = resolveDark(theme) ? 'dark' : 'light' }
     apply()
-    if (theme === 'system') localStorage.removeItem('pi-coder-theme')
-    else localStorage.setItem('pi-coder-theme', theme)
+    if (theme === 'system') localStorage.removeItem(STORAGE_KEYS.theme)
+    else localStorage.setItem(STORAGE_KEYS.theme, theme)
     if (theme !== 'system') return undefined
     const media = window.matchMedia('(prefers-color-scheme: dark)')
     media.addEventListener('change', apply)
@@ -157,7 +159,7 @@ function App() {
 
   const setChatMode = (nextMode) => {
     setChatModeState(nextMode)
-    localStorage.setItem('pi-coder-chat-mode', nextMode)
+    localStorage.setItem(STORAGE_KEYS.chatMode, nextMode)
   }
 
   const notify = useCallback((message, tone = 'success') => {
@@ -171,7 +173,7 @@ function App() {
   const showBrowserNotification = useCallback((title, body, { force = false } = {}) => {
     if (!notificationSettings.browser?.enabled || !('Notification' in window) || window.Notification.permission !== 'granted') return
     if (!force && document.visibilityState === 'visible' && document.hasFocus()) return
-    const item = new window.Notification(title, { body, tag: `pi-coder-${title}` })
+    const item = new window.Notification(title, { body, tag: `vesper-${title}` })
     item.onclick = () => { window.focus(); item.close() }
   }, [notificationSettings.browser?.enabled])
 
@@ -292,7 +294,7 @@ function App() {
     ? ['对话', '聚集模式 · 单会话工作台']
     : PAGE_META[page]
 
-  if (!startupReady) return <div className="app-startup"><span className="brand-logo">P</span><RefreshCw className="spin" size={19} /><strong>正在检查 Agent 配置…</strong></div>
+  if (!startupReady) return <div className="app-startup"><span className="brand-logo">V</span><RefreshCw className="spin" size={19} /><strong>正在检查 Agent 配置…</strong></div>
 
   return (
     <div className="app-shell">
@@ -365,7 +367,7 @@ function Sidebar({ page, navigate, open, onClose, pluginStats }) {
     <>
       {open && <button className="nav-scrim" aria-label="关闭导航" onClick={onClose} />}
       <aside className={`sidebar ${open ? 'is-open' : ''}`}>
-        <div className="brand"><span className="brand-logo">P</span><strong>Pi Coder</strong><button className="mobile-close" onClick={onClose}><X size={18} /></button></div>
+        <div className="brand"><span className="brand-logo">V</span><strong>{APP_NAME}</strong><button className="mobile-close" onClick={onClose}><X size={18} /></button></div>
         <nav className="nav-list" aria-label="主导航">
           {NAV_ITEMS.map(([id, label, Icon]) => (
             <button key={id} className={active === id ? 'active' : ''} onClick={() => navigate(id)}>
@@ -413,15 +415,15 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
 
 function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimaryAction, pendingAsset, onAssetConsumed, requestConfirm, requestText }) {
   const [remoteSessions, setRemoteSessions] = useState([])
-  const [activeId, setActiveId] = useState(() => localStorage.getItem('pi-coder-active-session') || '')
+  const [activeId, setActiveId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
   const [sessionStates, setSessionStates] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [model, setModel] = useState('等待配置')
   const [availableModels, setAvailableModels] = useState([])
   const [workspaceSession, setWorkspaceSession] = useState(null)
-  const [tiledSessionIds, setTiledSessionIds] = useState(() => readStoredArray('pi-coder-tiled-sessions'))
-  const tiledStorageWasEmpty = useRef(localStorage.getItem('pi-coder-tiled-sessions') === null)
+  const [tiledSessionIds, setTiledSessionIds] = useState(() => readStoredArray(STORAGE_KEYS.tiledSessions))
+  const tiledStorageWasEmpty = useRef(localStorage.getItem(STORAGE_KEYS.tiledSessions) === null)
   const sessionStatesRef = useRef(sessionStates)
 
   useEffect(() => {
@@ -505,11 +507,11 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   }, [updateSessionState])
 
   useEffect(() => {
-    if (activeId) localStorage.setItem('pi-coder-active-session', activeId)
+    if (activeId) localStorage.setItem(STORAGE_KEYS.activeSession, activeId)
   }, [activeId])
 
   useEffect(() => {
-    localStorage.setItem('pi-coder-tiled-sessions', JSON.stringify(tiledSessionIds))
+    localStorage.setItem(STORAGE_KEYS.tiledSessions, JSON.stringify(tiledSessionIds))
   }, [tiledSessionIds])
 
   const refreshSessions = async (preferredId) => {
@@ -563,7 +565,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         for (const session of list) {
           if (session.streaming) updateSessionState(session.id, { streaming: true, recovering: true, loaded: false, error: '' })
         }
-        const storedId = localStorage.getItem('pi-coder-active-session')
+        const storedId = localStorage.getItem(STORAGE_KEYS.activeSession)
         setActiveId(list.some((session) => session.id === storedId) ? storedId : (list[0]?.id || ''))
         setTiledSessionIds((current) => {
           const valid = current.filter((id) => list.some((session) => session.id === id))
@@ -655,7 +657,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       updateSessionState(sessionId, (current) => ({ ...current, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false } : item) }))
       const sessions = await refreshSessions()
       const completed = sessions.find((session) => session.id === sessionId)
-      browserNotify?.('chat.completed', { chat: { title: completed?.name || 'Pi Coder 对话', summary: responseText.trim().slice(0, 260) || 'Agent 已完成回复。', model: sessionStatesRef.current[sessionId]?.model || model } })
+      browserNotify?.('chat.completed', { chat: { title: completed?.name || `${APP_NAME} 对话`, summary: responseText.trim().slice(0, 260) || 'Agent 已完成回复。', model: sessionStatesRef.current[sessionId]?.model || model } })
     } catch (caught) {
       updateSessionState(sessionId, (current) => ({ ...current, error: caught.message, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || caught.message } : item) }))
     } finally {
@@ -767,8 +769,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       })
       if (activeId === session.id) {
         setActiveId(remaining[0]?.id || '')
-        if (remaining[0]?.id) localStorage.setItem('pi-coder-active-session', remaining[0].id)
-        else localStorage.removeItem('pi-coder-active-session')
+        if (remaining[0]?.id) localStorage.setItem(STORAGE_KEYS.activeSession, remaining[0].id)
+        else localStorage.removeItem(STORAGE_KEYS.activeSession)
       }
       notify('会话已删除')
       if (!remaining.length) await createSession()
@@ -784,8 +786,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   const activeState = sessionStates[activeId] || { messages: [], tools: [], approvals: [], streaming: false, error: '', loading: false, switchingModel: false, switchingCwd: false, switchingPermission: false, messageStart: null, hasOlder: false, olderCursor: null }
 
   useEffect(() => {
-    document.title = activeSession?.name ? `${activeSession.name} · Pi Coder` : 'Pi Coder'
-    return () => { document.title = 'Pi Coder' }
+    document.title = activeSession?.name ? `${activeSession.name} · ${APP_NAME}` : APP_NAME
+    return () => { document.title = APP_NAME }
   }, [activeSession?.name])
 
   return (

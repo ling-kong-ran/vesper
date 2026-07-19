@@ -42,12 +42,12 @@ export class FeishuOnboardingService {
     const ready = new Promise((resolve, reject) => { readyResolve = resolve; readyReject = reject })
 
     job.promise = this.registerAppImpl({
-      source: 'pi-coder',
+      source: 'vesper',
       signal: controller.signal,
       createOnly: true,
       appPreset: {
-        name: 'Pi Coder Agent',
-        desc: '通过飞书与本机 Pi Coder Agent 进行双向对话',
+        name: 'Vesper Agent',
+        desc: '通过飞书与本机 Vesper Agent 进行双向对话',
       },
       addons: {
         preset: false,

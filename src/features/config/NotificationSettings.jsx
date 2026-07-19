@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Bell, BellOff, RefreshCw, Save, Send, ShieldCheck } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Toggle } from '../../components/ui.jsx'
+import { APP_NAME } from '../../app/brand.js'
 import { apiJson } from '../../lib/api.js'
 
 const CHANNELS = {
@@ -57,7 +58,7 @@ export function NotificationSettings({ notify, onBrowserNotificationChange }) {
 
   const testBrowserNotification = () => {
     if (permission !== 'granted') return
-    const item = new window.Notification('Pi Coder 通知测试', { body: '浏览器通知工作正常。', tag: 'pi-coder-browser-test' })
+    const item = new window.Notification(`${APP_NAME} 通知测试`, { body: '浏览器通知工作正常。', tag: 'vesper-browser-test' })
     item.onclick = () => { window.focus(); item.close() }
   }
 

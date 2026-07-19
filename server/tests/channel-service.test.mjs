@@ -23,7 +23,7 @@ class FakeGateway {
   async connect(config) {
     this.config = config
     this.connectCount += 1
-    this.status = { state: 'connected', lastError: '', connectedAt: new Date().toISOString(), bot: { name: 'Pi Coder Agent', openId: 'bot' } }
+    this.status = { state: 'connected', lastError: '', connectedAt: new Date().toISOString(), bot: { name: 'Vesper Agent', openId: 'bot' } }
     return this.status
   }
 
@@ -132,7 +132,7 @@ test('channel reply model is passed to the Agent without reconnecting the transp
   assert.deepEqual(gateways.feishu.sent.at(-1).input, { markdown: '**完成**' })
 })
 
-test('personal WeChat peers map to independent Pi sessions', async (t) => {
+test('personal WeChat peers map to independent Vesper sessions', async (t) => {
   let count = 0
   const { directory, service } = await fixture({ agent: { prompt: async (input) => ({ sessionId: input.sessionId || `wx-session-${++count}`, text: '收到', cwd: directory, model: 'google/gemini-2.5-pro', assets: [] }) } })
   t.after(() => rm(directory, { recursive: true, force: true }))

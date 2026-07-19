@@ -38,7 +38,7 @@ const PROVIDER_DEFAULT_BASE_URLS = {
   'kimi-coding': 'https://api.kimi.com/coding/',
   'zai-coding-cn': 'https://open.bigmodel.cn/api/paas/v4',
 }
-const ATTACHMENT_MARKER = '\n\n---\n附件上下文（由 Pi Coder 注入）：\n'
+const ATTACHMENT_MARKER = '\n\n---\n附件上下文（由 Vesper 注入）：\n'
 const MAX_EXTRACTED_CHARS = 400_000
 const MAX_ASSET_BYTES = 24 * 1024 * 1024
 const MAX_CHAT_ASSET_BYTES = 10 * 1024 * 1024
@@ -216,7 +216,7 @@ export class AgentRuntimeService {
     this.authPath = join(dataDir, 'auth.json')
     this.modelsPath = join(dataDir, 'models.json')
     this.settingsPath = join(dataDir, 'settings.json')
-    this.appConfigPath = join(dataDir, 'pi-coder.json')
+    this.appConfigPath = join(dataDir, 'vesper.json')
     this.toolPlugins = new ToolPluginService(this.appConfigPath)
     this.visualGeneration = new VisualGenerationService({
       modelsPath: this.modelsPath,
@@ -224,13 +224,13 @@ export class AgentRuntimeService {
       appConfigPath: this.appConfigPath,
       getModelRuntime: () => this.modelRuntime,
     })
-    this.sessionMetaPath = join(dataDir, 'pi-coder-sessions.json')
-    this.usagePath = join(dataDir, 'pi-coder-usage.json')
-    this.assetsDir = join(dataDir, 'pi-coder-assets')
-    this.assetIndexPath = join(dataDir, 'pi-coder-assets.json')
-    this.memory = new LocalMemoryRuntime({ path: join(dataDir, 'pi-coder-memory.sqlite'), cwd })
+    this.sessionMetaPath = join(dataDir, 'vesper-sessions.json')
+    this.usagePath = join(dataDir, 'vesper-usage.json')
+    this.assetsDir = join(dataDir, 'vesper-assets')
+    this.assetIndexPath = join(dataDir, 'vesper-assets.json')
+    this.memory = new LocalMemoryRuntime({ path: join(dataDir, 'vesper-memory.sqlite'), cwd })
     this.channels = new ChannelService({
-      path: join(dataDir, 'pi-coder-channels.json'),
+      path: join(dataDir, 'vesper-channels.json'),
       cwd,
       agent: {
         prompt: (input) => this.promptFromChannel(input),
@@ -238,9 +238,9 @@ export class AgentRuntimeService {
         validateDirectory: (input) => resolveDirectory(input, this.cwd),
       },
     })
-    this.notificationSettings = new NotificationSettingsService({ path: this.appConfigPath, browserEventsPath: join(dataDir, 'pi-coder-browser-notifications.json'), channels: this.channels })
+    this.notificationSettings = new NotificationSettingsService({ path: this.appConfigPath, browserEventsPath: join(dataDir, 'vesper-browser-notifications.json'), channels: this.channels })
     this.schedules = new ScheduleService({
-      path: join(dataDir, 'pi-coder-schedules.json'),
+      path: join(dataDir, 'vesper-schedules.json'),
       cwd,
       agent: {
         prompt: (input) => this.promptFromChannel({ sessionId: '', ...input }),

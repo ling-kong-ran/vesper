@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Download, ExternalLink, Eye, File, FileImage, FileVideo, FolderOpen, Link2, Paperclip, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { STORAGE_KEYS } from '../../app/storage.js'
 import { Panel, Segmented } from '../../components/ui.jsx'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
 import { apiJson } from '../../lib/api.js'
@@ -29,7 +30,7 @@ export function AssetsPage({ query, notify, registerPrimaryAction, onUse, reques
       if (tab === '图片') params.set('kind', 'image')
       if (tab === '文件') params.set('kind', 'file')
       if (tab === '链接') params.set('kind', 'link')
-      if (tab === '来自当前会话') params.set('sessionId', localStorage.getItem('pi-coder-active-session') || '__none__')
+      if (tab === '来自当前会话') params.set('sessionId', localStorage.getItem(STORAGE_KEYS.activeSession) || '__none__')
       const data = await apiJson(`/api/assets?${params}`)
       setAssets(data.assets)
     } catch (caught) {

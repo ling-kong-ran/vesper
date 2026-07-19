@@ -55,7 +55,7 @@ export class NotificationSettingsService {
   async publishBrowser(title, body, event = '') {
     const appConfig = await readJson(this.path, {})
     if (appConfig.notifications?.browser?.enabled !== true || !this.browserEventsPath) return false
-    const item = { id: randomUUID(), title: String(title || 'Pi Coder'), body: String(body || ''), event, createdAt: new Date().toISOString() }
+    const item = { id: randomUUID(), title: String(title || 'Vesper'), body: String(body || ''), event, createdAt: new Date().toISOString() }
     this.eventWrite = this.eventWrite.catch(() => {}).then(async () => {
       const ledger = await readJson(this.browserEventsPath, { events: [] })
       ledger.events = [...(Array.isArray(ledger.events) ? ledger.events : []), item].slice(-100)

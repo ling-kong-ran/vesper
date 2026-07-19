@@ -4,10 +4,18 @@
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>pi-coder</title>
+    <title>Vesper</title>
     <script>
       try {
-        const stored = localStorage.getItem('pi-coder-theme')
+        for (const suffix of ['theme', 'chat-mode', 'active-session', 'tiled-sessions']) {
+          const legacyKey = `pi-coder-${suffix}`
+          const key = `vesper-${suffix}`
+          const legacyValue = localStorage.getItem(legacyKey)
+          if (legacyValue === null) continue
+          if (localStorage.getItem(key) === null) localStorage.setItem(key, legacyValue)
+          localStorage.removeItem(legacyKey)
+        }
+        const stored = localStorage.getItem('vesper-theme')
         const dark = stored === 'dark' || (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
         document.documentElement.dataset.theme = dark ? 'dark' : 'light'
       } catch {}

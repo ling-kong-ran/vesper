@@ -51,6 +51,16 @@ function publicScope(key, scope) {
   }
 }
 
+function migrateLegacyBrandNames(state) {
+  let changed = false
+  for (const connection of Object.values(state.connections || {})) {
+    if (connection?.name !== 'Pi Coder Agent') continue
+    connection.name = 'Vesper Agent'
+    changed = true
+  }
+  return changed
+}
+
 function normalizeState(stored) {
   if (stored?.version === 3) return {
     version: 3,
@@ -95,7 +105,8 @@ export class ChannelService {
     const stored = await readJson(this.path, defaultState())
     this.state = normalizeState(stored)
     const hasLegacyTemplateTargets = Object.values(stored?.templates || {}).some((template) => Object.values(template?.channels || {}).some((variant) => Object.hasOwn(variant || {}, 'targets')))
-    if (stored?.version !== 3 || hasLegacyTemplateTargets) await this.save()
+    const hasLegacyBrandName = migrateLegacyBrandNames(this.state)
+    if (stored?.version !== 3 || hasLegacyTemplateTargets || hasLegacyBrandName) await this.save()
     for (const platform of PLATFORMS) {
       const connection = this.state.connections[platform]
       if (connection && connection.enabled !== false) void this.connect(platform).catch(() => {})
@@ -116,7 +127,7 @@ export class ChannelService {
     return {
       id: platform,
       type: platform,
-      name: connection.name || (platform === 'feishu' ? live.bot?.name || 'Pi Coder Agent' : '微信机器人'),
+      name: connection.name || (platform === 'feishu' ? live.bot?.name || 'Vesper Agent' : '微信机器人'),
       enabled: connection.enabled !== false,
       accountId: maskedId(platform === 'feishu' ? connection.appId : connection.accountId),
       accessMode: connection.accessMode || 'owner',
@@ -165,7 +176,7 @@ export class ChannelService {
   async completeOnboarding(platform, credentials) {
     const current = this.state.connections[platform]
     const common = {
-      name: platform === 'feishu' ? 'Pi Coder Agent' : '微信机器人',
+      name: platform === 'feishu' ? 'Vesper Agent' : '微信机器人',
       accessMode: 'owner',
       defaultCwd: current?.defaultCwd || this.cwd,
       replyModel: current?.replyModel || null,
@@ -261,11 +272,11 @@ export class ChannelService {
     const command = message.content.trim().toLowerCase()
     if (command === '/new' || command === '/reset') {
       await this.resetScope(key)
-      await this.gateways[platform].send(message, { text: '已开始新的 Pi Coder 会话。' })
+      await this.gateways[platform].send(message, { text: '已开始新的 Vesper 会话。' })
       return
     }
     if (command === '/status') {
-      await this.gateways[platform].send(message, { text: scope.sessionId ? `会话：${scope.sessionId}\n模型：${scope.model || '默认'}\n工作目录：${scope.cwd || connection.defaultCwd}` : '当前聊天还没有绑定 Pi Coder 会话。' })
+      await this.gateways[platform].send(message, { text: scope.sessionId ? `会话：${scope.sessionId}\n模型：${scope.model || '默认'}\n工作目录：${scope.cwd || connection.defaultCwd}` : '当前聊天还没有绑定 Vesper 会话。' })
       return
     }
     if (command === '/stop') {
