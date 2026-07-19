@@ -8,7 +8,7 @@
 > - §4 可选的 Space Grotesk 自托管未引入（方案允许纯系统栈）
 > - §7 skeleton shimmer 标注「按需」，本次未新增
 > - 执行中补充 `--star-strong`（`#B45309` / 暗色 `#FCD34D`）用于软底色上的小字与图标，保证对比度
-> - 对话页以概念图为准二次对齐（d4a8856 之后）：agent 消息卡片化（solid 卡 + 小 logo 角色头，取代 §6.3 的“纯排版”描述）、发送按钮加大为跨行金按钮、typing 三点金脉冲放大、暗色导航选中改中性灰底 + 金条
+> - 对话页以概念图为准二次对齐（d4a8856 之后）：agent 消息卡片化（solid 卡 + 小 logo 角色头，取代 §6.3 的“纯排版”描述）、typing 三点金脉冲放大、暗色导航选中改中性灰底 + 金条；跨行大发送按钮实测过重，后续回退为紧凑方形图标按钮
 
 ---
 
@@ -109,7 +109,7 @@ Vesper = 暮星（黄昏时第一颗亮星）。品牌语言定为：
 - **欢迎页**：大 logo（星光 3s 呼吸微脉冲）+ 问候语 + 4 个快捷 chip（解释代码 / 写单测 / 重构 / 查 bug），点击直接填入 composer
 - **消息**：agent 消息卡片化（solid 卡 + 描边，头部小 logo + VESPER mono 角色标，对齐概念图）；用户气泡见 §3.3
 - **typing/流式**：三点金脉冲替换蓝色 typing-dot
-- **composer**：`focus-within` 金描边 + `--sh-star` 微光；发送按钮为跨行大金按钮（金底墨图标），hover 加强 glow，active `scale(.96)`
+- **composer**：`focus-within` 金描边 + `--sh-star` 微光；底部工具栏仅保留图标（附件 / 模型 / 权限 / 发送），发送按钮为紧凑金底方形图标按钮，hover 加强 glow，active `scale(.96)`
 - 历史列表 active 行：`--star-soft` 替代 `--blue-soft`
 
 ### 6.4 特色页

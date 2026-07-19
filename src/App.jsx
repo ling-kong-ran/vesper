@@ -4,7 +4,6 @@ import {
   ArrowDown,
   Bot,
   Check,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Download,
@@ -813,7 +812,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         {remoteSessions.map((session) => <div className={`history-row ${activeId === session.id ? 'active' : ''}`} key={session.id}><button className="history-item" onClick={() => { setActiveId(session.id); setMode('focus') }}><strong title={session.name}>{session.name}</strong><span>{relativeTime(session.modified)} · {session.messageCount} messages</span></button><div className="history-actions"><button className={tiledSessionIds.includes(session.id) ? 'is-tiled' : ''} title={tiledSessionIds.includes(session.id) ? '移出平铺' : '加入平铺'} aria-label={tiledSessionIds.includes(session.id) ? '移出平铺' : '加入平铺'} onClick={() => toggleTiledSession(session.id)}>{tiledSessionIds.includes(session.id) ? <Check size={12} /> : <Grid2X2 size={12} />}</button><button title="重命名会话" aria-label="重命名会话" onClick={() => renameSession(session)}><Pencil size={12} /></button><button className="delete" title="删除会话" aria-label="删除会话" onClick={() => deleteSession(session)}><Trash2 size={12} /></button></div></div>)}
       </Panel>
       ) : (
-      <button className="history-rail" title="展开历史对话" aria-label="展开历史对话" onClick={() => setHistoryOpen(true)}><History size={15} /><span>历史对话</span><em>{remoteSessions.length}</em></button>
+      <button className="history-rail" title="展开历史对话" aria-label={`展开历史对话，共 ${remoteSessions.length} 个会话`} onClick={() => setHistoryOpen(true)}><History size={16} /><em>{remoteSessions.length}</em></button>
       )}
       {loading ? <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在启动 Agent</h2><p>加载模型目录与历史会话…</p></Panel> : mode === 'grid' ? (
         <div className="session-grid">
@@ -855,21 +854,23 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
         <ToolApproval approvals={state?.approvals || EMPTY_LIST} onResolve={onApproval} compact />
         <AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} compact />
         {selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}
-        <div className="mini-composer"><button type="button" className="attach-trigger" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={14} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><input value={value} onChange={(event) => setValue(event.target.value)} placeholder={streaming ? 'Agent 正在运行…' : '输入 prompt 或添加附件...'} disabled={streaming} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || state?.switchingModel} compact /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={state?.switchingPermission} compact />{streaming ? <button type="button" className="send-mini stop" onClick={onAbort}><Square size={12} /></button> : <button className="send-mini" disabled={!value.trim() && !selection.attachments.length}><Send size={13} /></button>}</div>
+        <div className="mini-composer"><button type="button" className="attach-trigger" title="添加附件" aria-label="添加附件" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={14} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><input value={value} onChange={(event) => setValue(event.target.value)} placeholder={streaming ? 'Agent 正在运行…' : '输入 prompt 或添加附件...'} disabled={streaming} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || state?.switchingModel} compact /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={state?.switchingPermission} compact />{streaming ? <button type="button" className="send-mini stop" title="停止运行" aria-label="停止运行" onClick={onAbort}><Square size={12} /></button> : <button className="send-mini" title="发送消息" aria-label="发送消息" disabled={!value.trim() && !selection.attachments.length}><Send size={13} /></button>}</div>
       </form>
     </Panel>
   )
 }
 
 function SessionModelSelect({ value, models, onChange, disabled, compact = false }) {
-  const hasCurrentModel = models.some((model) => model.key === value)
+  const currentModel = models.find((model) => model.key === value)
+  const hasCurrentModel = Boolean(currentModel)
+  const currentLabel = currentModel ? `${currentModel.providerName} · ${currentModel.label}` : value.split('/').at(-1)
   return (
-    <label className={`session-model-select ${compact ? 'compact' : ''}`} title={disabled ? '会话运行期间不能切换模型' : '切换当前会话模型'}>
+    <label className={`session-model-select icon-only ${compact ? 'compact' : ''}`} title={disabled ? `当前模型：${currentLabel}（运行期间不可切换）` : `当前模型：${currentLabel}，点击切换`}>
+      <Bot size={compact ? 11 : 14} />
       <select value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled || models.length === 0} aria-label="当前会话模型">
         {!hasCurrentModel && <option value={value}>{value.split('/').at(-1)}</option>}
         {models.map((model) => <option key={model.key} value={model.key}>{model.providerName} · {model.label}</option>)}
       </select>
-      <ChevronDown size={11} />
     </label>
   )
 }
@@ -899,7 +900,7 @@ function PermissionModeSelect({ value, onChange, disabled, compact = false }) {
     document.addEventListener('keydown', escape)
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape) }
   }, [open])
-  return <div ref={rootRef} className={`permission-mode-select ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}><button type="button" className="permission-mode-trigger" title={current[2]} disabled={disabled} aria-haspopup="menu" aria-expanded={open} onClick={() => setOpen((visible) => !visible)}><ShieldCheck size={compact ? 11 : 14} /><span>{current[1]}</span><ChevronDown size={10} /></button>{open && <div className="permission-mode-menu" role="menu">{PERMISSION_OPTIONS.map(([mode, label, description]) => <button type="button" role="menuitemradio" aria-checked={mode === current[0]} className={mode === current[0] ? 'active' : ''} onClick={() => { onChange(mode); setOpen(false) }} key={mode}><span className={`permission-level level-${mode}`}><ShieldCheck size={13} /></span><span><strong>{label}</strong><small>{description}</small></span>{mode === current[0] && <Check size={13} />}</button>)}</div>}</div>
+  return <div ref={rootRef} className={`permission-mode-select icon-only ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}><button type="button" className={`permission-mode-trigger icon-only mode-${current[0]}`} title={`权限模式：${current[1]}——${current[2]}`} disabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-label={`权限模式：${current[1]}`} onClick={() => setOpen((visible) => !visible)}><ShieldCheck size={compact ? 11 : 14} /></button>{open && <div className="permission-mode-menu" role="menu">{PERMISSION_OPTIONS.map(([mode, label, description]) => <button type="button" role="menuitemradio" aria-checked={mode === current[0]} className={mode === current[0] ? 'active' : ''} onClick={() => { onChange(mode); setOpen(false) }} key={mode}><span className={`permission-level level-${mode}`}><ShieldCheck size={13} /></span><span><strong>{label}</strong><small>{description}</small></span>{mode === current[0] && <Check size={13} />}</button>)}</div>}</div>
 }
 
 function ToolApproval({ approvals, onResolve, compact = false }) {
@@ -1034,7 +1035,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
       {hasUnread && <button type="button" className="button secondary jump-to-latest" onClick={() => scrollToBottom('smooth')}><ArrowDown size={14} />有新内容</button>}
-      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={streaming ? 'Agent 正在运行，可停止后继续输入' : '输入消息，Shift + Enter 换行'} disabled={streaming} /><button className="send-button" disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
+      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title="添加附件" aria-label="添加附件" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={streaming ? 'Agent 正在运行，可停止后继续输入' : '输入消息，Shift + Enter 换行'} disabled={streaming} /><button className="send-button" title="发送消息" aria-label="发送消息" disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
     </Panel>
   )
 }
