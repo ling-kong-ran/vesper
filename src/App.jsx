@@ -31,6 +31,7 @@ import {
 import { APP_NAME } from './app/brand.js'
 import { STORAGE_KEYS } from './app/storage.js'
 import { NAV_GROUPS, PAGE_META } from './app/navigation.jsx'
+import { AgentStatusAvatar } from './components/AgentStatusAvatar.jsx'
 import { BrandLogo } from './components/BrandLogo.jsx'
 import { StarOrbit } from './components/StarOrbit.jsx'
 import { AppDialog, InputLabel, Panel, Segmented, SelectLabel, Toast } from './components/ui.jsx'
@@ -1057,7 +1058,11 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
         {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />重试加载更早消息</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />正在加载更早消息…</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />加载更早消息</button>}</div>}
         {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>准备好开始编码</h2><p>Agent 可以读取当前工作区、搜索代码并持续处理任务。默认使用只读工具权限。</p><div className="welcome-chips">{WELCOME_CHIPS.map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
-        {messages.map((message) => <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? <span className="role-brand"><BrandLogo size={13} /> Vesper</span> : 'You'}</span><div className="message-content"><MarkdownMessage>{message.text || (message.streaming ? '正在思考…' : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}{message.streaming && <i className="typing-dot" />}</div></div>)}
+        {messages.map((message, index) => {
+          const isLatestAgent = message.role === 'agent' && index === messages.length - 1
+          const agentState = message.streaming || (isLatestAgent && streaming) ? 'thinking' : isLatestAgent && !message.error ? 'waiting' : 'idle'
+          return <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? <AgentStatusAvatar state={agentState} /> : 'You'}</span><div className="message-content"><MarkdownMessage>{message.text || (message.streaming ? '正在思考…' : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}</div></div>
+        })}
         {tools.length > 0 && <div className="tool-trace"><strong>工具执行</strong>{tools.map((tool) => <span key={tool.id} className={tool.status}><Wrench size={12} />{tool.name}<em>{tool.status === 'running' ? '运行中' : tool.status === 'done' ? '完成' : '失败'}</em></span>)}</div>}
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>

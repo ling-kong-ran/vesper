@@ -459,9 +459,11 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .history-page-loader { display: flex; width: min(960px,100%); min-height: 42px; align-items: center; justify-content: center; gap: 7px; margin: 0 auto 18px; color: var(--muted); font-size: 12px; }.history-page-loader .history-up-arrow { transform: rotate(180deg); }
 .message { display: flex; width: min(960px,100%); flex-direction: column; align-items: flex-start; gap: 6px; margin: 0 auto 24px; content-visibility: auto; contain-intrinsic-size: auto 120px; }
 .message.user { align-items: flex-end; }
+.message.agent { display: grid; grid-template-columns: 36px minmax(0,1fr); align-items: start; column-gap: 10px; }
 .message > span { display: flex; align-items: center; gap: 5px; padding: 0 4px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; font-size: 12px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.message.agent > span { grid-column: 1; grid-row: 1; justify-content: center; padding: 3px 0 0; }
 .message-content { position: relative; min-width: 0; }
-.message.agent .message-content { width: 100%; }
+.message.agent .message-content { width: 100%; grid-column: 2; grid-row: 1; }
 .message.user .message-content { width: fit-content; max-width: 68%; }
 .message-content > .markdown-body { min-height: 38px; overflow-wrap: anywhere; border-radius: var(--r-md); background: transparent; padding: 5px 0; font-size: 14px; line-height: 1.68; }
 .message.user .message-content > .markdown-body { border-radius: var(--r-lg) var(--r-lg) var(--r-xs) var(--r-lg); background: var(--user-bubble-bg); color: var(--user-bubble-text); padding: 10px 15px; box-shadow: 0 8px 20px -15px var(--shadow); }
@@ -469,7 +471,28 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .message.user .markdown-body code { background: var(--user-bubble-code); }
 .message.agent .message-content > .markdown-body { width: 100%; max-width: 100%; border: 1px solid var(--stroke-soft); border-radius: var(--r-md); background: var(--solid); padding: 10px 16px; }
 .message.has-error .message-content > .markdown-body { background: var(--danger-soft); color: var(--danger); }
-.typing-dot { position: absolute; right: 16px; bottom: 12px; width: 6px; height: 6px; border-radius: 50%; background: var(--star); box-shadow: -11px 0 var(--star), -22px 0 var(--star); animation: pulse-dot 1s infinite ease-in-out; }
+.agent-status-avatar { --agent-avatar-size: 32px; --agent-gaze-x: 0px; --agent-gaze-y: 0px; display: inline-grid; width: var(--agent-avatar-size); height: var(--agent-avatar-size); flex: none; place-items: center; border-radius: 50%; cursor: default; filter: saturate(.98); transition: transform var(--d1) var(--ease-out), filter var(--d1) var(--ease-out); }
+.agent-status-avatar:hover { transform: translateY(-1px) scale(1.045); filter: saturate(1.08); }
+.agent-status-avatar svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.agent-status-orb-shell,.agent-status-halo { transform-box: view-box; transform-origin: center; }
+.agent-status-highlight { transform-box: fill-box; transform-origin: center; }
+.agent-status-halo { opacity: .08; }
+.agent-status-gaze { transform: translate(var(--agent-gaze-x),var(--agent-gaze-y)); transition: transform 120ms var(--ease-out); }
+.agent-status-eyes { transform-box: fill-box; transform-origin: center; }
+.agent-status-avatar.is-waiting .agent-status-orb-shell { animation: agent-orb-breathe 3.4s ease-in-out infinite; }
+.agent-status-avatar.is-waiting .agent-status-halo { opacity: .22; animation: agent-halo-breathe 3.4s ease-in-out infinite; }
+.agent-status-avatar.is-waiting .agent-status-eyes { animation: agent-eye-blink 4.8s ease-in-out infinite; }
+.agent-status-avatar.is-thinking .agent-status-orb-shell { animation: agent-orb-think 1.35s ease-in-out infinite; }
+.agent-status-avatar.is-thinking .agent-status-halo { opacity: .52; stroke-dasharray: 3 5; animation: agent-halo-spin 1.65s linear infinite; }
+.agent-status-avatar.is-thinking .agent-status-eyes { animation: agent-eyes-scan 1.45s ease-in-out infinite; }
+.agent-status-avatar.is-thinking .agent-status-highlight { animation: agent-highlight-think 1.35s ease-in-out infinite; }
+@keyframes agent-orb-breathe { 0%,100% { transform: scale(.965); } 50% { transform: scale(1.02); } }
+@keyframes agent-halo-breathe { 0%,100% { opacity: .12; transform: scale(.94); } 50% { opacity: .32; transform: scale(1.04); } }
+@keyframes agent-eye-blink { 0%,43%,47%,100% { transform: scaleY(1); } 45% { transform: scaleY(.12); } }
+@keyframes agent-orb-think { 0%,100% { transform: rotate(-3deg) scale(.98); } 50% { transform: rotate(4deg) scale(1.025); } }
+@keyframes agent-halo-spin { to { transform: rotate(360deg); } }
+@keyframes agent-eyes-scan { 0%,100% { transform: translateX(-1px) scaleY(1); } 35% { transform: translateX(1.25px) scaleY(.92); } 68% { transform: translateX(.2px) scaleY(1); } }
+@keyframes agent-highlight-think { 0%,100% { opacity: .1; transform: rotate(-18deg) translateX(-.4px); } 50% { opacity: .24; transform: rotate(-8deg) translateX(1px); } }
 .agent-welcome { display: grid; min-height: 100%; place-content: center; justify-items: center; color: var(--muted); text-align: center; }
 .agent-welcome .welcome-logo { color: var(--text); }
 .agent-welcome .welcome-logo .logo-star { animation: star-twinkle 3s ease-in-out infinite; }
@@ -477,7 +500,6 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .welcome-chips button { min-height: 32px; border: 1px solid var(--stroke); border-radius: var(--r-pill); background: var(--solid); padding: 0 13px; color: var(--text-soft); font-size: 12px; font-weight: 600; transition: var(--d1) var(--ease-out); }
 .welcome-chips button:hover { border-color: var(--star-border); background: var(--star-soft); color: var(--star-strong); }
 .agent-welcome h2 { margin-top: 12px; color: var(--text); font-size: 20px; }.agent-welcome p { max-width: 500px; margin-top: 8px; font-size: 13px; line-height: 1.65; }
-.message > span .role-brand { display: inline-flex; align-items: center; gap: 5px; }
 .mini-message.agent > span::before { content: '✦'; margin-right: 4px; color: var(--star); }
 .tool-trace { display: flex; width: min(960px,100%); flex-wrap: wrap; align-items: center; gap: 7px; margin: 2px auto 22px; }.tool-trace > strong { width: 100%; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }.tool-trace > span { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--stroke); border-radius: var(--r-pill); background: var(--solid); padding: 5px 8px; font-size: 12px; }.tool-trace > span.running { border-color: var(--accent-border); color: var(--star-strong); }.tool-trace > span.error { border-color: var(--danger-border); color: var(--danger); }.tool-trace em { color: var(--muted); font-style: normal; }
 .chat-error { display: flex; width: min(960px,100%); align-items: center; gap: 7px; margin: 8px auto; border-radius: var(--r-sm); background: var(--danger-soft); color: var(--danger); padding: 9px 11px; font-size: 13px; }
