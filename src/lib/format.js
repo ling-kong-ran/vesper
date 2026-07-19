@@ -1,10 +1,17 @@
-export function relativeTime(value) {
-  if (!value) return '刚刚'
+export function relativeTime(value, locale = 'zh-CN') {
+  const english = locale === 'en-US'
+  if (!value) return english ? 'Just now' : '刚刚'
   const distance = Date.now() - new Date(value).getTime()
-  if (distance < 60_000) return '刚刚'
-  if (distance < 3_600_000) return `${Math.floor(distance / 60_000)} 分钟前`
-  if (distance < 86_400_000) return `${Math.floor(distance / 3_600_000)} 小时前`
-  return new Date(value).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' })
+  if (distance < 60_000) return english ? 'Just now' : '刚刚'
+  if (distance < 3_600_000) {
+    const minutes = Math.floor(distance / 60_000)
+    return english ? new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(-minutes, 'minute') : `${minutes} 分钟前`
+  }
+  if (distance < 86_400_000) {
+    const hours = Math.floor(distance / 3_600_000)
+    return english ? new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(-hours, 'hour') : `${hours} 小时前`
+  }
+  return new Date(value).toLocaleDateString(locale, { month: 'numeric', day: 'numeric' })
 }
 
 export function formatTokenCount(value) {
@@ -14,9 +21,9 @@ export function formatTokenCount(value) {
   return String(tokens)
 }
 
-export function workspaceName(value) {
+export function workspaceName(value, locale = 'zh-CN') {
   const path = String(value || '').replace(/[\\/]+$/, '')
-  return path.split(/[\\/]/).pop() || path || '未设置目录'
+  return path.split(/[\\/]/).pop() || path || (locale === 'en-US' ? 'No folder set' : '未设置目录')
 }
 
 export function formatFileSize(size) {

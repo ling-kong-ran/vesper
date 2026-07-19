@@ -1,4 +1,5 @@
 import { useId, useState } from 'react'
+import { useI18n } from '../app/i18n.jsx'
 
 const STATE_LABELS = {
   idle: 'Vesper Agent',
@@ -13,13 +14,14 @@ function clamp(value, min, max) {
 }
 
 export function AgentStatusAvatar({ state = 'idle', size = 32, className = '' }) {
+  const { t } = useI18n()
   const [gaze, setGaze] = useState({ x: 0, y: 0 })
   const id = useId().replaceAll(':', '')
   const bodyGradientId = `agent-body-${id}`
   const warmthGradientId = `agent-warmth-${id}`
   const shadowId = `agent-shadow-${id}`
   const resolvedState = STATE_LABELS[state] ? state : 'idle'
-  const label = STATE_LABELS[resolvedState]
+  const label = t(STATE_LABELS[resolvedState])
 
   const updateGaze = (event) => {
     const rect = event.currentTarget.getBoundingClientRect()

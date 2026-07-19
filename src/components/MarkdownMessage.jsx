@@ -3,6 +3,7 @@ import { Check, Copy } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
+import { useI18n } from '../app/i18n.jsx'
 
 function textContent(value) {
   if (typeof value === 'string' || typeof value === 'number') return String(value)
@@ -31,6 +32,7 @@ function copyText(value) {
 }
 
 function CodeBlock({ children }) {
+  const { t } = useI18n()
   const [copied, setCopied] = useState(false)
   const codeNode = Children.toArray(children).find(isValidElement)
   const className = codeNode?.props.className || ''
@@ -47,7 +49,7 @@ function CodeBlock({ children }) {
   }
 
   return <div className="code-block">
-    <div className="code-block-toolbar"><span>{languageName(className)}</span><button type="button" onClick={copy} aria-label="复制代码" title="复制代码">{copied ? <Check size={13} /> : <Copy size={13} />}{copied ? '已复制' : '复制'}</button></div>
+    <div className="code-block-toolbar"><span>{languageName(className)}</span><button type="button" onClick={copy} aria-label={t('复制代码')} title={t('复制代码')}>{copied ? <Check size={13} /> : <Copy size={13} />}{t(copied ? '已复制' : '复制')}</button></div>
     <pre><code className={className}>{codeNode?.props.children || children}</code></pre>
   </div>
 }

@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react'
+import { storedLanguage, translateText } from '../../app/i18n.js'
 
 const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
 const MAX_TOTAL_ATTACHMENT_BYTES = 20 * 1024 * 1024
@@ -19,22 +20,22 @@ function fileExtension(name) {
   return name.includes('.') ? name.split('.').pop().toLowerCase() : ''
 }
 
-function fileToBase64(file) {
+function fileToBase64(file, t) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = () => resolve(String(reader.result).split(',')[1] || '')
-    reader.onerror = () => reject(reader.error || new Error('读取图片失败'))
+    reader.onerror = () => reject(reader.error || new Error(t('读取图片失败')))
     reader.readAsDataURL(file)
   })
 }
 
-async function prepareFiles(fileList) {
+async function prepareFiles(fileList, t) {
   const files = [...fileList].slice(0, 8)
   const attachments = []
   for (const file of files) {
-    if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(`${file.name} 超过 10 MB 限制`)
+    if (file.size > MAX_ATTACHMENT_BYTES) throw new Error(t('{name} 超过 10 MB 限制', { name: file.name }))
     if (file.type.startsWith('image/')) {
-      attachments.push({ id: `${file.name}-${file.lastModified}-${file.size}`, kind: 'image', name: file.name, mimeType: file.type, size: file.size, data: await fileToBase64(file) })
+      attachments.push({ id: `${file.name}-${file.lastModified}-${file.size}`, kind: 'image', name: file.name, mimeType: file.type, size: file.size, data: await fileToBase64(file, t) })
       continue
     }
     const extension = fileExtension(file.name)
@@ -44,15 +45,16 @@ async function prepareFiles(fileList) {
       continue
     }
     if (DOCUMENT_EXTENSIONS.has(extension)) {
-      attachments.push({ id: `${file.name}-${file.lastModified}-${file.size}`, kind: 'document', name: file.name, mimeType: file.type || 'application/octet-stream', extension, size: file.size, data: await fileToBase64(file) })
+      attachments.push({ id: `${file.name}-${file.lastModified}-${file.size}`, kind: 'document', name: file.name, mimeType: file.type || 'application/octet-stream', extension, size: file.size, data: await fileToBase64(file, t) })
       continue
     }
-    throw new Error(`${file.name} 暂不支持；请选择图片或文本/代码文件`)
+    throw new Error(t('{name} 暂不支持；请选择图片或文本/代码文件', { name: file.name }))
   }
   return attachments
 }
 
 export function useAttachmentSelection() {
+  const t = useCallback((message, values) => translateText(message, storedLanguage(), values), [])
   const [attachments, setAttachments] = useState([])
   const [attachmentError, setAttachmentError] = useState('')
   const attachmentsRef = useRef([])
@@ -66,16 +68,16 @@ export function useAttachmentSelection() {
   const addFiles = useCallback(async (fileList) => {
     try {
       setAttachmentError('')
-      const prepared = await prepareFiles(fileList || [])
+      const prepared = await prepareFiles(fileList || [], t)
       const combined = [...attachmentsRef.current, ...prepared].slice(0, 8)
-      if (combined.reduce((total, item) => total + item.size, 0) > MAX_TOTAL_ATTACHMENT_BYTES) throw new Error('附件总大小不能超过 20 MB')
+      if (combined.reduce((total, item) => total + item.size, 0) > MAX_TOTAL_ATTACHMENT_BYTES) throw new Error(t('附件总大小不能超过 20 MB'))
       replaceAttachments(combined)
       return true
     } catch (error) {
       setAttachmentError(error.message)
       return false
     }
-  }, [replaceAttachments])
+  }, [replaceAttachments, t])
 
   const chooseFiles = useCallback(async (event) => {
     const input = event.currentTarget

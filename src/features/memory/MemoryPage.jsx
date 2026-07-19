@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FileCode2, Pencil, Plus, RefreshCw, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { Panel, SectionTitle } from '../../components/ui.jsx'
+import { useI18n } from '../../app/i18n.jsx'
 import { StarOrbit } from '../../components/StarOrbit.jsx'
 import { apiJson } from '../../lib/api.js'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
@@ -45,17 +46,17 @@ function galaxyLayout(nodes, spaceId) {
   })
 }
 
-function formatMemoryTime(value) {
+function formatMemoryTime(value, locale = 'zh-CN') {
   if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
-  return new Intl.DateTimeFormat('zh-CN', {
+  return new Intl.DateTimeFormat(locale, {
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(date)
 }
 
-function spaceLabel(space) {
-  return space?.kind === 'global' ? '全局星域' : (space?.name || '')
+function spaceLabel(space, t = (value) => value) {
+  return space?.kind === 'global' ? t('全局星域') : (space?.name || '')
 }
 
 // 关联线使用贝塞尔曲线：沿垂直方向轻微弯曲，相邻线交错方向，看起来更柔和
@@ -70,6 +71,7 @@ function linkCurve(source, target, seed) {
 }
 
 export function MemoryPage({ notify, query, registerPrimaryAction, requestConfirm }) {
+  const { t, language } = useI18n()
   const [data, setData] = useState({ spaces: [], nodes: [], links: [], selectedSpaceId: '' })
   const [spaceId, setSpaceId] = useState('')
   const [selectedId, setSelectedId] = useState('')
@@ -145,24 +147,24 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
   const selectedSpace = data.spaces.find((space) => space.id === spaceId)
 
   const deleteNode = async (node) => {
-    const approved = await requestConfirm({ title: '删除星辰', message: `确定删除星辰“${node.title}”吗？`, confirmLabel: '删除' })
+    const approved = await requestConfirm({ title: t('删除星辰'), message: t('确定删除星辰“{name}”吗？', { name: node.title }), confirmLabel: t('删除') })
     if (!approved) return
     try {
       await apiJson(`/api/memory/nodes/${encodeURIComponent(node.id)}`, { method: 'DELETE' })
-      notify('星辰已删除')
+      notify(t('星辰已删除'))
       await load(spaceId)
     } catch (deleteError) { setError(deleteError.message) }
   }
 
   const deleteSpace = async () => {
     if (!selectedSpace) return
-    const approved = await requestConfirm({ title: '删除星域', message: `确定删除星域“${spaceLabel(selectedSpace)}”及其全部星辰吗？`, confirmLabel: '删除' })
+    const approved = await requestConfirm({ title: t('删除星域'), message: t('确定删除星域“{name}”及其全部星辰吗？', { name: spaceLabel(selectedSpace, t) }), confirmLabel: t('删除') })
     if (!approved) return
     try {
       await apiJson(`/api/memory/spaces/${encodeURIComponent(selectedSpace.id)}`, { method: 'DELETE' })
       setSpaceId('')
       setSelectedId('')
-      notify('星域已删除')
+      notify(t('星域已删除'))
     } catch (deleteError) { setError(deleteError.message) }
   }
 
@@ -170,21 +172,21 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
     <div className="memory-layout">
       <div className="memory-left-stack">
         <Panel className="wiki-panel">
-          <div className="card-head"><SectionTitle title="星域" /><button className="icon-button" title="新建星域" onClick={() => setSpaceModal({})}><Plus size={13} /></button></div>
-          {data.spaces.map((space) => <button className={space.id === spaceId ? 'active' : ''} onClick={() => { setSpaceId(space.id); setSelectedId('') }} key={space.id}><span>{spaceLabel(space)}</span><small>{space.nodeCount} 星辰</small><ChevronRight size={13} /></button>)}
-          {selectedSpace && <div className="memory-space-actions"><button onClick={() => setSpaceModal(selectedSpace)}><Pencil size={12} />重命名</button>{selectedSpace.kind !== 'global' && <button className="danger" onClick={deleteSpace}><Trash2 size={12} />删除</button>}</div>}
+          <div className="card-head"><SectionTitle title={t('星域')} /><button className="icon-button" title={t('新建星域')} onClick={() => setSpaceModal({})}><Plus size={13} /></button></div>
+          {data.spaces.map((space) => <button className={space.id === spaceId ? 'active' : ''} onClick={() => { setSpaceId(space.id); setSelectedId('') }} key={space.id}><span>{spaceLabel(space, t)}</span><small>{t('{count} 星辰', { count: space.nodeCount })}</small><ChevronRight size={13} /></button>)}
+          {selectedSpace && <div className="memory-space-actions"><button onClick={() => setSpaceModal(selectedSpace)}><Pencil size={12} />{t('重命名')}</button>{selectedSpace.kind !== 'global' && <button className="danger" onClick={deleteSpace}><Trash2 size={12} />{t('删除')}</button>}</div>}
         </Panel>
         <Panel className="memory-legend-panel">
-          <SectionTitle title="星图类型" />
-          <div className="galaxy-legend">{Object.entries(TYPE_LABELS).map(([type, label]) => <span key={type}><i className={`g-dot g-${type}`} />{label}</span>)}</div>
+          <SectionTitle title={t('星图类型')} />
+          <div className="galaxy-legend">{Object.entries(TYPE_LABELS).map(([type, label]) => <span key={type}><i className={`g-dot g-${type}`} />{t(label)}</span>)}</div>
         </Panel>
       </div>
       <Panel className="graph-panel galaxy-panel" onPointerMove={handleParallax} onPointerLeave={resetParallax}>
         <div className="graph-toolbar">
-          <button title="点亮星辰" onClick={() => setNodeModal({ spaceId })}><Plus size={14} /></button>
-          <button title="放大" onClick={() => setZoom((value) => Math.min(1.6, Number((value + 0.15).toFixed(2))))}><ZoomIn size={13} /></button>
-          <button title="缩小" onClick={() => setZoom((value) => Math.max(0.7, Number((value - 0.15).toFixed(2))))}><ZoomOut size={13} /></button>
-          <button title="刷新" onClick={() => load(spaceId)}><RefreshCw className={loading ? 'spin' : ''} size={13} /></button>
+          <button title={t('点亮星辰')} onClick={() => setNodeModal({ spaceId })}><Plus size={14} /></button>
+          <button title={t('放大')} onClick={() => setZoom((value) => Math.min(1.6, Number((value + 0.15).toFixed(2))))}><ZoomIn size={13} /></button>
+          <button title={t('缩小')} onClick={() => setZoom((value) => Math.max(0.7, Number((value - 0.15).toFixed(2))))}><ZoomOut size={13} /></button>
+          <button title={t('刷新')} onClick={() => load(spaceId)}><RefreshCw className={loading ? 'spin' : ''} size={13} /></button>
         </div>
         <div className={`galaxy-stage ${focusId ? 'has-focus' : ''}`} ref={stageRef} style={{ transform: `scale(${zoom})` }}>
           <i className="galaxy-spiral" aria-hidden="true" />
@@ -250,27 +252,27 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
             <span className="star-label">{node.title}</span>
           </button>)}
         </div>
-        {!!stars.length && <span className="galaxy-count">✦ {stars.length}/{data.nodes.length} 星辰</span>}
-        {!loading && !stars.length && <div className="memory-empty"><StarOrbit size={44} /><span>这片星系还空着，点击左上角 + 种下第一颗星</span></div>}
+        {!!stars.length && <span className="galaxy-count">✦ {t('{visible}/{total} 星辰', { visible: stars.length, total: data.nodes.length })}</span>}
+        {!loading && !stars.length && <div className="memory-empty"><StarOrbit size={44} /><span>{t('这片星系还空着，点击左上角 + 种下第一颗星')}</span></div>}
       </Panel>
       <div className="detail-stack">
         <Panel>
-          <SectionTitle title="选中星辰" />
+          <SectionTitle title={t('选中星辰')} />
           {selected ? <>
             <h2>{selected.title}</h2>
             <p className="muted-copy">{selected.content}</p>
-            <div className="key-value"><span>星辰类型</span><strong className="type-with-dot"><i className={`g-dot g-${selected.type}`} />{TYPE_LABELS[selected.type] || selected.type}</strong></div>
-            <div className="key-value"><span>来源</span><strong>{selected.sourceType === 'conversation' ? '对话自动沉淀' : selected.sourceType === 'agent' ? 'Agent 点亮' : '手动添加'}</strong></div>
-            <div className="key-value"><span>创建时间</span><strong>{formatMemoryTime(selected.createdAt)}</strong></div>
-            <div className="key-value"><span>关联星辰</span><strong>{relatedNodeIds.size} 颗</strong></div>
-            <div className="button-row"><button className="button primary" onClick={() => setNodeModal(selected)}><Pencil size={14} />编辑</button><button className="button danger" onClick={() => deleteNode(selected)}><Trash2 size={14} />删除</button></div>
-          </> : <p className="muted-copy">从星图中选择一颗星辰查看详细内容。</p>}
+            <div className="key-value"><span>{t('星辰类型')}</span><strong className="type-with-dot"><i className={`g-dot g-${selected.type}`} />{t(TYPE_LABELS[selected.type] || selected.type)}</strong></div>
+            <div className="key-value"><span>{t('来源')}</span><strong>{t(selected.sourceType === 'conversation' ? '对话自动沉淀' : selected.sourceType === 'agent' ? 'Agent 点亮' : '手动添加')}</strong></div>
+            <div className="key-value"><span>{t('创建时间')}</span><strong>{formatMemoryTime(selected.createdAt, language)}</strong></div>
+            <div className="key-value"><span>{t('关联星辰')}</span><strong>{t('{count} 颗', { count: relatedNodeIds.size })}</strong></div>
+            <div className="button-row"><button className="button primary" onClick={() => setNodeModal(selected)}><Pencil size={14} />{t('编辑')}</button><button className="button danger" onClick={() => deleteNode(selected)}><Trash2 size={14} />{t('删除')}</button></div>
+          </> : <p className="muted-copy">{t('从星图中选择一颗星辰查看详细内容。')}</p>}
           {error && <div className="config-error">{error}</div>}
         </Panel>
         <Panel>
-          <SectionTitle title="关联文件" />
-          {relatedFiles.map((file) => <div className="file-row" key={file.id}><FileCode2 size={15} /><span><strong>{file.title}</strong><small>{file.sourcePath || file.cwd || '本地星忆'}</small></span><button onClick={() => setSelectedId(file.id)}>查看</button><button onClick={() => setNodeModal(file)}><Pencil size={13} /></button><button className="danger" onClick={() => deleteNode(file)}><Trash2 size={13} /></button></div>)}
-          {!relatedFiles.length && <p className="muted-copy">当前星辰没有关联文件。</p>}
+          <SectionTitle title={t('关联文件')} />
+          {relatedFiles.map((file) => <div className="file-row" key={file.id}><FileCode2 size={15} /><span><strong>{file.title}</strong><small>{file.sourcePath || file.cwd || t('本地星忆')}</small></span><button onClick={() => setSelectedId(file.id)}>{t('查看')}</button><button onClick={() => setNodeModal(file)}><Pencil size={13} /></button><button className="danger" onClick={() => deleteNode(file)}><Trash2 size={13} /></button></div>)}
+          {!relatedFiles.length && <p className="muted-copy">{t('当前星辰没有关联文件。')}</p>}
         </Panel>
       </div>
       {nodeModal && <MemoryNodeModal spaces={data.spaces} node={nodeModal.id ? nodeModal : null} initialSpaceId={nodeModal.spaceId || spaceId} onClose={() => setNodeModal(null)} onSaved={async (message) => { setNodeModal(null); notify(message); await load(spaceId) }} />}
@@ -280,6 +282,7 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
 }
 
 function MemoryNodeModal({ spaces, node, initialSpaceId, onClose, onSaved }) {
+  const { t } = useI18n()
   const [draft, setDraft] = useState({
     spaceId: node?.spaceId || initialSpaceId || spaces[0]?.id || '',
     title: node?.title || '', content: node?.content || '', type: node?.type || 'concept',
@@ -295,13 +298,14 @@ function MemoryNodeModal({ spaces, node, initialSpaceId, onClose, onSaved }) {
       await apiJson(node ? `/api/memory/nodes/${encodeURIComponent(node.id)}` : '/api/memory/nodes', {
         method: node ? 'PATCH' : 'POST', body: JSON.stringify(draft),
       })
-      await onSaved(node ? '星辰已更新' : '星辰已点亮')
+      await onSaved(t(node ? '星辰已更新' : '星辰已点亮'))
     } catch (saveError) { setError(saveError.message) } finally { setSaving(false) }
   }
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal" onSubmit={submit}><div className="card-head"><div><h2>{node ? '编辑星辰' : '点亮星辰'}</h2><p>保存可在后续会话中重新找到和复用的星忆。</p></div><button type="button" className="icon-button" onClick={onClose}><X size={17} /></button></div><label className="field-label">所属星域<span className="select-wrap"><select value={draft.spaceId} onChange={(event) => setDraft({ ...draft, spaceId: event.target.value })}>{spaces.map((space) => <option value={space.id} key={space.id}>{spaceLabel(space)}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">星辰名称<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder="例如：项目 UI 约束" /></label><label className="field-label">星忆内容<textarea value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} placeholder="记录独立可理解、未来可复用的星忆" /></label><div className="form-grid"><label className="field-label">星辰类型<span className="select-wrap"><select value={draft.type} onChange={(event) => setDraft({ ...draft, type: event.target.value })}>{Object.entries(TYPE_LABELS).map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">重要度<span className="select-wrap"><select value={draft.importance} onChange={(event) => setDraft({ ...draft, importance: Number(event.target.value) })}><option value="0.3">一般</option><option value="0.5">常用</option><option value="0.8">重要</option><option value="1">强约束</option></select><ChevronDown size={13} /></span></label></div><label className="field-label">关联文件路径<input value={draft.sourcePath} onChange={(event) => setDraft({ ...draft, sourcePath: event.target.value })} placeholder="可选，例如 E:\\code\\project\\README.md" /></label>{error && <div className="config-error">{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>取消</button><button className="button primary" disabled={saving || !draft.spaceId || !draft.title.trim() || !draft.content.trim()}>{saving ? <RefreshCw className="spin" size={14} /> : <Pencil size={14} />}{saving ? '保存中…' : '保存'}</button></div></form></div>
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal" onSubmit={submit}><div className="card-head"><div><h2>{t(node ? '编辑星辰' : '点亮星辰')}</h2><p>{t('保存可在后续会话中重新找到和复用的星忆。')}</p></div><button type="button" className="icon-button" aria-label={t('关闭对话框')} onClick={onClose}><X size={17} /></button></div><label className="field-label">{t('所属星域')}<span className="select-wrap"><select value={draft.spaceId} onChange={(event) => setDraft({ ...draft, spaceId: event.target.value })}>{spaces.map((space) => <option value={space.id} key={space.id}>{spaceLabel(space, t)}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">{t('星辰名称')}<input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} placeholder={t('例如：项目 UI 约束')} /></label><label className="field-label">{t('星忆内容')}<textarea value={draft.content} onChange={(event) => setDraft({ ...draft, content: event.target.value })} placeholder={t('记录独立可理解、未来可复用的星忆')} /></label><div className="form-grid"><label className="field-label">{t('星辰类型')}<span className="select-wrap"><select value={draft.type} onChange={(event) => setDraft({ ...draft, type: event.target.value })}>{Object.entries(TYPE_LABELS).map(([value, label]) => <option value={value} key={value}>{t(label)}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">{t('重要度')}<span className="select-wrap"><select value={draft.importance} onChange={(event) => setDraft({ ...draft, importance: Number(event.target.value) })}><option value="0.3">{t('一般')}</option><option value="0.5">{t('常用')}</option><option value="0.8">{t('重要')}</option><option value="1">{t('强约束')}</option></select><ChevronDown size={13} /></span></label></div><label className="field-label">{t('关联文件路径')}<input value={draft.sourcePath} onChange={(event) => setDraft({ ...draft, sourcePath: event.target.value })} placeholder={t('可选，例如 E:\\code\\project\\README.md')} /></label>{error && <div className="config-error">{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>{t('取消')}</button><button className="button primary" disabled={saving || !draft.spaceId || !draft.title.trim() || !draft.content.trim()}>{saving ? <RefreshCw className="spin" size={14} /> : <Pencil size={14} />}{t(saving ? '保存中…' : '保存')}</button></div></form></div>
 }
 
 function MemorySpaceModal({ space, onClose, onSaved }) {
+  const { t } = useI18n()
   const [name, setName] = useState(space?.name || '')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -313,8 +317,8 @@ function MemorySpaceModal({ space, onClose, onSaved }) {
       const result = await apiJson(space ? `/api/memory/spaces/${encodeURIComponent(space.id)}` : '/api/memory/spaces', {
         method: space ? 'PATCH' : 'POST', body: JSON.stringify({ name, kind: 'custom' }),
       })
-      await onSaved(result, space ? '星域已重命名' : '星域已创建')
+      await onSaved(result, t(space ? '星域已重命名' : '星域已创建'))
     } catch (saveError) { setError(saveError.message) } finally { setSaving(false) }
   }
-  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal" onSubmit={submit}><div className="card-head"><div><h2>{space ? '重命名星域' : '新建星域'}</h2><p>用于安放不同主题或项目的长期星忆。</p></div><button type="button" className="icon-button" onClick={onClose}><X size={17} /></button></div><label className="field-label">星域名称<input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：产品设计规范" autoFocus /></label>{error && <div className="config-error">{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>取消</button><button className="button primary" disabled={saving || !name.trim()}>{saving ? <RefreshCw className="spin" size={14} /> : <Plus size={14} />}{saving ? '保存中…' : '保存'}</button></div></form></div>
+  return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal" onSubmit={submit}><div className="card-head"><div><h2>{t(space ? '重命名星域' : '新建星域')}</h2><p>{t('用于安放不同主题或项目的长期星忆。')}</p></div><button type="button" className="icon-button" aria-label={t('关闭对话框')} onClick={onClose}><X size={17} /></button></div><label className="field-label">{t('星域名称')}<input value={name} onChange={(event) => setName(event.target.value)} placeholder={t('例如：产品设计规范')} autoFocus /></label>{error && <div className="config-error">{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>{t('取消')}</button><button className="button primary" disabled={saving || !name.trim()}>{saving ? <RefreshCw className="spin" size={14} /> : <Plus size={14} />}{t(saving ? '保存中…' : '保存')}</button></div></form></div>
 }

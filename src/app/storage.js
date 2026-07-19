@@ -3,4 +3,5 @@ export const STORAGE_KEYS = Object.freeze({
   chatMode: 'vesper-chat-mode',
   activeSession: 'vesper-active-session',
   tiledSessions: 'vesper-tiled-sessions',
+  language: 'vesper-language',
 })

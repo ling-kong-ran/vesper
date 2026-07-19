@@ -32,7 +32,8 @@ import {
 import { APP_NAME } from './app/brand.js'
 import { createPrimaryActionRegistry } from './app/primary-action.js'
 import { STORAGE_KEYS } from './app/storage.js'
-import { NAV_GROUPS, PAGE_META } from './app/navigation.jsx'
+import { getNavigation, getPageMeta, PAGE_IDS } from './app/navigation.jsx'
+import { useI18n } from './app/i18n.jsx'
 import { AgentStatusAvatar } from './components/AgentStatusAvatar.jsx'
 import { BrandLogo } from './components/BrandLogo.jsx'
 import { StarOrbit } from './components/StarOrbit.jsx'
@@ -100,9 +101,9 @@ function renderNotificationContent(content, data) {
 
 const THEME_SEQUENCE = ['system', 'light', 'dark']
 const THEME_META = {
-  system: ['跟随系统', Monitor],
-  light: ['浅色', Sun],
-  dark: ['深色', Moon],
+  system: Monitor,
+  light: Sun,
+  dark: Moon,
 }
 
 function resolveDark(mode) {
@@ -114,8 +115,11 @@ function isEditableTarget(target) {
 }
 
 function App() {
+  const { t } = useI18n()
+  const navigation = useMemo(() => getNavigation(t), [t])
+  const pageMeta = useMemo(() => getPageMeta(t), [t])
   const initialPage = window.location.hash.slice(1)
-  const [page, setPage] = useState(PAGE_META[initialPage] ? initialPage : 'chat')
+  const [page, setPage] = useState(PAGE_IDS.has(initialPage) ? initialPage : 'chat')
   const [chatMode, setChatModeState] = useState(() => localStorage.getItem(STORAGE_KEYS.chatMode) || 'focus')
   const [query, setQuery] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
@@ -209,10 +213,10 @@ function App() {
     if (['chat', 'config', 'assets', 'plugins', 'channels', 'schedules', 'memory'].includes(page)) invokePrimaryAction()
     else if (page === 'chatHistory') { navigate('chat'); invokePrimaryAction() }
     else if (page === 'workflows') navigate('workflowCreate')
-    else if (page === 'workflowCreate') notify('工作流运行时尚未接入，当前不会真实发布', 'info')
-    else if (page === 'mcp' || page === 'skills') notify('该页面当前为演示界面，功能尚未接入', 'info')
+    else if (page === 'workflowCreate') notify(t('工作流运行时尚未接入，当前不会真实发布'), 'info')
+    else if (page === 'mcp' || page === 'skills') notify(t('该页面当前为演示界面，功能尚未接入'), 'info')
     else setModal(page)
-  }, [configSection, invokePrimaryAction, navigate, notify, page])
+  }, [configSection, invokePrimaryAction, navigate, notify, page, t])
 
   useEffect(() => {
     const focusSearch = () => {
@@ -261,7 +265,7 @@ function App() {
   useEffect(() => {
     const syncHash = () => {
       const next = window.location.hash.slice(1)
-      if (PAGE_META[next]) {
+      if (PAGE_IDS.has(next)) {
         setPage(next)
       }
     }
@@ -295,15 +299,15 @@ function App() {
   }, [showBrowserNotification])
 
   const activeMeta = page === 'chat' && chatMode === 'focus'
-    ? ['对话', '聚集模式 · 单会话工作台']
-    : PAGE_META[page]
+    ? [t('对话'), t('聚集模式 · 单会话工作台')]
+    : pageMeta[page]
 
-  if (!startupReady) return <div className="app-startup"><BrandLogo size={30} className="startup-logo" /><strong>正在唤醒 Vesper…</strong></div>
+  if (!startupReady) return <div className="app-startup"><BrandLogo size={30} className="startup-logo" /><strong>{t('正在唤醒 Vesper…')}</strong></div>
 
   return (
     <div className="app-shell">
       <div className="app-body">
-        <Sidebar page={page} navigate={navigate} setChatMode={setChatMode} open={mobileNav} onClose={() => setMobileNav(false)} pluginStats={pluginStats} />
+        <Sidebar page={page} navigation={navigation} navigate={navigate} setChatMode={setChatMode} open={mobileNav} onClose={() => setMobileNav(false)} pluginStats={pluginStats} />
         <main className="main-surface">
           <PageHeader
             meta={activeMeta}
@@ -344,10 +348,12 @@ function App() {
 }
 
 function PageLoader() {
-  return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在加载页面</h2><p>按需加载功能模块…</p></Panel>
+  const { t } = useI18n()
+  return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在加载页面')}</h2><p>{t('按需加载功能模块…')}</p></Panel>
 }
 
-function Sidebar({ page, navigate, setChatMode, open, onClose, pluginStats }) {
+function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, pluginStats }) {
+  const { t, language } = useI18n()
   const [usage, setUsage] = useState(null)
   const [sessions, setSessions] = useState([])
   const [historyExpanded, setHistoryExpanded] = useState(true)
@@ -404,37 +410,42 @@ function Sidebar({ page, navigate, setChatMode, open, onClose, pluginStats }) {
   }
 
   const usageTitle = usage
-    ? `输入 ${usage.input.toLocaleString()} · 输出 ${usage.output.toLocaleString()} · 推理 ${usage.reasoning.toLocaleString()} · 缓存读取 ${usage.cacheRead.toLocaleString()}`
-    : '正在统计今日 Token 消耗'
+    ? t('输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {cacheRead}', {
+        input: usage.input.toLocaleString(language),
+        output: usage.output.toLocaleString(language),
+        reasoning: usage.reasoning.toLocaleString(language),
+        cacheRead: usage.cacheRead.toLocaleString(language),
+      })
+    : t('正在统计今日 Token 消耗')
 
   return (
     <>
-      {open && <button className="nav-scrim" aria-label="关闭导航" onClick={onClose} />}
+      {open && <button className="nav-scrim" aria-label={t('关闭导航')} onClick={onClose} />}
       <aside className={`sidebar ${open ? 'is-open' : ''}`}>
         <div className="brand"><BrandLogo size={22} /><strong>{APP_NAME}</strong><button className="mobile-close" onClick={onClose}><X size={18} /></button></div>
         <div className="nav-list">
-          <nav className="nav-primary" aria-label="主导航">
-            {NAV_GROUPS.map(([group, items]) => (
+          <nav className="nav-primary" aria-label={t('主导航')}>
+            {navigation.map(([group, items]) => (
               <div className="nav-group" key={group}>
                 <span className="nav-group-label">{group}</span>
                 {items.map(([id, label, Icon]) => <button className={`nav-main ${active === id ? 'active' : ''}`} key={id} onClick={() => navigate(id)}><Icon size={16} /><span>{label}</span></button>)}
               </div>
             ))}
           </nav>
-          <section className={`nav-history-section ${historyExpanded ? 'is-expanded' : ''}`} aria-label="最近会话">
+          <section className={`nav-history-section ${historyExpanded ? 'is-expanded' : ''}`} aria-label={t('最近会话')}>
             <div className="nav-history-section-head">
-              <button className="nav-history-heading" aria-controls="sidebar-recent-sessions" aria-expanded={historyExpanded} onClick={() => setHistoryExpanded((value) => !value)}><span>最近会话</span><ChevronRight className={historyExpanded ? 'is-open' : ''} size={14} /></button>
-              <button className="nav-history-view-all" aria-label={`查看全部历史会话，共 ${sessions.length} 个`} onClick={() => navigate('chatHistory')}>查看全部</button>
+              <button className="nav-history-heading" aria-controls="sidebar-recent-sessions" aria-expanded={historyExpanded} onClick={() => setHistoryExpanded((value) => !value)}><span>{t('最近会话')}</span><ChevronRight className={historyExpanded ? 'is-open' : ''} size={14} /></button>
+              <button className="nav-history-view-all" aria-label={t('查看全部历史会话，共 {count} 个', { count: sessions.length })} onClick={() => navigate('chatHistory')}>{t('查看全部')}</button>
             </div>
             {historyExpanded && <div className="nav-history-list" id="sidebar-recent-sessions">
-              {sessions.slice(0, 4).map((session) => <button className={`nav-history-item ${session.id === activeSessionId ? 'active-session' : ''}`} aria-current={session.id === activeSessionId ? 'page' : undefined} title={`${session.name || '未命名会话'} · ${relativeTime(session.modified)}`} onClick={() => openRecentSession(session.id)} key={session.id}><span>{session.name || '未命名会话'}</span></button>)}
-              {!sessions.length && <span className="nav-history-empty">暂无历史会话</span>}
+              {sessions.slice(0, 4).map((session) => <button className={`nav-history-item ${session.id === activeSessionId ? 'active-session' : ''}`} aria-current={session.id === activeSessionId ? 'page' : undefined} title={`${session.name || t('未命名会话')} · ${relativeTime(session.modified, language)}`} onClick={() => openRecentSession(session.id)} key={session.id}><span>{session.name || t('未命名会话')}</span></button>)}
+              {!sessions.length && <span className="nav-history-empty">{t('暂无历史会话')}</span>}
             </div>}
           </section>
         </div>
         <div className="sidebar-status">
-          <span>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? '功能状态' : page === 'plugins' ? '插件状态' : '运行状态'}</span>
-          <b>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? <>演示页面 <em className="amber">尚未接入</em></> : page === 'plugins' ? `已启用 ${pluginStats?.enabled ?? '—'} / ${pluginStats?.total ?? '—'}` : <>今日 tokens <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</b>
+          <span>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? t('功能状态') : page === 'plugins' ? t('插件状态') : t('运行状态')}</span>
+          <b>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? <>{t('演示页面')} <em className="amber">{t('尚未接入')}</em></> : page === 'plugins' ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' }) : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</b>
         </div>
       </aside>
     </>
@@ -442,41 +453,46 @@ function Sidebar({ page, navigate, setChatMode, open, onClose, pluginStats }) {
 }
 
 function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, notify, theme, onCycleTheme, searchInputRef }) {
+  const { t } = useI18n()
   const primary = page === 'config' && configSection !== 'models' ? null : ({
-    chat: ['新会话', Plus], chatHistory: ['新会话', Plus], assets: ['添加链接', Link2], channels: ['连接渠道', Plus], schedules: ['新建任务', Plus],
-    config: ['添加 Provider', Plus], plugins: ['保存策略', Save], memory: ['点亮星辰', Plus], mcp: ['添加服务', Plus],
-    skills: ['安装技能', Plus], workflows: ['新建工作流', Plus], workflowCreate: ['发布', Rocket],
+    chat: [t('新会话'), Plus], chatHistory: [t('新会话'), Plus], assets: [t('添加链接'), Link2], channels: [t('连接渠道'), Plus], schedules: [t('新建任务'), Plus],
+    config: [t('添加 Provider'), Plus], plugins: [t('保存策略'), Save], memory: [t('点亮星辰'), Plus], mcp: [t('添加服务'), Plus],
+    skills: [t('安装技能'), Plus], workflows: [t('新建工作流'), Plus], workflowCreate: [t('发布'), Rocket],
   }[page])
   const PrimaryIcon = primary?.[1]
-  const [themeLabel, ThemeIcon] = THEME_META[theme] || THEME_META.system
+  const ThemeIcon = THEME_META[theme] || THEME_META.system
+  const themeLabel = t(theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统')
+  const gridLabel = t('平铺')
+  const focusLabel = t('聚集')
   return (
     <header className="page-header">
       <button className="mobile-menu" onClick={onMenu}><Menu size={19} /></button>
       <div className="title-block"><h1>{meta[0]}</h1><p>{meta[1]}</p></div>
       <div className="header-actions">
-        {page === 'chat' && <Segmented options={['平铺', '聚集']} value={chatMode === 'grid' ? '平铺' : '聚集'} onChange={(v) => setChatMode(v === '平铺' ? 'grid' : 'focus')} compact />}
+        {page === 'chat' && <Segmented options={[gridLabel, focusLabel]} value={chatMode === 'grid' ? gridLabel : focusLabel} onChange={(value) => setChatMode(value === gridLabel ? 'grid' : 'focus')} compact />}
         {page === 'workflowCreate' ? (
           <>
-            <button className="button secondary" onClick={() => notify('当前为演示编辑器，草稿不会持久化', 'info')}><Save size={15} />保存草稿</button>
-            <button className="button dark" onClick={() => notify('工作流运行时尚未接入，无法试运行', 'info')}><Play size={15} />试运行</button>
+            <button className="button secondary" onClick={() => notify(t('当前为演示编辑器，草稿不会持久化'), 'info')}><Save size={15} />{t('保存草稿')}</button>
+            <button className="button dark" onClick={() => notify(t('工作流运行时尚未接入，无法试运行'), 'info')}><Play size={15} />{t('试运行')}</button>
           </>
         ) : page === 'chat' && chatMode === 'focus' ? null : (
-          <label className="search-box" title="搜索（Ctrl/⌘ K 或 /）"><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? '搜索平铺会话' : page === 'mcp' ? '搜索服务或工具' : page === 'memory' ? '搜索星辰或文件' : `搜索${meta[0]}`} /></label>
+          <label className="search-box" title={t('搜索（Ctrl/⌘ K 或 /）')}><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? t('搜索平铺会话') : page === 'mcp' ? t('搜索服务或工具') : page === 'memory' ? t('搜索星辰或文件') : t('搜索{page}', { page: meta[0] })} /></label>
         )}
-        {primary && <button className="button primary" title={`${primary[0]}（Ctrl/⌘ N）`} onClick={onPrimary}><PrimaryIcon size={15} />{primary[0]}</button>}
-        <button className="icon-button theme-toggle" title={`主题：${themeLabel}（点击切换）`} aria-label={`主题：${themeLabel}，点击切换主题`} onClick={onCycleTheme}><ThemeIcon size={16} /></button>
+        {primary && <button className="button primary" title={t('{action}（Ctrl/⌘ N）', { action: primary[0] })} onClick={onPrimary}><PrimaryIcon size={15} />{primary[0]}</button>}
+        <button className="icon-button theme-toggle" title={t('主题：{theme}（点击切换）', { theme: themeLabel })} aria-label={t('主题：{theme}，点击切换主题', { theme: themeLabel })} onClick={onCycleTheme}><ThemeIcon size={16} /></button>
       </div>
     </header>
   )
 }
 
 function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimaryAction, pendingAsset, onAssetConsumed, requestText }) {
+  const { t } = useI18n()
   const [remoteSessions, setRemoteSessions] = useState([])
   const [activeId, setActiveId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
   const [sessionStates, setSessionStates] = useState({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [model, setModel] = useState('等待配置')
+  const [model, setModel] = useState(() => t('等待配置'))
   const [availableModels, setAvailableModels] = useState([])
   const [workspaceSession, setWorkspaceSession] = useState(null)
   const [tiledSessionIds, setTiledSessionIds] = useState(() => readStoredArray(STORAGE_KEYS.tiledSessions))
@@ -598,7 +614,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     const request = (async () => {
       try {
         setError('')
-        const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: '新会话' }) })
+        const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: t('新会话') }) })
         setActiveId(created.id)
         setRemoteSessions((current) => mergeSessionLists(current, [created]))
         updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null })
@@ -607,9 +623,9 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         try {
           await refreshSessions(created.id)
         } catch (caught) {
-          setError(`会话已创建，但刷新列表失败：${caught.message}`)
+          setError(t('会话已创建，但刷新列表失败：{error}', { error: caught.message }))
         }
-        notify('新会话已创建')
+        notify(t('新会话已创建'))
         return created.id
       } catch (caught) {
         setError(caught.message)
@@ -629,7 +645,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     Promise.all([apiJson('/api/sessions'), apiJson('/api/config')])
       .then(async ([sessionData, configData]) => {
         if (!active) return
-        setModel(configData.model ? `${configData.provider}/${configData.model}` : '未配置模型')
+        setModel(configData.model ? `${configData.provider}/${configData.model}` : t('未配置模型'))
         setAvailableModels(configData.providers.flatMap((provider) => provider.configured && provider.enabled
           ? provider.models.filter((item) => item.kind === 'chat').map((item) => ({
               key: `${provider.id}/${item.id}`,
@@ -646,7 +662,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
           list = (await apiJson('/api/sessions')).sessions
         }
         if (!list.length) {
-          const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: '新会话' }) })
+          const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: t('新会话') }) })
           list = [created]
         }
         if (!active) return
@@ -670,7 +686,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       .catch((caught) => active && setError(caught.message))
       .finally(() => active && setLoading(false))
     return () => { active = false }
-  }, [updateSessionState])
+  }, [t, updateSessionState])
 
   useEffect(() => {
     loadSessionMessages(activeId, { limit: FOCUS_MESSAGE_PAGE_SIZE })
@@ -692,7 +708,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   }, [syncLiveSession])
 
   const sendPrompt = async (text, requestedSessionId = activeId, attachments = []) => {
-    const prompt = text.trim() || (attachments.length ? '请分析这些附件。' : '')
+    const prompt = text.trim() || (attachments.length ? t('请分析这些附件。') : '')
     if (!prompt) return
     let sessionId = requestedSessionId
     if (!sessionId) sessionId = await createSession()
@@ -723,7 +739,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         } else if (event === 'tool_end') {
           updateSessionState(sessionId, (current) => ({
             ...current,
-            error: data.error ? data.message || `${data.name} 执行失败` : current.error,
+            error: data.error ? data.message || t('{tool} 执行失败', { tool: data.name }) : current.error,
             tools: current.tools.map((item) => item.id === data.id ? { ...item, status: data.error ? 'error' : 'done', message: data.message || '' } : item),
           }))
         } else if (event === 'permission_request') {
@@ -740,7 +756,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         } else if (event === 'session_title') {
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, name: data.name } : session))
         } else if (event === 'retry') {
-          updateSessionState(sessionId, { error: `正在重试 ${data.attempt}/${data.maxAttempts}：${data.message}` })
+          updateSessionState(sessionId, { error: t('正在重试 {attempt}/{maxAttempts}：{message}', { attempt: data.attempt, maxAttempts: data.maxAttempts, message: data.message }) })
         } else if (event === 'error') {
           throw new Error(data.message)
         }
@@ -748,7 +764,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       updateSessionState(sessionId, (current) => ({ ...current, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false } : item) }))
       const sessions = await refreshSessions()
       const completed = sessions.find((session) => session.id === sessionId)
-      browserNotify?.('chat.completed', { chat: { title: completed?.name || `${APP_NAME} 对话`, summary: responseText.trim().slice(0, 260) || 'Agent 已完成回复。', model: sessionStatesRef.current[sessionId]?.model || model } })
+      browserNotify?.('chat.completed', { chat: { title: completed?.name || t('{app} 对话', { app: APP_NAME }), summary: responseText.trim().slice(0, 260) || t('Agent 已完成回复。'), model: sessionStatesRef.current[sessionId]?.model || model } })
     } catch (caught) {
       updateSessionState(sessionId, (current) => ({ ...current, error: caught.message, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || caught.message } : item) }))
     } finally {
@@ -761,7 +777,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     if (!sessionId) return
     await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', body: '{}' })
     updateSessionState(sessionId, { streaming: false })
-    notify('已停止当前运行', 'info')
+    notify(t('已停止当前运行'), 'info')
   }
 
   const switchSessionModel = async (sessionId, nextModel) => {
@@ -775,7 +791,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       })
       updateSessionState(sessionId, { model: updated.model, switchingModel: false })
       setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, model: updated.model } : session))
-      notify(`已切换至 ${selected.label}`)
+      notify(t('已切换至 {model}', { model: selected.label }))
     } catch (caught) {
       updateSessionState(sessionId, { switchingModel: false, error: caught.message })
     }
@@ -790,7 +806,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       })
       updateSessionState(sessionId, { permissionMode: updated.permissionMode, switchingPermission: false })
       setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, permissionMode: updated.permissionMode } : session))
-      notify(`权限模式已切换为${updated.permissionMode === 'ask' ? '询问' : updated.permissionMode === 'ignore' ? '忽略' : '自动'}`)
+      notify(t('权限模式已切换为{mode}', { mode: t(updated.permissionMode === 'ask' ? '询问' : updated.permissionMode === 'ignore' ? '忽略' : '自动') }))
     } catch (caught) {
       updateSessionState(sessionId, { switchingPermission: false, error: caught.message })
     }
@@ -819,7 +835,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       updateSessionState(session.id, { cwd: updated.cwd, switchingCwd: false })
       setRemoteSessions((current) => current.map((item) => item.id === session.id ? { ...item, cwd: updated.cwd } : item))
       setWorkspaceSession(null)
-      notify(`工作目录已切换至 ${workspaceName(updated.cwd)}`)
+      notify(t('工作目录已切换至 {workspace}', { workspace: workspaceName(updated.cwd) }))
     } catch (caught) {
       updateSessionState(session.id, { switchingCwd: false, error: caught.message })
       throw caught
@@ -827,7 +843,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   }
 
   const renameSession = async (session) => {
-    const name = await requestText({ title: '重命名会话', inputLabel: '会话标题', value: session.name, confirmLabel: '保存' })
+    const name = await requestText({ title: t('重命名会话'), inputLabel: t('会话标题'), value: session.name, confirmLabel: t('保存') })
     if (name === null || name === session.name) return
     try {
       const updated = await apiJson(`/api/sessions/${encodeURIComponent(session.id)}`, {
@@ -836,7 +852,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       })
       setRemoteSessions((current) => current.map((item) => item.id === session.id ? { ...item, name: updated.name } : item))
       announceSessionsUpdated()
-      notify('会话标题已更新')
+      notify(t('会话标题已更新'))
     } catch (caught) {
       setError(caught.message)
     }
@@ -849,10 +865,10 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     setTiledSessionIds((current) => {
       const selected = current.includes(session.id)
       const next = toggleTiledSession(current, session.id)
-      notify(selected ? `已将「${session.name}」移出平铺` : `已将「${session.name}」加入平铺`, 'info')
+      notify(t(selected ? '已将「{name}」移出平铺' : '已将「{name}」加入平铺', { name: session.name }), 'info')
       return next
     })
-  }, [notify])
+  }, [notify, t])
   const activeSession = remoteSessions.find((session) => session.id === activeId)
   const activeState = sessionStates[activeId] || { messages: [], tools: [], approvals: [], streaming: false, error: '', loading: false, switchingModel: false, switchingCwd: false, switchingPermission: false, messageStart: null, hasOlder: false, olderCursor: null }
 
@@ -864,7 +880,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   return (
     <>
     <div className={`chat-layout mode-${mode}`}>
-      {loading ? <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在启动 Agent</h2><p>加载模型目录与历史会话…</p></Panel> : mode === 'grid' ? (
+      {loading ? <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在启动 Agent')}</h2><p>{t('加载模型目录与历史会话…')}</p></Panel> : mode === 'grid' ? (
         <div className="session-grid">
           {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} permissionMode={sessionStates[session.id]?.permissionMode || session.permissionMode || 'auto'} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(session.id, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(session.id, approvalId, approved)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onRemoveFromTiled={() => toggleTiled(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
         </div>
@@ -876,6 +892,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
 }
 
 function SessionCard({ session, state, model, permissionMode, availableModels, onModelChange, onPermissionChange, onApproval, onWorkspace, onOpen, onRename, onRemoveFromTiled, onSend, onAbort }) {
+  const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const selection = useAttachmentSelection()
   const messages = (state?.messages || EMPTY_LIST).slice(-GRID_MESSAGE_PAGE_SIZE)
@@ -894,30 +911,31 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
   }
   return (
     <Panel className="session-card">
-      <div className="card-head"><button className="session-title-button" onClick={onOpen}><h3 title={session.name}>{session.name}</h3><span className={streaming ? 'success' : ''}>{streaming ? 'Agent 运行中' : `${session.messageCount || messages.length} 条消息`} · {relativeTime(session.modified)}</span><small className="workspace-summary" title={state?.cwd || session.cwd}><FolderOpen size={10} />{workspaceName(state?.cwd || session.cwd)}</small></button><div className="card-head-actions"><button className="icon-button" title="设置工作目录" onClick={onWorkspace} disabled={streaming || state?.switchingCwd}><FolderOpen size={14} /></button><button className="icon-button" title="重命名会话" onClick={onRename}><Pencil size={14} /></button><button className="icon-button" title="移出平铺" aria-label={`将 ${session.name} 移出平铺`} onClick={onRemoveFromTiled}><X size={14} /></button>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={11} />停止</button> : <button className="icon-button" onClick={onOpen}><MoreHorizontal size={17} /></button>}</div></div>
+      <div className="card-head"><button className="session-title-button" onClick={onOpen}><h3 title={session.name}>{session.name}</h3><span className={streaming ? 'success' : ''}>{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || messages.length })} · {relativeTime(session.modified, language)}</span><small className="workspace-summary" title={state?.cwd || session.cwd}><FolderOpen size={10} />{workspaceName(state?.cwd || session.cwd, language)}</small></button><div className="card-head-actions"><button className="icon-button" title={t('设置工作目录')} onClick={onWorkspace} disabled={streaming || state?.switchingCwd}><FolderOpen size={14} /></button><button className="icon-button" title={t('重命名会话')} onClick={onRename}><Pencil size={14} /></button><button className="icon-button" title={t('移出平铺')} aria-label={t('将 {name} 移出平铺', { name: session.name })} onClick={onRemoveFromTiled}><X size={14} /></button>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={11} />{t('停止')}</button> : <button className="icon-button" onClick={onOpen}><MoreHorizontal size={17} /></button>}</div></div>
       <div className="session-live-body" ref={liveRef} onScroll={onLiveScroll}>
-        {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />加载消息…</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />开始一个新的编码任务</button> : messages.map((message) => <div className={`mini-message ${message.role}`} key={message.id}><span>{message.role === 'agent' ? 'Vesper' : 'You'}</span><div className="mini-message-content"><MarkdownMessage>{message.text || (message.streaming ? '正在思考…' : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} compact />}</div></div>)}
-        {tools.some((tool) => tool.status === 'running') && <div className="mini-tool-status"><Wrench size={11} />{tools.filter((tool) => tool.status === 'running').map((tool) => tool.name).join('、')} 运行中</div>}
+        {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />{t('加载消息…')}</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />{t('开始一个新的编码任务')}</button> : messages.map((message) => <div className={`mini-message ${message.role}`} key={message.id}><span>{message.role === 'agent' ? 'Vesper' : 'You'}</span><div className="mini-message-content"><MarkdownMessage>{message.text || (message.streaming ? t('正在思考…') : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} compact />}</div></div>)}
+        {tools.some((tool) => tool.status === 'running') && <div className="mini-tool-status"><Wrench size={11} />{tools.filter((tool) => tool.status === 'running').map((tool) => tool.name).join(language === 'en-US' ? ', ' : '、')} {t('运行中')}</div>}
         {state?.error && <div className="mini-session-error"><AlertTriangle size={11} />{state.error}</div>}
       </div>
       <form className="mini-composer-shell" onSubmit={submit}>
         <ToolApproval approvals={state?.approvals || EMPTY_LIST} onResolve={onApproval} compact />
         <AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} compact />
         {selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}
-        <div className="mini-composer"><button type="button" className="attach-trigger" title="添加附件" aria-label="添加附件" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={14} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><input value={value} onChange={(event) => setValue(event.target.value)} onPaste={selection.pasteImages} placeholder={streaming ? 'Agent 正在运行…' : '输入 prompt 或添加附件...'} disabled={streaming} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || state?.switchingModel} compact /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={state?.switchingPermission} compact />{streaming ? <button type="button" className="send-mini stop" title="停止运行" aria-label="停止运行" onClick={onAbort}><Square size={12} /></button> : <button className="send-mini" title="发送消息" aria-label="发送消息" disabled={!value.trim() && !selection.attachments.length}><Send size={13} /></button>}</div>
+        <div className="mini-composer"><button type="button" className="attach-trigger" title={t('添加附件')} aria-label={t('添加附件')} onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={14} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><input value={value} onChange={(event) => setValue(event.target.value)} onPaste={selection.pasteImages} placeholder={t(streaming ? 'Agent 正在运行…' : '输入 prompt 或添加附件...')} disabled={streaming} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || state?.switchingModel} compact /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={state?.switchingPermission} compact />{streaming ? <button type="button" className="send-mini stop" title={t('停止运行')} aria-label={t('停止运行')} onClick={onAbort}><Square size={12} /></button> : <button className="send-mini" title={t('发送消息')} aria-label={t('发送消息')} disabled={!value.trim() && !selection.attachments.length}><Send size={13} /></button>}</div>
       </form>
     </Panel>
   )
 }
 
 function SessionModelSelect({ value, models, onChange, disabled, compact = false }) {
+  const { t } = useI18n()
   const currentModel = models.find((model) => model.key === value)
   const hasCurrentModel = Boolean(currentModel)
   const currentLabel = currentModel ? `${currentModel.providerName} · ${currentModel.label}` : value.split('/').at(-1)
   return (
-    <label className={`session-model-select icon-only ${compact ? 'compact' : ''}`} title={disabled ? `当前模型：${currentLabel}（运行期间不可切换）` : `当前模型：${currentLabel}，点击切换`}>
+    <label className={`session-model-select icon-only ${compact ? 'compact' : ''}`} title={t(disabled ? '当前模型：{model}（运行期间不可切换）' : '当前模型：{model}，点击切换', { model: currentLabel })}>
       <Bot size={compact ? 11 : 14} />
-      <select value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled || models.length === 0} aria-label="当前会话模型">
+      <select value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled || models.length === 0} aria-label={t('当前会话模型')}>
         {!hasCurrentModel && <option value={value}>{value.split('/').at(-1)}</option>}
         {models.map((model) => <option key={model.key} value={model.key}>{model.providerName} · {model.label}</option>)}
       </select>
@@ -925,23 +943,29 @@ function SessionModelSelect({ value, models, onChange, disabled, compact = false
   )
 }
 
-const WELCOME_CHIPS = [
-  { label: '解释代码', prompt: '解释这段代码的工作原理：' },
-  { label: '写单测', prompt: '为以下代码编写单元测试：' },
-  { label: '重构', prompt: '重构这段代码并说明改进点：' },
-  { label: '查 bug', prompt: '帮我定位并修复这个 bug：' },
-]
+function welcomeChips(t) {
+  return [
+    { label: t('解释代码'), prompt: t('解释这段代码的工作原理：') },
+    { label: t('写单测'), prompt: t('为以下代码编写单元测试：') },
+    { label: t('重构'), prompt: t('重构这段代码并说明改进点：') },
+    { label: t('查 bug'), prompt: t('帮我定位并修复这个 bug：') },
+  ]
+}
 
-const PERMISSION_OPTIONS = [
-  ['ask', '询问', '敏感工具执行前需要确认'],
-  ['auto', '自动', '自动执行，危险操作仍会询问'],
-  ['ignore', '忽略', '跳过额外审批，仅受已启用工具限制'],
-]
+function permissionOptions(t) {
+  return [
+    ['ask', t('询问'), t('敏感工具执行前需要确认')],
+    ['auto', t('自动'), t('自动执行，危险操作仍会询问')],
+    ['ignore', t('忽略'), t('跳过额外审批，仅受已启用工具限制')],
+  ]
+}
 
 function PermissionModeSelect({ value, onChange, disabled, compact = false }) {
+  const { t } = useI18n()
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
-  const current = PERMISSION_OPTIONS.find((item) => item[0] === value) || PERMISSION_OPTIONS[1]
+  const options = permissionOptions(t)
+  const current = options.find((item) => item[0] === value) || options[1]
   useEffect(() => {
     if (!open) return undefined
     const close = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false) }
@@ -950,10 +974,11 @@ function PermissionModeSelect({ value, onChange, disabled, compact = false }) {
     document.addEventListener('keydown', escape)
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape) }
   }, [open])
-  return <div ref={rootRef} className={`permission-mode-select icon-only ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}><button type="button" className={`permission-mode-trigger icon-only mode-${current[0]}`} title={`权限模式：${current[1]}——${current[2]}`} disabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-label={`权限模式：${current[1]}`} onClick={() => setOpen((visible) => !visible)}><ShieldCheck size={compact ? 11 : 14} /></button>{open && <div className="permission-mode-menu" role="menu">{PERMISSION_OPTIONS.map(([mode, label, description]) => <button type="button" role="menuitemradio" aria-checked={mode === current[0]} className={mode === current[0] ? 'active' : ''} onClick={() => { onChange(mode); setOpen(false) }} key={mode}><span className={`permission-level level-${mode}`}><ShieldCheck size={13} /></span><span><strong>{label}</strong><small>{description}</small></span>{mode === current[0] && <Check size={13} />}</button>)}</div>}</div>
+  return <div ref={rootRef} className={`permission-mode-select icon-only ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}><button type="button" className={`permission-mode-trigger icon-only mode-${current[0]}`} title={t('权限模式：{mode}——{description}', { mode: current[1], description: current[2] })} disabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-label={t('权限模式：{mode}', { mode: current[1] })} onClick={() => setOpen((visible) => !visible)}><ShieldCheck size={compact ? 11 : 14} /></button>{open && <div className="permission-mode-menu" role="menu">{options.map(([mode, label, description]) => <button type="button" role="menuitemradio" aria-checked={mode === current[0]} className={mode === current[0] ? 'active' : ''} onClick={() => { onChange(mode); setOpen(false) }} key={mode}><span className={`permission-level level-${mode}`}><ShieldCheck size={13} /></span><span><strong>{label}</strong><small>{description}</small></span>{mode === current[0] && <Check size={13} />}</button>)}</div>}</div>
 }
 
 function ToolApproval({ approvals, onResolve, compact = false }) {
+  const { t } = useI18n()
   const [resolving, setResolving] = useState(false)
   const approval = approvals[0]
   if (!approval) return null
@@ -961,10 +986,11 @@ function ToolApproval({ approvals, onResolve, compact = false }) {
     setResolving(true)
     try { await onResolve(approval.id, approved) } finally { setResolving(false) }
   }
-  return <div className={`tool-approval ${compact ? 'compact' : ''}`}><div><ShieldCheck size={compact ? 12 : 15} /><span><strong>{approval.toolName} 请求授权</strong><small>{approval.reason}{approvals.length > 1 ? ` · 另有 ${approvals.length - 1} 项等待` : ''}</small></span></div>{!compact && <details><summary>查看调用参数</summary><pre>{JSON.stringify(approval.args, null, 2)}</pre></details>}<div className="tool-approval-actions"><button type="button" className="button secondary" disabled={resolving} onClick={() => resolve(false)}>拒绝</button><button type="button" className="button primary" disabled={resolving} onClick={() => resolve(true)}>{resolving ? <RefreshCw className="spin" size={12} /> : <Check size={12} />}允许</button></div></div>
+  return <div className={`tool-approval ${compact ? 'compact' : ''}`}><div><ShieldCheck size={compact ? 12 : 15} /><span><strong>{t('{tool} 请求授权', { tool: approval.toolName })}</strong><small>{approval.reason}{approvals.length > 1 ? ` · ${t('另有 {count} 项等待', { count: approvals.length - 1 })}` : ''}</small></span></div>{!compact && <details><summary>{t('查看调用参数')}</summary><pre>{JSON.stringify(approval.args, null, 2)}</pre></details>}<div className="tool-approval-actions"><button type="button" className="button secondary" disabled={resolving} onClick={() => resolve(false)}>{t('拒绝')}</button><button type="button" className="button primary" disabled={resolving} onClick={() => resolve(true)}>{resolving ? <RefreshCw className="spin" size={12} /> : <Check size={12} />}{t('允许')}</button></div></div>
 }
 
 function WorkspacePicker({ session, onClose, onSelect }) {
+  const { t } = useI18n()
   const [path, setPath] = useState(session.cwd || '')
   const [listing, setListing] = useState(null)
   const [loading, setLoading] = useState(false)
@@ -1003,27 +1029,28 @@ function WorkspacePicker({ session, onClose, onSelect }) {
 
   return (
     <div className="modal-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
-      <section className="modal workspace-modal" role="dialog" aria-modal="true" aria-label="设置会话工作目录">
-        <div className="card-head"><div><h2>设置工作目录</h2><p>{session.name} 的工具和 Agent 将在此目录运行</p></div><button className="icon-button" onClick={onClose}><X size={17} /></button></div>
+      <section className="modal workspace-modal" role="dialog" aria-modal="true" aria-label={t('设置会话工作目录')}>
+        <div className="card-head"><div><h2>{t('设置工作目录')}</h2><p>{t('{name} 的工具和 Agent 将在此目录运行', { name: session.name })}</p></div><button className="icon-button" aria-label={t('关闭对话框')} onClick={onClose}><X size={17} /></button></div>
         <form className="workspace-path-form" onSubmit={(event) => { event.preventDefault(); browse(path) }}>
           <FolderOpen size={15} />
-          <input value={path} onChange={(event) => setPath(event.target.value)} placeholder="输入项目的绝对路径" autoFocus />
-          <button className="button secondary" disabled={loading}>{loading ? <RefreshCw className="spin" size={13} /> : '转到'}</button>
+          <input value={path} onChange={(event) => setPath(event.target.value)} placeholder={t('输入项目的绝对路径')} autoFocus />
+          <button className="button secondary" disabled={loading}>{loading ? <RefreshCw className="spin" size={13} /> : t('转到')}</button>
         </form>
         <div className="directory-browser">
-          {listing?.parent && <button onClick={() => browse(listing.parent)}><FolderOpen size={14} /><span>..</span><small>上级目录</small></button>}
+          {listing?.parent && <button onClick={() => browse(listing.parent)}><FolderOpen size={14} /><span>..</span><small>{t('上级目录')}</small></button>}
           {listing?.directories.map((directory) => <button key={directory.path} onClick={() => browse(directory.path)}><FolderOpen size={14} /><span>{directory.name}</span><ChevronRight size={13} /></button>)}
-          {!loading && listing && !listing.directories.length && <div className="directory-empty">此目录没有子文件夹</div>}
-          {loading && <div className="directory-empty"><RefreshCw className="spin" size={16} />正在读取目录…</div>}
+          {!loading && listing && !listing.directories.length && <div className="directory-empty">{t('此目录没有子文件夹')}</div>}
+          {loading && <div className="directory-empty"><RefreshCw className="spin" size={16} />{t('正在读取目录…')}</div>}
         </div>
         {error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}
-        <div className="modal-actions"><button className="button secondary" onClick={onClose}>取消</button><button className="button primary" onClick={choose} disabled={saving || loading || !path.trim()}>{saving ? <RefreshCw className="spin" size={14} /> : <Check size={14} />}{saving ? '切换中…' : '选择此目录'}</button></div>
+        <div className="modal-actions"><button className="button secondary" onClick={onClose}>{t('取消')}</button><button className="button primary" onClick={choose} disabled={saving || loading || !path.trim()}>{saving ? <RefreshCw className="spin" size={14} /> : <Check size={14} />}{t(saving ? '切换中…' : '选择此目录')}</button></div>
       </section>
     </div>
   )
 }
 
 function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort }) {
+  const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const selection = useAttachmentSelection()
   const addSelectedAttachments = selection.addAttachments
@@ -1076,25 +1103,26 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   }
   return (
     <Panel className="focus-session">
-      <div className="card-head"><div className="session-runtime-meta"><span className={streaming ? 'success' : ''}>{streaming ? 'Agent 运行中' : '等待输入'}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />停止</button>}<SessionActionsMenu session={session} tiled={tiled} streaming={streaming} switchingCwd={switchingCwd} onToggleTiled={onToggleTiled} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
+      <div className="card-head"><div className="session-runtime-meta"><span className={streaming ? 'success' : ''}>{t(streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} tiled={tiled} streaming={streaming} switchingCwd={switchingCwd} onToggleTiled={onToggleTiled} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
-        {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />重试加载更早消息</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />正在加载更早消息…</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />加载更早消息</button>}</div>}
-        {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>准备好开始编码</h2><p>Agent 可以读取当前工作区、搜索代码并持续处理任务。默认使用只读工具权限。</p><div className="welcome-chips">{WELCOME_CHIPS.map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
+        {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />{t('重试加载更早消息')}</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />{t('正在加载更早消息…')}</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />{t('加载更早消息')}</button>}</div>}
+        {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>{t('准备好开始编码')}</h2><p>{t('Agent 可以读取当前工作区、搜索代码并持续处理任务。默认使用只读工具权限。')}</p><div className="welcome-chips">{welcomeChips(t).map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
         {messages.map((message, index) => {
           const isLatestAgent = message.role === 'agent' && index === messages.length - 1
           const agentState = message.streaming || (isLatestAgent && streaming) ? 'thinking' : isLatestAgent && !message.error ? 'waiting' : 'idle'
-          return <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? <AgentStatusAvatar state={agentState} /> : 'You'}</span><div className="message-content"><MarkdownMessage>{message.text || (message.streaming ? '正在思考…' : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}</div></div>
+          return <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? <AgentStatusAvatar state={agentState} /> : 'You'}</span><div className="message-content"><MarkdownMessage>{message.text || (message.streaming ? t('正在思考…') : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}</div></div>
         })}
-        {tools.length > 0 && <div className="tool-trace"><strong>工具执行</strong>{tools.map((tool) => <span key={tool.id} className={tool.status}><Wrench size={12} />{tool.name}<em>{tool.status === 'running' ? '运行中' : tool.status === 'done' ? '完成' : '失败'}</em></span>)}</div>}
+        {tools.length > 0 && <div className="tool-trace"><strong>{t('工具执行')}</strong>{tools.map((tool) => <span key={tool.id} className={tool.status}><Wrench size={12} />{tool.name}<em>{t(tool.status === 'running' ? '运行中' : tool.status === 'done' ? '完成' : '失败')}</em></span>)}</div>}
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
-      {hasUnread && <button type="button" className="button secondary jump-to-latest" onClick={() => scrollToBottom('smooth')}><ArrowDown size={14} />有新内容</button>}
-      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title="添加附件" aria-label="添加附件" onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onPaste={selection.pasteImages} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={streaming ? 'Agent 正在运行，可停止后继续输入' : '输入消息，Shift + Enter 换行'} disabled={streaming} /><button className="send-button" title="发送消息" aria-label="发送消息" disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
+      {hasUnread && <button type="button" className="button secondary jump-to-latest" onClick={() => scrollToBottom('smooth')}><ArrowDown size={14} />{t('有新内容')}</button>}
+      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title={t('添加附件')} aria-label={t('添加附件')} onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onPaste={selection.pasteImages} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={t(streaming ? 'Agent 正在运行，可停止后继续输入' : '输入消息，Shift + Enter 换行')} disabled={streaming} /><button className="send-button" title={t('发送消息')} aria-label={t('发送消息')} disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
     </Panel>
   )
 }
 
 function SessionActionsMenu({ session, tiled, streaming, switchingCwd, onToggleTiled, onWorkspace, onRename }) {
+  const { t, language } = useI18n()
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
 
@@ -1115,12 +1143,13 @@ function SessionActionsMenu({ session, tiled, streaming, switchingCwd, onToggleT
     action?.()
   }
 
-  return <div ref={rootRef} className="session-actions-menu-root"><button type="button" className="icon-button" title="会话操作" aria-label="打开会话操作菜单" aria-haspopup="menu" aria-expanded={open} disabled={!session} onClick={() => setOpen((visible) => !visible)}><MoreHorizontal size={17} /></button>{open && <div className="permission-mode-menu session-actions-menu" role="menu"><button type="button" role="menuitem" onClick={() => run(onToggleTiled)}><Grid2X2 size={15} /><span><strong>{tiled ? '移出平铺' : '加入平铺'}</strong><small>{tiled ? '保留历史记录，仅从平铺视图移除' : '在平铺模式中并行关注此会话'}</small></span>{tiled && <Check size={13} />}</button><button type="button" role="menuitem" disabled={streaming || switchingCwd} onClick={() => run(onWorkspace)}><FolderOpen size={15} /><span><strong>设置工作目录</strong><small>{streaming ? 'Agent 运行期间不能切换' : workspaceName(session?.cwd)}</small></span></button><button type="button" role="menuitem" onClick={() => run(onRename)}><Pencil size={15} /><span><strong>重命名会话</strong><small>{session?.name || '新会话'}</small></span></button></div>}</div>
+  return <div ref={rootRef} className="session-actions-menu-root"><button type="button" className="icon-button" title={t('会话操作')} aria-label={t('打开会话操作菜单')} aria-haspopup="menu" aria-expanded={open} disabled={!session} onClick={() => setOpen((visible) => !visible)}><MoreHorizontal size={17} /></button>{open && <div className="permission-mode-menu session-actions-menu" role="menu"><button type="button" role="menuitem" onClick={() => run(onToggleTiled)}><Grid2X2 size={15} /><span><strong>{t(tiled ? '移出平铺' : '加入平铺')}</strong><small>{t(tiled ? '保留历史记录，仅从平铺视图移除' : '在平铺模式中并行关注此会话')}</small></span>{tiled && <Check size={13} />}</button><button type="button" role="menuitem" disabled={streaming || switchingCwd} onClick={() => run(onWorkspace)}><FolderOpen size={15} /><span><strong>{t('设置工作目录')}</strong><small>{streaming ? t('Agent 运行期间不能切换') : workspaceName(session?.cwd, language)}</small></span></button><button type="button" role="menuitem" onClick={() => run(onRename)}><Pencil size={15} /><span><strong>{t('重命名会话')}</strong><small>{session?.name || t('新会话')}</small></span></button></div>}</div>
 }
 
 function QuickCreate({ type, close, notify }) {
-  const titles = { chat: '新建会话', assets: '导出资产', channels: '连接渠道', schedules: '新建定时任务', config: '添加 Provider', plugins: '保存插件策略', memory: '点亮星辰', mcp: '添加 MCP 服务', skills: '安装技能' }
-  return <div className="modal-backdrop" onMouseDown={close}><form className="modal" onMouseDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); notify(`${titles[type]}成功`); close() }}><div className="card-head"><div><h2>{titles[type]}</h2><p>填写基本信息后即可继续配置。</p></div><button type="button" className="icon-button" onClick={close}><X size={17} /></button></div><InputLabel label="名称" value="" placeholder="输入名称" /><InputLabel label="描述" value="" placeholder="补充简短描述" /><SelectLabel label="类型" options={['默认', '自定义', '从模板创建']} /><div className="modal-actions"><button type="button" className="button secondary" onClick={close}>取消</button><button className="button primary"><Plus size={14} />确认创建</button></div></form></div>
+  const { t } = useI18n()
+  const titles = { chat: t('新建会话'), assets: t('导出资产'), channels: t('连接渠道'), schedules: t('新建定时任务'), config: t('添加 Provider'), plugins: t('保存插件策略'), memory: t('点亮星辰'), mcp: t('添加 MCP 服务'), skills: t('安装技能') }
+  return <div className="modal-backdrop" onMouseDown={close}><form className="modal" onMouseDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); notify(t('{action}成功', { action: titles[type] })); close() }}><div className="card-head"><div><h2>{titles[type]}</h2><p>{t('填写基本信息后即可继续配置。')}</p></div><button type="button" className="icon-button" aria-label={t('关闭对话框')} onClick={close}><X size={17} /></button></div><InputLabel label={t('名称')} value="" placeholder={t('输入名称')} /><InputLabel label={t('描述')} value="" placeholder={t('补充简短描述')} /><SelectLabel label={t('类型')} options={[t('默认'), t('自定义'), t('从模板创建')]} /><div className="modal-actions"><button type="button" className="button secondary" onClick={close}>{t('取消')}</button><button className="button primary"><Plus size={14} />{t('确认创建')}</button></div></form></div>
 }
 
 function MarkdownMessage({ children }) {
@@ -1128,22 +1157,25 @@ function MarkdownMessage({ children }) {
 }
 
 function AttachmentTray({ attachments, onRemove, compact = false }) {
+  const { t } = useI18n()
   if (!attachments.length) return null
-  return <div className={`attachment-tray ${compact ? 'compact' : ''}`}>{attachments.map((attachment) => <div className="attachment-chip" key={attachment.id}>{attachment.kind === 'image' ? <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="" /> : <span className="attachment-icon"><File size={13} /></span>}<span><strong>{attachment.name}</strong><small>{attachment.kind === 'image' ? '图片' : attachment.kind === 'document' ? '文档' : '文本'} · {formatFileSize(attachment.size)}{attachment.truncated ? ' · 已截断' : ''}</small></span><button type="button" aria-label={`移除 ${attachment.name}`} onClick={() => onRemove(attachment.id)}><X size={12} /></button></div>)}</div>
+  return <div className={`attachment-tray ${compact ? 'compact' : ''}`}>{attachments.map((attachment) => <div className="attachment-chip" key={attachment.id}>{attachment.kind === 'image' ? <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="" /> : <span className="attachment-icon"><File size={13} /></span>}<span><strong>{attachment.name}</strong><small>{t(attachment.kind === 'image' ? '图片' : attachment.kind === 'document' ? '文档' : '文本')} · {formatFileSize(attachment.size)}{attachment.truncated ? ` · ${t('已截断')}` : ''}</small></span><button type="button" aria-label={t('移除 {name}', { name: attachment.name })} onClick={() => onRemove(attachment.id)}><X size={12} /></button></div>)}</div>
 }
 
 function MessageAttachments({ attachments, compact = false }) {
+  const { t } = useI18n()
   const [preview, setPreview] = useState(null)
   return <><div className={`message-attachments ${compact ? 'compact' : ''}`}>{attachments.map((attachment, index) => {
     const key = attachment.id || index
     const source = attachment.url || (attachment.data ? `data:${attachment.mimeType};base64,${attachment.data}` : '')
-    if (attachment.kind === 'image' && source) return <button type="button" className="generated-media" onClick={() => setPreview({ attachment, source })} title="点击大屏查看" key={key}><img src={source} alt={attachment.name || '图片附件'} /><small>{attachment.name || '生成图片'}</small></button>
-    if (attachment.kind === 'video' && source) return <div className="generated-media video" key={key}><video controls preload="metadata" src={source} /><small>{attachment.name || '生成视频'}</small></div>
-    return <a className="message-file-attachment" href={attachment.downloadUrl || undefined} key={key}><File size={12} />{attachment.name || '文件附件'}</a>
+    if (attachment.kind === 'image' && source) return <button type="button" className="generated-media" onClick={() => setPreview({ attachment, source })} title={t('点击大屏查看')} key={key}><img src={source} alt={attachment.name || t('图片附件')} /><small>{attachment.name || t('生成图片')}</small></button>
+    if (attachment.kind === 'video' && source) return <div className="generated-media video" key={key}><video controls preload="metadata" src={source} /><small>{attachment.name || t('生成视频')}</small></div>
+    return <a className="message-file-attachment" href={attachment.downloadUrl || undefined} key={key}><File size={12} />{attachment.name || t('文件附件')}</a>
   })}</div>{preview && <ImageLightbox attachment={preview.attachment} source={preview.source} onClose={() => setPreview(null)} />}</>
 }
 
 function ImageLightbox({ attachment, source, onClose }) {
+  const { t } = useI18n()
   useEffect(() => {
     const previousOverflow = document.body.style.overflow
     const onKeyDown = (event) => { if (event.key === 'Escape') onClose() }
@@ -1154,9 +1186,9 @@ function ImageLightbox({ attachment, source, onClose }) {
       window.removeEventListener('keydown', onKeyDown)
     }
   }, [onClose])
-  return <div className="image-lightbox" role="dialog" aria-modal="true" aria-label="图片大屏预览" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="image-lightbox-toolbar"><span title={attachment.name}>{attachment.name || '生成图片'}</span><div><a className="button secondary" href={attachment.downloadUrl || source} download={attachment.name || 'generated-image'}><Download size={14} />下载原图</a><button type="button" className="icon-button" aria-label="关闭预览" onClick={onClose}><X size={18} /></button></div></div><img src={source} alt={attachment.name || '生成图片'} /></div>
+  return <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={t('图片大屏预览')} onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="image-lightbox-toolbar"><span title={attachment.name}>{attachment.name || t('生成图片')}</span><div><a className="button secondary" href={attachment.downloadUrl || source} download={attachment.name || 'generated-image'}><Download size={14} />{t('下载原图')}</a><button type="button" className="icon-button" aria-label={t('关闭预览')} onClick={onClose}><X size={18} /></button></div></div><img src={source} alt={attachment.name || t('生成图片')} /></div>
 }
 
-function TiledEmptyState({ hasQuery }) { return <Panel className="empty-state"><StarOrbit size={48} /><h2>{hasQuery ? '没有匹配的平铺会话' : '尚未选择平铺会话'}</h2><p>{hasQuery ? '更换搜索关键词，或从历史会话中加入其他会话。' : '点击历史会话右侧的平铺图标，把需要并行关注的会话加入这里。'}</p></Panel> }
+function TiledEmptyState({ hasQuery }) { const { t } = useI18n(); return <Panel className="empty-state"><StarOrbit size={48} /><h2>{t(hasQuery ? '没有匹配的平铺会话' : '尚未选择平铺会话')}</h2><p>{t(hasQuery ? '更换搜索关键词，或从历史会话中加入其他会话。' : '点击历史会话右侧的平铺图标，把需要并行关注的会话加入这里。')}</p></Panel> }
 
 export default App

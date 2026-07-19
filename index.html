@@ -8,8 +8,10 @@
     <script>
       try {
         const stored = localStorage.getItem('vesper-theme')
+        const storedLanguage = localStorage.getItem('vesper-language')
         const dark = stored === 'dark' || (stored !== 'light' && window.matchMedia('(prefers-color-scheme: dark)').matches)
         document.documentElement.dataset.theme = dark ? 'dark' : 'light'
+        document.documentElement.lang = storedLanguage === 'en-US' ? 'en-US' : 'zh-CN'
       } catch {}
     </script>
   </head>

@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useI18n } from '../app/i18n.jsx'
 
 export function useAppDialog() {
+  const { t } = useI18n()
   const [dialog, setDialog] = useState(null)
   const resolver = useRef(null)
 
@@ -16,8 +18,8 @@ export function useAppDialog() {
     setDialog(next)
   }), [])
 
-  const confirm = useCallback((options) => open({ type: 'confirm', title: '确认操作', confirmLabel: '确认', tone: 'danger', ...options }), [open])
-  const prompt = useCallback((options) => open({ type: 'prompt', title: '输入内容', confirmLabel: '保存', tone: 'primary', value: '', ...options }), [open])
+  const confirm = useCallback((options) => open({ type: 'confirm', title: t('确认操作'), confirmLabel: t('确认'), tone: 'danger', ...options }), [open, t])
+  const prompt = useCallback((options) => open({ type: 'prompt', title: t('输入内容'), confirmLabel: t('保存'), tone: 'primary', value: '', ...options }), [open, t])
   const close = useCallback(() => finish(null), [finish])
 
   useEffect(() => () => resolver.current?.(null), [])

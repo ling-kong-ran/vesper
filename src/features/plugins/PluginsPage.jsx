@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, CircleDot, Eye, FileCode2, FolderOpen, Image, Pencil, Plug, RefreshCw, Save, Search, Server, ShieldCheck } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Segmented, Toggle } from '../../components/ui.jsx'
+import { useI18n } from '../../app/i18n.jsx'
 import { apiJson } from '../../lib/api.js'
 import { relativeTime } from '../../lib/format.js'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
@@ -27,6 +28,7 @@ function pluginStatus(tools) {
 }
 
 export function PluginsPage({ query, notify, registerPrimaryAction, onStatusChange }) {
+  const { t, language } = useI18n()
   const [data, setData] = useState(null)
   const [draft, setDraft] = useState([])
   const [selectedId, setSelectedId] = useState('read')
@@ -46,7 +48,7 @@ export function PluginsPage({ query, notify, registerPrimaryAction, onStatusChan
   const dirty = Boolean(data) && draft.some((tool) => tool.enabled !== data.tools.find((item) => item.id === tool.id)?.enabled)
   const save = useCallback(async () => {
     if (!data || !dirty) {
-      if (data) notify('插件策略没有变化')
+      if (data) notify(t('插件策略没有变化'))
       return
     }
     setSaving(true)
@@ -59,17 +61,17 @@ export function PluginsPage({ query, notify, registerPrimaryAction, onStatusChan
       setData(updated)
       setDraft(updated.tools)
       onStatusChange(pluginStatus(updated.tools))
-      notify('插件策略已保存，Agent 运行时已更新')
+      notify(t('插件策略已保存，Agent 运行时已更新'))
     } catch (caught) {
       setError(caught.message)
     } finally {
       setSaving(false)
     }
-  }, [data, dirty, draft, notify, onStatusChange])
+  }, [data, dirty, draft, notify, onStatusChange, t])
 
   usePagePrimaryAction(registerPrimaryAction, save)
 
-  if (!data) return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>正在加载工具插件</h2><p>读取 Agent 当前注册工具与权限…</p>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}</Panel>
+  if (!data) return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在加载工具插件')}</h2><p>{t('读取 Agent 当前注册工具与权限…')}</p>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}</Panel>
 
   const selected = draft.find((tool) => tool.id === selectedId) || draft[0]
   const filtered = draft.filter((tool) => {
@@ -86,9 +88,9 @@ export function PluginsPage({ query, notify, registerPrimaryAction, onStatusChan
 
   return (
     <div className="plugins-page">
-      <div className="plugin-toolbar"><Segmented options={FILTERS} value={tab} onChange={setTab} /><div className="plugin-presets"><span>预设</span><button className={data.preset === 'read-only' && !dirty ? 'active' : ''} onClick={() => applyPreset('read-only')}>只读</button><button className={data.preset === 'workspace' && !dirty ? 'active' : ''} onClick={() => applyPreset('workspace')}>工作区</button><button className={data.preset === 'full' && !dirty ? 'active' : ''} onClick={() => applyPreset('full')}>完整</button></div></div>
-      <div className="two-one-grid plugin-layout"><Panel><div className="card-head"><SectionTitle title={`工具插件 · ${draft.filter((tool) => tool.enabled).length}/${draft.length}`} />{dirty && <Badge tone="amber">未保存</Badge>}</div>{filtered.length ? filtered.map((tool) => { const Icon = TOOL_ICONS[tool.id] || Plug; return <div className={`plugin-row ${selectedId === tool.id ? 'selected' : ''}`} key={tool.id}><button className="plugin-select" onClick={() => setSelectedId(tool.id)}><span className="list-icon"><Icon size={15} /></span><span><strong>{tool.name} <Badge tone={tool.risk === '高风险' ? 'red' : 'green'}>{tool.risk}</Badge></strong><small>{tool.description}</small></span></button><em>{tool.enabled ? '启用' : '禁用'}</em><Toggle value={tool.enabled} onChange={(enabled) => setDraft((current) => current.map((item) => item.id === tool.id ? { ...item, enabled } : item))} /></div> }) : <div className="plugin-empty">没有匹配的工具</div>}</Panel><div className="detail-stack"><Panel><div className="card-head"><SectionTitle title={`${selected.name} 插件策略`} /><Badge tone={selected.enabled ? 'green' : 'gray'}>{selected.enabled ? '已启用' : '已禁用'}</Badge></div><p className="muted-copy">{selected.description}</p>{[['工具 ID', selected.id], ['来源', selected.source === 'app' ? 'Pi Coder 应用工具' : 'Pi 内置工具'], ['分类', selected.category], ['风险等级', selected.risk], ['路径范围', selected.scope], ['能力', selected.capability], ['生效时间', '保存后下一次 Agent 请求']].map((row) => <div className="key-value" key={row[0]}><span>{row[0]}</span><strong className={row[1] === '高风险' ? 'danger' : ''}>{row[1]}</strong></div>)}<button className={`button wide ${selected.enabled ? 'danger' : 'primary'}`} onClick={() => setDraft((current) => current.map((item) => item.id === selected.id ? { ...item, enabled: !item.enabled } : item))}>{selected.enabled ? '禁用此工具' : '启用此工具'}</button></Panel><Panel><SectionTitle title="最近变更" />{data.changes.length ? data.changes.slice(0, 6).map((change, index) => <div className="activity-row" key={`${change.timestamp}-${change.tool}-${index}`}><CircleDot size={14} /><span><strong>{change.enabled ? '启用' : '禁用'} {change.name}</strong><small>{relativeTime(change.timestamp)}</small></span></div>) : <div className="plugin-empty compact">尚无权限变更记录</div>}</Panel><div className={`security-summary ${enabledHighRisk.length ? 'warning' : ''}`}><ShieldCheck size={18} /><div><strong>安全摘要</strong><p>{enabledHighRisk.length ? `${enabledHighRisk.length} 个高风险工具已启用：${enabledHighRisk.map((tool) => tool.name).join('、')}。所有路径均绑定当前会话工作目录。` : '当前没有启用高风险工具，Agent 仅拥有读取和搜索能力。'}</p></div></div></div></div>
-      <button className="floating-save" disabled={!dirty || saving} onClick={save}>{saving ? <RefreshCw className="spin" size={15} /> : <Save size={15} />}{saving ? '保存中…' : dirty ? '保存策略' : '策略已保存'}</button>
+      <div className="plugin-toolbar"><Segmented options={FILTERS.map(t)} value={t(tab)} onChange={(label) => setTab(FILTERS.find((source) => t(source) === label) || '全部')} /><div className="plugin-presets"><span>{t('预设')}</span><button className={data.preset === 'read-only' && !dirty ? 'active' : ''} onClick={() => applyPreset('read-only')}>{t('只读')}</button><button className={data.preset === 'workspace' && !dirty ? 'active' : ''} onClick={() => applyPreset('workspace')}>{t('工作区')}</button><button className={data.preset === 'full' && !dirty ? 'active' : ''} onClick={() => applyPreset('full')}>{t('完整')}</button></div></div>
+      <div className="two-one-grid plugin-layout"><Panel><div className="card-head"><SectionTitle title={`${t('工具插件')} · ${draft.filter((tool) => tool.enabled).length}/${draft.length}`} />{dirty && <Badge tone="amber">{t('未保存')}</Badge>}</div>{filtered.length ? filtered.map((tool) => { const Icon = TOOL_ICONS[tool.id] || Plug; return <div className={`plugin-row ${selectedId === tool.id ? 'selected' : ''}`} key={tool.id}><button className="plugin-select" onClick={() => setSelectedId(tool.id)}><span className="list-icon"><Icon size={15} /></span><span><strong>{tool.name} <Badge tone={tool.risk === '高风险' ? 'red' : 'green'}>{t(tool.risk)}</Badge></strong><small>{t(tool.description)}</small></span></button><em>{t(tool.enabled ? '启用' : '禁用')}</em><Toggle value={tool.enabled} onChange={(enabled) => setDraft((current) => current.map((item) => item.id === tool.id ? { ...item, enabled } : item))} /></div> }) : <div className="plugin-empty">{t('没有匹配的工具')}</div>}</Panel><div className="detail-stack"><Panel><div className="card-head"><SectionTitle title={t('{name} 插件策略', { name: selected.name })} /><Badge tone={selected.enabled ? 'green' : 'gray'}>{t(selected.enabled ? '已启用' : '已禁用')}</Badge></div><p className="muted-copy">{t(selected.description)}</p>{[[t('工具 ID'), selected.id], [t('来源'), t(selected.source === 'app' ? 'Pi Coder 应用工具' : 'Pi 内置工具')], [t('分类'), t(selected.category)], [t('风险等级'), t(selected.risk)], [t('路径范围'), t(selected.scope)], [t('能力'), t(selected.capability)], [t('生效时间'), t('保存后下一次 Agent 请求')]].map((row) => <div className="key-value" key={row[0]}><span>{row[0]}</span><strong className={row[1] === t('高风险') ? 'danger' : ''}>{row[1]}</strong></div>)}<button className={`button wide ${selected.enabled ? 'danger' : 'primary'}`} onClick={() => setDraft((current) => current.map((item) => item.id === selected.id ? { ...item, enabled: !item.enabled } : item))}>{t(selected.enabled ? '禁用此工具' : '启用此工具')}</button></Panel><Panel><SectionTitle title={t('最近变更')} />{data.changes.length ? data.changes.slice(0, 6).map((change, index) => <div className="activity-row" key={`${change.timestamp}-${change.tool}-${index}`}><CircleDot size={14} /><span><strong>{t(change.enabled ? '启用' : '禁用')} {change.name}</strong><small>{relativeTime(change.timestamp, language)}</small></span></div>) : <div className="plugin-empty compact">{t('尚无权限变更记录')}</div>}</Panel><div className={`security-summary ${enabledHighRisk.length ? 'warning' : ''}`}><ShieldCheck size={18} /><div><strong>{t('安全摘要')}</strong><p>{enabledHighRisk.length ? t('{count} 个高风险工具已启用：{tools}。所有路径均绑定当前会话工作目录。', { count: enabledHighRisk.length, tools: enabledHighRisk.map((tool) => tool.name).join(language === 'en-US' ? ', ' : '、') }) : t('当前没有启用高风险工具，Agent 仅拥有读取和搜索能力。')}</p></div></div></div></div>
+      <button className="floating-save" disabled={!dirty || saving} onClick={save}>{saving ? <RefreshCw className="spin" size={15} /> : <Save size={15} />}{t(saving ? '保存中…' : dirty ? '保存策略' : '策略已保存')}</button>
       {error && <div className="config-error floating-error"><AlertTriangle size={13} />{error}</div>}
     </div>
   )

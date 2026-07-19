@@ -35,3 +35,16 @@ export const PAGE_META = {
   workflows: ['工作流', '预设流程、自定义编排与多工作流并行运行'],
   workflowCreate: ['新建工作流', '拖拽节点到画布，自定义 agent 执行流程'],
 }
+
+export const PAGE_IDS = new Set(Object.keys(PAGE_META))
+
+export function getNavigation(t = (value) => value) {
+  return NAV_GROUPS.map(([group, items]) => [
+    t(group),
+    items.map(([id, label, Icon]) => [id, t(label), Icon]),
+  ])
+}
+
+export function getPageMeta(t = (value) => value) {
+  return Object.fromEntries(Object.entries(PAGE_META).map(([id, [title, description]]) => [id, [t(title), t(description)]]))
+}
