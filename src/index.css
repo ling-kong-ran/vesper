@@ -8,50 +8,50 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
 
-  /* ── 品牌：暮星金（唯一强调色） ── */
-  --star: #f59e0b;
-  --star-hover: #d97706;
-  --star-strong: #b45309;
-  --star-soft: #fef3e2;
-  --star-border: #fcd34d;
-  --on-accent: #17141f;
+  /* ── 品牌强调色：克制蓝 ── */
+  --star: #2563eb;
+  --star-hover: #1d4ed8;
+  --star-strong: #1e40af;
+  --star-soft: #eff6ff;
+  --star-border: #bfdbfe;
+  --on-accent: #fff;
 
-  /* ── 别名映射：存量 var(--blue) / var(--accent-*) 引用自动换金 ── */
+  /* ── 别名映射：统一存量强调色引用 ── */
   --blue: var(--star);
   --blue-2: var(--star-hover);
   --blue-soft: var(--star-soft);
   --accent-soft: var(--star-soft);
   --accent-strong: var(--star-strong);
   --accent-border: var(--star-border);
-  --accent-ring: rgba(245, 158, 11, .14);
+  --accent-ring: rgba(37, 99, 235, .14);
   --focus: var(--star);
-  --focus-ring: rgba(245, 158, 11, .16);
+  --focus-ring: rgba(37, 99, 235, .16);
   --status-blue: var(--star);
-  --selection-ring: rgba(245, 158, 11, .1);
-  --node-active-ring: rgba(245, 158, 11, .18);
+  --selection-ring: rgba(37, 99, 235, .1);
+  --node-active-ring: rgba(37, 99, 235, .18);
 
-  /* ── 中性色：暖调纸墨 ── */
-  --bg: #f7f6f3;
-  --panel: rgba(255, 255, 255, .78);
+  /* ── 中性色：纯白与冷灰 ── */
+  --bg: #fff;
+  --panel: #fff;
   --solid: #fff;
-  --stroke: #e7e4de;
-  --stroke-soft: #efede8;
-  --stroke-hover: #c9c3b8;
-  --text: #17141f;
-  --text-soft: #3a3644;
-  --text-secondary: #565160;
-  --text-tertiary: #6e6875;
-  --muted: #7a746c;
-  --ink-strong: #17141f;
-  --on-ink: #f4f2ec;
-  --surface-subtle: #f4f2ee;
-  --surface-muted: #ece9e3;
-  --surface-hover: #f0eee9;
-  --surface-highlight: rgba(255, 255, 255, .8);
-  --control-muted: #c9c4ba;
+  --stroke: #e5e7eb;
+  --stroke-soft: #f0f1f3;
+  --stroke-hover: #cbd5e1;
+  --text: #111827;
+  --text-soft: #374151;
+  --text-secondary: #4b5563;
+  --text-tertiary: #6b7280;
+  --muted: #6b7280;
+  --ink-strong: #111827;
+  --on-ink: #fff;
+  --surface-subtle: #f8fafc;
+  --surface-muted: #f3f4f6;
+  --surface-hover: #f3f4f6;
+  --surface-highlight: #f8fafc;
+  --control-muted: #cbd5e1;
   --control-thumb: #fff;
 
-  /* ── 语义色（warning 改橙，与品牌金区分） ── */
+  /* ── 语义色：warning 独立使用橙色 ── */
   --success: #16a34a;
   --success-soft: #f0fdf4;
   --success-strong: #15803d;
@@ -67,12 +67,12 @@
   --warning-subtle: #fff7ed;
   --warning-code-bg: #451a03;
   --status-green: #22c55e;
-  --status-muted: #9b948a;
+  --status-muted: #9ca3af;
 
   /* ── 用户气泡：墨底纸白字（暗色反转） ── */
-  --user-bubble-bg: #17141f;
-  --user-bubble-text: #f4f2ec;
-  --user-bubble-code: rgba(244, 242, 236, .16);
+  --user-bubble-bg: #111827;
+  --user-bubble-text: #fff;
+  --user-bubble-code: rgba(255, 255, 255, .16);
 
   /* ── 圆角 / 阴影 / 动效 ── */
   --r-xs: 6px;
@@ -80,9 +80,9 @@
   --r-md: 13px;
   --r-lg: 18px;
   --r-pill: 999px;
-  --sh-1: 0 1px 2px rgba(23, 20, 31, .05);
-  --sh-2: 0 10px 28px -16px rgba(23, 20, 31, .25);
-  --sh-star: 0 6px 20px -8px rgba(245, 158, 11, .55);
+  --sh-1: 0 1px 2px rgba(15, 23, 42, .05);
+  --sh-2: 0 10px 28px -16px rgba(15, 23, 42, .18);
+  --sh-star: 0 6px 20px -8px rgba(37, 99, 235, .4);
   --ease-out: cubic-bezier(.22, 1, .36, 1);
   --ease-spring: cubic-bezier(.34, 1.35, .44, 1);
   --d1: 140ms;
@@ -90,17 +90,17 @@
   --d3: 360ms;
 
   /* ── 表面与场景 ── */
-  --sidebar-bg: rgba(252, 251, 248, .8);
-  --sidebar-status-bg: rgba(255, 255, 255, .7);
-  --sidebar-shadow: rgba(23, 20, 31, .14);
-  --sidebar: #17141f;
-  --main-surface-bg: rgba(252, 251, 248, .6);
-  --main-surface-inset: rgba(255, 255, 255, .8);
-  --main-surface-shadow: rgba(23, 20, 31, .18);
-  --main-glow-start: rgba(245, 158, 11, .05);
-  --main-glow-end: rgba(247, 246, 243, 0);
-  --search-bg: rgba(255, 255, 255, .78);
-  --menu-shadow: rgba(23, 20, 31, .42);
+  --sidebar-bg: #fff;
+  --sidebar-status-bg: #fff;
+  --sidebar-shadow: rgba(15, 23, 42, .08);
+  --sidebar: #111827;
+  --main-surface-bg: #fff;
+  --main-surface-inset: #fff;
+  --main-surface-shadow: rgba(15, 23, 42, .08);
+  --main-glow-start: rgba(255, 255, 255, 0);
+  --main-glow-end: rgba(255, 255, 255, 0);
+  --search-bg: #fff;
+  --menu-shadow: rgba(15, 23, 42, .3);
   --media-bg: #0c0a11;
   --code-border: #332e3d;
   --lightbox-bg: rgba(12, 10, 17, .94);
@@ -115,24 +115,24 @@
   --template-code-bg: var(--star-soft);
   --template-code-text: var(--star-strong);
   --subnav-bg: rgba(255, 255, 255, .72);
-  --progress-track: #eae7e1;
-  --floating-shadow: rgba(23, 20, 31, .45);
-  --canvas-bg: rgba(248, 247, 244, .9);
-  --canvas-grid: #ece9e3;
-  --canvas-edge: #b4aea2;
-  --node-shadow: #17141f;
+  --progress-track: #e5e7eb;
+  --floating-shadow: rgba(15, 23, 42, .35);
+  --canvas-bg: #fff;
+  --canvas-grid: #e5e7eb;
+  --canvas-edge: #94a3b8;
+  --node-shadow: #111827;
   --violet-border: #c9c4d9;
   --violet-soft: #f2f0f6;
   --violet-strong: #6e6899;
   --workflow-violet: #8378b0;
   --approval-border: #a7f3d0;
-  --notification-border: #d8d3c9;
-  --notification-soft: #f4f2ec;
-  --modal-overlay: rgba(23, 20, 31, .36);
-  --nav-scrim: rgba(23, 20, 31, .3);
+  --notification-border: #d1d5db;
+  --notification-soft: #f8fafc;
+  --modal-overlay: rgba(15, 23, 42, .36);
+  --nav-scrim: rgba(15, 23, 42, .3);
   --code-text: #ede9e2;
-  --code-inline-bg: rgba(23, 20, 31, .07);
-  --code-toolbar-bg: rgba(23, 20, 31, .72);
+  --code-inline-bg: rgba(15, 23, 42, .07);
+  --code-toolbar-bg: rgba(15, 23, 42, .76);
   --code-toolbar-border: #332e3d;
   --code-toolbar-text: #c7c1b8;
   --code-keyword: #c084fc;
@@ -140,20 +140,20 @@
   --code-title: #7dd3fc;
   --code-number: #fbbf24;
   --code-comment: #94a3b8;
-  --shadow: rgba(23, 20, 31, .28);
-  --shadow-strong: rgba(23, 20, 31, .5);
+  --shadow: rgba(15, 23, 42, .24);
+  --shadow-strong: rgba(15, 23, 42, .46);
 }
 
 :root[data-theme='dark'] {
     color-scheme: dark;
 
-    /* ── 品牌：暗色星金提亮 ── */
-    --star: #fbbf24;
-    --star-hover: #fcd34d;
-    --star-strong: #fcd34d;
-    --star-soft: rgba(251, 191, 36, .12);
-    --star-border: rgba(251, 191, 36, .4);
-    --on-accent: #17141f;
+    /* ── 品牌强调色：暗色主题蓝 ── */
+    --star: #3b82f6;
+    --star-hover: #2563eb;
+    --star-strong: #60a5fa;
+    --star-soft: rgba(59, 130, 246, .14);
+    --star-border: rgba(96, 165, 250, .42);
+    --on-accent: #fff;
 
     --blue: var(--star);
     --blue-2: var(--star-hover);
@@ -161,12 +161,12 @@
     --accent-soft: var(--star-soft);
     --accent-strong: var(--star-strong);
     --accent-border: var(--star-border);
-    --accent-ring: rgba(251, 191, 36, .2);
+    --accent-ring: rgba(59, 130, 246, .22);
     --focus: var(--star);
-    --focus-ring: rgba(251, 191, 36, .22);
+    --focus-ring: rgba(59, 130, 246, .24);
     --status-blue: var(--star);
-    --selection-ring: rgba(251, 191, 36, .18);
-    --node-active-ring: rgba(251, 191, 36, .22);
+    --selection-ring: rgba(59, 130, 246, .2);
+    --node-active-ring: rgba(59, 130, 246, .24);
 
     /* ── 中性色：暖墨黑 ── */
     --bg: #121017;
@@ -212,7 +212,7 @@
     --user-bubble-text: #17141f;
     --user-bubble-code: rgba(23, 20, 31, .08);
 
-    --sh-star: 0 6px 20px -8px rgba(251, 191, 36, .45);
+    --sh-star: 0 6px 20px -8px rgba(59, 130, 246, .45);
 
     /* ── 表面与场景 ── */
     --sidebar-bg: rgba(18, 16, 23, .88);
@@ -222,14 +222,14 @@
     --main-surface-bg: rgba(21, 18, 27, .76);
     --main-surface-inset: rgba(255, 255, 255, .1);
     --main-surface-shadow: rgba(0, 0, 0, .45);
-    --main-glow-start: rgba(251, 191, 36, .05);
+    --main-glow-start: rgba(59, 130, 246, .045);
     --main-glow-end: rgba(18, 16, 23, 0);
     --search-bg: rgba(18, 16, 23, .76);
     --menu-shadow: rgba(0, 0, 0, .65);
     --media-bg: #08070b;
     --code-border: #332e3d;
-    --asset-preview-blue-bg: rgba(251, 191, 36, .12);
-    --asset-preview-blue-text: #fcd34d;
+    --asset-preview-blue-bg: rgba(59, 130, 246, .14);
+    --asset-preview-blue-text: #60a5fa;
     --asset-preview-violet-bg: #221e2c;
     --subnav-bg: rgba(18, 16, 23, .76);
     --progress-track: #2a2634;
@@ -780,11 +780,11 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 [data-theme='dark'] .flow-node.type-审批 { background: var(--success-subtle); }
 [data-theme='dark'] .flow-node.type-通知 { background: var(--notification-soft); }
 /* 暗色微星点：极淡星点纹理，营造「夜空感」（透明度 ≤ .06） */
-[data-theme='dark'] .main-surface { background-image: radial-gradient(rgba(244, 242, 236, .05) 1px, transparent 1.3px), radial-gradient(rgba(251, 191, 36, .045) 1px, transparent 1.3px); background-size: 26px 26px, 41px 41px; background-position: 0 0, 13px 20px; }
+[data-theme='dark'] .main-surface { background-image: radial-gradient(rgba(255, 255, 255, .05) 1px, transparent 1.3px), radial-gradient(rgba(59, 130, 246, .045) 1px, transparent 1.3px); background-size: 26px 26px, 41px 41px; background-position: 0 0, 13px 20px; }
 /* 记忆页星座图：暗色叠加微星点背景 */
-[data-theme='dark'] .graph-panel { background-image: radial-gradient(rgba(244, 242, 236, .07) 1px, transparent 1.3px), radial-gradient(rgba(251, 191, 36, .06) 1px, transparent 1.3px); background-size: 22px 22px, 37px 37px; background-position: 0 0, 9px 14px; }
+[data-theme='dark'] .graph-panel { background-image: radial-gradient(rgba(255, 255, 255, .07) 1px, transparent 1.3px), radial-gradient(rgba(59, 130, 246, .06) 1px, transparent 1.3px); background-size: 22px 22px, 37px 37px; background-position: 0 0, 9px 14px; }
 /* 金星脉冲环（激活图谱节点 / 工作流节点） */
-@keyframes star-node-pulse { 0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, .4), 0 6px 16px -10px var(--shadow); } 70% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0), 0 6px 16px -10px var(--shadow); } 100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0), 0 6px 16px -10px var(--shadow); } }
+@keyframes star-node-pulse { 0% { box-shadow: 0 0 0 0 rgba(37, 99, 235, .4), 0 6px 16px -10px var(--shadow); } 70% { box-shadow: 0 0 0 10px rgba(37, 99, 235, 0), 0 6px 16px -10px var(--shadow); } 100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0), 0 6px 16px -10px var(--shadow); } }
 @keyframes toast-in { from { opacity: 0; transform: translateY(8px); } }
 @keyframes pulse-dot { 50% { opacity: .35; transform: translateY(-1px); } }
 .spin { animation: spin .8s linear infinite; }
