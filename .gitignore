@@ -13,6 +13,7 @@ dist-ssr
 generated/
 .vesper/
 *.local
+/nul
 
 # Editor directories and files
 .vscode/*

@@ -33,8 +33,33 @@ test('main and child Agent runtimes receive filtered Pi skills while MCP definit
   assert.ok(value.session.resourceLoader.getSkills().skills.some((skill) => skill.name === 'runtime-skill'))
   assert.ok(value.session.agent.state.systemPrompt.includes('runtime-skill'))
   assert.ok(value.session.getActiveToolNames().includes('mcp_fixture_echo_12345678'))
+  assert.ok(value.session.hasExtensionHandlers('tool_result'))
+  assert.ok(value.session.hasExtensionHandlers('message_end'))
 
   const childLoader = await runtime.subagents.createResourceLoader({ cwd: directory, rolePrompt: 'CHILD ROLE PROMPT' })
   assert.ok(childLoader.getSkills().skills.some((skill) => skill.name === 'runtime-skill'))
   assert.ok(childLoader.getAppendSystemPrompt().includes('CHILD ROLE PROMPT'))
+})
+
+test('resource changes keep the currently streaming session alive', async () => {
+  const runtime = new AgentRuntimeService({ cwd: process.cwd(), dataDir: process.cwd() })
+  let streamingDisposed = 0
+  let idleDisposed = 0
+  runtime.sessions.set('streaming', {
+    runtimeVersion: 0,
+    session: { isStreaming: true, dispose: () => { streamingDisposed += 1 } },
+  })
+  runtime.sessions.set('idle', {
+    runtimeVersion: 0,
+    session: { isStreaming: false, dispose: () => { idleDisposed += 1 } },
+  })
+  runtime.mcp.add = async () => ({ services: [] })
+
+  await runtime.createMcpServer({ name: 'fixture' })
+
+  assert.equal(runtime.sessionRuntimeVersion, 1)
+  assert.equal(streamingDisposed, 0)
+  assert.equal(idleDisposed, 1)
+  assert.equal(runtime.sessions.has('streaming'), true)
+  assert.equal(runtime.sessions.has('idle'), false)
 })

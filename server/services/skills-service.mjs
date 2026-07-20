@@ -149,13 +149,14 @@ function safeSourceLabel(value) {
 }
 
 export class SkillsService {
-  constructor({ path, agentDir, cwd, getSettingsManager, createPackageManager } = {}) {
+  constructor({ path, agentDir, cwd, getSettingsManager, createPackageManager, extensionFactories = [] } = {}) {
     this.path = path
     this.agentDir = agentDir
     this.cwd = cwd || process.cwd()
     this.skillsDir = join(agentDir, 'skills')
     this.getSettingsManager = getSettingsManager || (() => null)
     this.createPackageManager = createPackageManager || ((options) => new DefaultPackageManager(options))
+    this.extensionFactories = extensionFactories
     this.state = { version: SKILLS_STATE_VERSION, overrides: {}, installed: {} }
     this.write = Promise.resolve()
   }
@@ -195,6 +196,7 @@ export class SkillsService {
       cwd,
       agentDir: this.agentDir,
       ...(settingsManager ? { settingsManager } : {}),
+      ...(this.extensionFactories.length ? { extensionFactories: this.extensionFactories } : {}),
       skillsOverride: (current) => this.applySkillOverrides(current, { includeDisabled }),
       ...(appendSystemPrompt
         ? { appendSystemPromptOverride: (base) => [...base, appendSystemPrompt] }

@@ -156,15 +156,39 @@ export function McpPage({ notify, query = '', registerPrimaryAction, requestText
     }
   }
 
+  const deleteServer = async () => {
+    if (!selected) return
+    const approved = await requestConfirm?.({
+      title: t('删除 MCP 服务'),
+      message: t('删除后，该服务提供的工具会从后续 Agent 运行中移除。'),
+      confirmLabel: t('删除'),
+      tone: 'danger',
+    })
+    if (approved === false) return
+    setBusy(true)
+    setError('')
+    try {
+      await apiJson(`/api/mcp/${encodeURIComponent(selected.id)}`, { method: 'DELETE' })
+      const result = await load(false)
+      setSelectedId(result?.services[0]?.id || '')
+      notify(t('MCP 服务已删除'), 'success')
+    } catch (caught) {
+      setError(caught.message)
+      notify(caught.message, 'error')
+    } finally {
+      setBusy(false)
+    }
+  }
+
   return <div className="preview-page">
     <div className="mcp-layout">
-      <Panel className="selection-list"><SectionTitle title={t('服务')} />{visibleServices.map((service) => { const [label, tone] = mcpStatusMeta(service.status); return <button className={`service-row ${selected?.id === service.id ? 'active' : ''}`} onClick={() => setSelectedId(service.id)} key={service.id}><span className="list-icon"><Server size={15} /></span><span><strong>{service.name}</strong><small>{service.endpoint}</small></span><Badge tone={tone}>{t(label)}</Badge></button> })}</Panel>
+      <Panel className="selection-list"><SectionTitle title={t('服务')} />{visibleServices.map((service) => { const [label, tone] = mcpStatusMeta(service.status); const location = service.transport === 'stdio' ? service.workingDirectory || service.command : service.endpoint; return <button className={`service-row ${selected?.id === service.id ? 'active' : ''}`} onClick={() => setSelectedId(service.id)} key={service.id}><span className="list-icon"><Server size={15} /></span><span><strong>{service.name}</strong><small title={location}>{location}</small></span><Badge tone={tone}>{t(label)}</Badge></button> })}</Panel>
       <div className="mcp-center">
         <div className="metric-grid"><Metric value={String(metrics.onlineServices)} label={t('在线服务')} note={t('共 {count} 个服务', { count: metrics.totalServices })} tone="blue" /><Metric value={String(metrics.availableTools)} label={t('可用工具')} note={t('{count} 个受限工具', { count: metrics.restrictedTools })} tone="green" /><Metric value={`${metrics.errorRate}%`} label={t('错误率')} note="24h" tone="amber" /></div>
         <Panel><SectionTitle title={t('工具能力')} />{tools.map((tool) => <div className="tool-row" key={tool.piName}><span className="list-icon"><Wrench size={15} /></span><span><strong>{tool.name}</strong><small>{tool.serviceName} · {tool.description}</small></span><Badge tone={tool.risk === '高风险' ? 'red' : tool.risk === '中风险' ? 'amber' : 'green'}>{t(tool.risk)}</Badge><Toggle value={tool.enabled} disabled={busy || !tool.serviceEnabled} ariaLabel={t('切换工具 {name}', { name: tool.name })} onChange={(enabled) => void toggleTool(tool, enabled)} /></div>)}</Panel>
       </div>
       <div className="detail-stack">
-        <Panel><SectionTitle title={t('当前服务')} /><h2>{selected?.name || t('尚未配置服务')}</h2><p className="muted-copy">{selected?.error || (selected ? t('该服务已通过标准 MCP transport 暴露工具，启用的工具会在新 Agent Runtime 中注册。') : t('使用右上角按钮添加 Streamable HTTP 或 stdio MCP 服务。'))}</p>{[[t('Transport'), selected?.transport === 'stdio' ? 'stdio' : selected?.transport === 'sse' ? 'HTTP + SSE' : 'Streamable HTTP'], [t('Latency'), selected?.latencyMs == null ? '—' : `${selected.latencyMs} ms`], [t('Last Ping'), selected?.lastPingAt ? relativeTime(selected.lastPingAt, language) : '—'], [t('Auth'), mcpAuthLabel(selected, t)]].map((row) => <div className="key-value" key={row[0]}><span>{row[0]}</span><strong>{row[1]}</strong></div>)}<div className="toggle-line"><span>{t('服务启用')}</span><Toggle value={Boolean(selected?.enabled)} disabled={!selected || busy} ariaLabel={t('切换 MCP 服务')} onChange={(enabled) => void toggleServer(enabled)} /></div><button className="button secondary wide" disabled={!selected?.enabled || busy} onClick={testConnection}><RefreshCw className={busy ? 'spin' : ''} size={14} />{t('测试连接')}</button></Panel>
+        <Panel><SectionTitle title={t('当前服务')} /><h2>{selected?.name || t('尚未配置服务')}</h2><p className="muted-copy">{selected?.error || (selected ? t('该服务已通过标准 MCP transport 暴露工具，启用的工具会在新 Agent Runtime 中注册。') : t('使用右上角按钮添加 Streamable HTTP 或 stdio MCP 服务。'))}</p>{[[t('Transport'), selected?.transport === 'stdio' ? 'stdio' : selected?.transport === 'sse' ? 'HTTP + SSE' : 'Streamable HTTP'], ...(selected?.transport === 'stdio' ? [[t('可执行文件'), selected.command || '—'], [t('工作目录'), selected.workingDirectory || '—']] : [[t('服务地址'), selected?.endpoint || '—']]), [t('Latency'), selected?.latencyMs == null ? '—' : `${selected.latencyMs} ms`], [t('Last Ping'), selected?.lastPingAt ? relativeTime(selected.lastPingAt, language) : '—'], [t('Auth'), mcpAuthLabel(selected, t)]].map((row) => <div className="key-value" key={row[0]}><span>{row[0]}</span><strong title={row[1]}>{row[1]}</strong></div>)}<div className="toggle-line"><span>{t('服务启用')}</span><Toggle value={Boolean(selected?.enabled)} disabled={!selected || busy} ariaLabel={t('切换 MCP 服务')} onChange={(enabled) => void toggleServer(enabled)} /></div><div className="button-row"><button className="button secondary" disabled={!selected?.enabled || busy} onClick={testConnection}><RefreshCw className={busy ? 'spin' : ''} size={14} />{t('测试连接')}</button><button className="button danger" disabled={!selected || busy} onClick={deleteServer}><Trash2 size={14} />{t('删除')}</button></div></Panel>
         <Panel><SectionTitle title={t('最近调用')} />{calls.map((activity) => <div className="activity-row" key={activity.id}><CircleDot size={14} /><span><strong>{activity.toolName}</strong><small>{relativeTime(activity.timestamp, language)} · {activity.status === 'ok' ? 'OK' : activity.error || 'Error'} · {activity.durationMs} ms</small></span></div>)}</Panel>
       </div>
     </div>

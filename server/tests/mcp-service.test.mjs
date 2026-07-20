@@ -122,6 +122,29 @@ test('MCP service persists servers, discovers tools, and exposes Pi custom tools
   assert.equal(snapshot.calls[0].toolName, 'search_docs')
 })
 
+test('stdio MCP dashboard exposes an unambiguous executable and working directory', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-mcp-stdio-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const service = new McpService({
+    path: join(directory, 'vesper-mcp.json'),
+    cwd: directory,
+    createClient: (server, handlers) => createFakeClient(server, handlers, []),
+    createTransport: () => ({}),
+  })
+  await service.init()
+  const dashboard = await service.add({
+    name: 'Local MCP',
+    transport: 'stdio',
+    command: 'C:\\Program Files\\Pencil\\mcp-server.exe',
+    args: ['--app', 'desktop'],
+  })
+  const server = dashboard.services[0]
+  assert.equal(server.command, 'C:\\Program Files\\Pencil\\mcp-server.exe')
+  assert.deepEqual(server.args, ['--app', 'desktop'])
+  assert.equal(server.workingDirectory, resolve(directory))
+  assert.match(server.endpoint, /^"C:\\Program Files\\Pencil\\mcp-server\.exe" --app desktop$/)
+})
+
 test('MCP service connects to a real Streamable HTTP endpoint with configured headers', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vesper-mcp-http-'))
   let service

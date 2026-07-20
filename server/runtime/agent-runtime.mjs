@@ -27,6 +27,7 @@ import { forceNextToolCall, isVisualGenerationRequest } from '../services/visual
 import { createAppTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry.mjs'
 import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
 import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
+import { credentialRedactionExtension, redactPersistedSessionFiles } from '../security/secret-redaction.mjs'
 
 const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'kimi-coding', 'zai-coding-cn']
 const PROVIDER_LABELS = {
@@ -243,6 +244,7 @@ export class AgentRuntimeService {
       agentDir: dataDir,
       cwd,
       getSettingsManager: () => this.settingsManager,
+      extensionFactories: [{ name: 'credential-redaction', factory: credentialRedactionExtension }],
     })
     this.channels = new ChannelService({
       path: join(dataDir, 'vesper-channels.json'),
@@ -264,6 +266,7 @@ export class AgentRuntimeService {
       notifications: this.notificationSettings,
     })
     this.sessions = new Map()
+    this.sessionRuntimeVersion = 0
     this.liveSessions = new Map()
     this.sessionHistoryCache = new Map()
     this.sessionHistoryPaths = new Map()
@@ -289,6 +292,7 @@ export class AgentRuntimeService {
 
   async init() {
     await mkdir(this.sessionDir, { recursive: true })
+    await redactPersistedSessionFiles(this.sessionDir)
     await mkdir(this.assetsDir, { recursive: true })
     this.sessionMeta = await readJson(this.sessionMetaPath, {})
     this.usageLedger = await readJson(this.usagePath, { days: {} })
@@ -356,6 +360,17 @@ export class AgentRuntimeService {
       value.session.dispose()
     }
     this.sessions.clear()
+  }
+
+  invalidateSessionRuntimes() {
+    this.sessionRuntimeVersion += 1
+    for (const [id, value] of this.sessions) {
+      if (value.session.isStreaming) continue
+      this.subagents.abortParent(id)
+      this.permissions.resolveSession(id, false, 'Agent Runtime resources changed before the tool could run.')
+      value.session.dispose()
+      this.sessions.delete(id)
+    }
   }
 
   saveSessionMeta() {
@@ -909,7 +924,12 @@ export class AgentRuntimeService {
   }
 
   async getOrCreateSession(id) {
-    if (id && this.sessions.has(id)) return this.sessions.get(id)
+    if (id && this.sessions.has(id)) {
+      const current = this.sessions.get(id)
+      if (current.session.isStreaming || (current.runtimeVersion ?? this.sessionRuntimeVersion) === this.sessionRuntimeVersion) return current
+      current.session.dispose()
+      this.sessions.delete(id)
+    }
     if (id) {
       const info = await this.findSessionInfo(id)
       if (info) return this.createSessionRuntime(SessionManager.open(info.path, this.sessionDir, this.cwd))
@@ -1000,6 +1020,7 @@ export class AgentRuntimeService {
       modified: now,
       cwd: effectiveCwd,
       baseToolNames,
+      runtimeVersion: this.sessionRuntimeVersion,
     }
     runtimeValue = value
     runtimeSession = session
@@ -1485,31 +1506,29 @@ export class AgentRuntimeService {
 
   async createMcpServer(input) {
     const result = await this.mcp.add(input)
-    await this.disposeSessions()
+    this.invalidateSessionRuntimes()
     return result
   }
 
   async updateMcpServer(id, input) {
     const result = await this.mcp.update(id, input)
-    if (result) await this.disposeSessions()
+    if (result) this.invalidateSessionRuntimes()
     return result
   }
 
   async deleteMcpServer(id) {
     const deleted = await this.mcp.remove(id)
-    if (deleted) await this.disposeSessions()
+    if (deleted) this.invalidateSessionRuntimes()
     return deleted
   }
 
   async testMcpServer(id) {
-    const result = await this.mcp.test(id)
-    await this.disposeSessions()
-    return result
+    return this.mcp.test(id)
   }
 
   async setMcpToolEnabled(id, toolName, enabled) {
     const result = await this.mcp.setToolEnabled(id, toolName, enabled)
-    if (result) await this.disposeSessions()
+    if (result) this.invalidateSessionRuntimes()
     return result
   }
 
@@ -1519,24 +1538,24 @@ export class AgentRuntimeService {
 
   async installSkill(input) {
     const result = await this.skills.install(input, { cwd: this.cwd })
-    await this.disposeSessions()
+    this.invalidateSessionRuntimes()
     return result
   }
 
   async updateSkill(id, input) {
     const result = await this.skills.update(id, input, { cwd: this.cwd })
-    if (result) await this.disposeSessions()
+    if (result) this.invalidateSessionRuntimes()
     return result
   }
 
   async deleteSkill(id) {
     const deleted = await this.skills.remove(id, { cwd: this.cwd })
-    if (deleted) await this.disposeSessions()
+    if (deleted) this.invalidateSessionRuntimes()
     return deleted
   }
 
   async reloadSkills() {
-    await this.disposeSessions()
+    this.invalidateSessionRuntimes()
     return this.skills.dashboard({ cwd: this.cwd })
   }
 

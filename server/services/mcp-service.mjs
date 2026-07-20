@@ -246,7 +246,8 @@ function publicEndpoint(server) {
       if (/^--?(?:token|key|secret|password|auth)$/i.test(arg)) { hideNext = true; return arg }
       return redactSecrets(arg)
     })
-    return [server.command, ...args].join(' ')
+    const quote = (value) => /\s/.test(value) ? `"${value.replaceAll('"', '\\"')}"` : value
+    return [quote(redactSecrets(server.command)), ...args.map(quote)].join(' ')
   }
   return redactSecrets(server.url)
 }
@@ -600,6 +601,13 @@ export class McpService {
       name: server.name,
       transport: server.transport,
       endpoint: publicEndpoint(server),
+      ...(server.transport === 'stdio'
+        ? {
+            command: redactSecrets(server.command),
+            args: (server.args || []).map(redactSecrets),
+            workingDirectory: resolve(server.cwd || this.cwd),
+          }
+        : { url: redactSecrets(server.url) }),
       enabled: server.enabled,
       status,
       error: safeString(redactSecrets(connection.error || connection.stderr || ''), 2_000),
