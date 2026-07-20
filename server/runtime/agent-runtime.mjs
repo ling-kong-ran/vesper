@@ -11,8 +11,10 @@ import {
 import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
 import { ChannelService } from '../services/channels/channel-service.mjs'
 import { NotificationSettingsService } from '../services/notification-settings-service.mjs'
+import { McpService } from '../services/mcp-service.mjs'
 import { migrateKimiCodeProvider } from '../services/provider-migrations.mjs'
 import { ScheduleService } from '../services/schedule-service.mjs'
+import { SkillsService } from '../services/skills-service.mjs'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, SessionPermissionService } from '../services/session-permission-service.mjs'
 import { ToolPluginService } from '../services/tool-plugin-service.mjs'
 import { extractConversationMemories } from '../services/memory/conversation-memory.mjs'
@@ -235,6 +237,13 @@ export class AgentRuntimeService {
     this.memory = new LocalMemoryRuntime({ path: join(dataDir, 'vesper-memory.sqlite'), cwd })
     this.goals = new GoalService({ path: join(dataDir, 'vesper-goals.json') })
     this.goalEmitters = new Map()
+    this.mcp = new McpService({ path: join(dataDir, 'vesper-mcp.json'), cwd })
+    this.skills = new SkillsService({
+      path: join(dataDir, 'vesper-skills.json'),
+      agentDir: dataDir,
+      cwd,
+      getSettingsManager: () => this.settingsManager,
+    })
     this.channels = new ChannelService({
       path: join(dataDir, 'vesper-channels.json'),
       cwd,
@@ -263,11 +272,13 @@ export class AgentRuntimeService {
     this.sessionMeta = {}
     this.permissions = new SessionPermissionService({
       getMode: (sessionId) => this.sessionMeta[sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
+      getToolRisk: (toolName) => this.mcp.getToolRisk(toolName),
     })
     this.subagents = new SubagentService({
       agentDir: this.dataDir,
       getModelRuntime: () => this.modelRuntime,
       getSettingsManager: () => this.settingsManager,
+      createResourceLoader: ({ cwd: childCwd, rolePrompt }) => this.skills.createResourceLoader(childCwd, { appendSystemPrompt: rolePrompt }),
     })
     this.sessionMetaWrite = Promise.resolve()
     this.usageLedger = { days: {} }
@@ -291,6 +302,8 @@ export class AgentRuntimeService {
       appConfigPath: this.appConfigPath,
     })
     this.settingsManager = SettingsManager.create(this.cwd, this.dataDir)
+    await this.skills.init()
+    await this.mcp.init()
     await this.toolPlugins.ensureDefaultTools(['memory_search', 'memory_remember'], 'memoryToolsV1')
     await this.toolPlugins.ensureDefaultTools(['delegate_task'], 'subagentToolsV1')
     await this.reloadModelRuntime()
@@ -909,6 +922,11 @@ export class AgentRuntimeService {
     const effectiveCwd = await resolveDirectory(this.sessionMeta[sessionManager.getSessionId()]?.cwd, sessionManager.getCwd() || this.cwd)
     const enabledTools = toolsFromConfig(appConfig)
     const runtimeSessionId = sessionManager.getSessionId()
+    const [resourceLoader, mcpTools] = await Promise.all([
+      this.skills.createResourceLoader(effectiveCwd),
+      this.mcp.createToolDefinitions(),
+    ])
+    const baseToolNames = [...new Set([...enabledTools, ...mcpTools.map((tool) => tool.name)])]
     let runtimeValue = null
     let runtimeSession = null
     const goalTools = createGoalTools({
@@ -934,7 +952,7 @@ export class AgentRuntimeService {
       this.emitGoalUpdate(runtimeSession.sessionId, updatedGoal)
       await accounting
     }
-    const parentActiveToolNames = () => [...enabledTools]
+    const parentActiveToolNames = () => [...baseToolNames]
     const runSubagent = (input, execution) => {
       if (!runtimeSession?.model) throw new Error('当前会话没有可用模型，无法启动子 Agent。')
       return this.subagents.run({
@@ -960,6 +978,7 @@ export class AgentRuntimeService {
           : undefined,
         runSubagent,
       }),
+      ...mcpTools,
       ...(enabledTools.includes('bash') ? [createWindowsUtf8BashTool(effectiveCwd)].filter(Boolean) : []),
     ]
     const { session, modelFallbackMessage } = await createAgentSession({
@@ -967,8 +986,9 @@ export class AgentRuntimeService {
       agentDir: this.dataDir,
       modelRuntime: this.modelRuntime,
       settingsManager: this.settingsManager,
+      resourceLoader,
       sessionManager,
-      tools: [...enabledTools, ...GOAL_TOOL_NAMES],
+      tools: [...baseToolNames, ...GOAL_TOOL_NAMES],
       customTools: [...createInheritedCustomTools(), ...goalTools],
     })
     const now = new Date().toISOString()
@@ -979,7 +999,7 @@ export class AgentRuntimeService {
       created: now,
       modified: now,
       cwd: effectiveCwd,
-      baseToolNames: [...enabledTools],
+      baseToolNames,
     }
     runtimeValue = value
     runtimeSession = session
@@ -1449,6 +1469,7 @@ export class AgentRuntimeService {
     await this.subagents.dispose()
     this.permissions.dispose()
     await this.disposeSessions()
+    await this.mcp.dispose()
     this.memory.dispose()
   }
 
@@ -1456,6 +1477,67 @@ export class AgentRuntimeService {
     const result = await this.toolPlugins.saveState(input)
     await this.disposeSessions()
     return result
+  }
+
+  getMcpDashboard({ refresh = true } = {}) {
+    return this.mcp.getDashboard({ refresh })
+  }
+
+  async createMcpServer(input) {
+    const result = await this.mcp.add(input)
+    await this.disposeSessions()
+    return result
+  }
+
+  async updateMcpServer(id, input) {
+    const result = await this.mcp.update(id, input)
+    if (result) await this.disposeSessions()
+    return result
+  }
+
+  async deleteMcpServer(id) {
+    const deleted = await this.mcp.remove(id)
+    if (deleted) await this.disposeSessions()
+    return deleted
+  }
+
+  async testMcpServer(id) {
+    const result = await this.mcp.test(id)
+    await this.disposeSessions()
+    return result
+  }
+
+  async setMcpToolEnabled(id, toolName, enabled) {
+    const result = await this.mcp.setToolEnabled(id, toolName, enabled)
+    if (result) await this.disposeSessions()
+    return result
+  }
+
+  getSkillsDashboard() {
+    return this.skills.dashboard({ cwd: this.cwd })
+  }
+
+  async installSkill(input) {
+    const result = await this.skills.install(input, { cwd: this.cwd })
+    await this.disposeSessions()
+    return result
+  }
+
+  async updateSkill(id, input) {
+    const result = await this.skills.update(id, input, { cwd: this.cwd })
+    if (result) await this.disposeSessions()
+    return result
+  }
+
+  async deleteSkill(id) {
+    const deleted = await this.skills.remove(id, { cwd: this.cwd })
+    if (deleted) await this.disposeSessions()
+    return deleted
+  }
+
+  async reloadSkills() {
+    await this.disposeSessions()
+    return this.skills.dashboard({ cwd: this.cwd })
   }
 
   async getConfig() {

@@ -212,11 +212,10 @@ function App() {
 
   const handlePrimary = useCallback(() => {
     if (page === 'config' && configSection !== 'models') return
-    if (['chat', 'config', 'assets', 'plugins', 'channels', 'schedules', 'memory'].includes(page)) invokePrimaryAction()
+    if (['chat', 'config', 'assets', 'plugins', 'channels', 'schedules', 'memory', 'mcp', 'skills'].includes(page)) invokePrimaryAction()
     else if (page === 'chatHistory') { navigate('chat'); invokePrimaryAction() }
     else if (page === 'workflows') navigate('workflowCreate')
     else if (page === 'workflowCreate') notify(t('工作流运行时尚未接入，当前不会真实发布'), 'info')
-    else if (page === 'mcp' || page === 'skills') notify(t('该页面当前为演示界面，功能尚未接入'), 'info')
     else setModal(page)
   }, [configSection, invokePrimaryAction, navigate, notify, page, t])
 
@@ -335,8 +334,8 @@ function App() {
             {page === 'config' && <Suspense fallback={<PageLoader />}><ConfigPage notify={notify} registerPrimaryAction={registerPrimaryAction} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} requestConfirm={appDialog.confirm} /></Suspense>}
             {page === 'plugins' && <Suspense fallback={<PageLoader />}><PluginsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} onStatusChange={setPluginStats} /></Suspense>}
             {page === 'memory' && <Suspense fallback={<PageLoader />}><MemoryPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>}
-            {page === 'mcp' && <Suspense fallback={<PageLoader />}><McpPage notify={notify} /></Suspense>}
-            {page === 'skills' && <Suspense fallback={<PageLoader />}><SkillsPage notify={notify} /></Suspense>}
+            {page === 'mcp' && <Suspense fallback={<PageLoader />}><McpPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestText={appDialog.prompt} requestConfirm={appDialog.confirm} /></Suspense>}
+            {page === 'skills' && <Suspense fallback={<PageLoader />}><SkillsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestText={appDialog.prompt} requestConfirm={appDialog.confirm} /></Suspense>}
             {page === 'workflows' && <Suspense fallback={<PageLoader />}><WorkflowsPage navigate={navigate} notify={notify} /></Suspense>}
             {page === 'workflowCreate' && <Suspense fallback={<PageLoader />}><WorkflowBuilder notify={notify} /></Suspense>}
           </div>
@@ -447,7 +446,7 @@ function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, plugi
         </div>
         <div className="sidebar-status">
           <span>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? t('功能状态') : page === 'plugins' ? t('插件状态') : t('运行状态')}</span>
-          <b>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? <>{t('演示页面')} <em className="amber">{t('尚未接入')}</em></> : page === 'plugins' ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' }) : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</b>
+          <b>{['skills', 'mcp'].includes(page) ? <>{t('原生运行时')} <em>{t('已接入')}</em></> : ['workflows', 'workflowCreate'].includes(page) ? <>{t('演示页面')} <em className="amber">{t('尚未接入')}</em></> : page === 'plugins' ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' }) : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</b>
         </div>
       </aside>
     </>

@@ -7,6 +7,8 @@ test('English interface translations resolve static and interpolated messages', 
   assert.equal(translateText('界面语言', 'en-US'), 'Display language')
   assert.equal(translateText('{count} 个模型', 'en-US', { count: 3 }), '3 models')
   assert.equal(translateText('删除 Provider 连接', 'en-US'), 'Delete Provider connection')
+  assert.equal(translateText('连接 MCP 服务', 'en-US'), 'Connect MCP server')
+  assert.equal(translateText('{count} 个技能包', 'en-US', { count: 2 }), '2 skill packages')
 })
 
 test('Chinese remains the default interface language', () => {

@@ -31,9 +31,9 @@ function pathOutsideWorkspace(cwd, input) {
   return result === '..' || result.startsWith(`..${sep}`) || isAbsolute(result)
 }
 
-export function permissionRequirement({ mode, cwd, toolName, args }) {
+export function permissionRequirement({ mode, cwd, toolName, args, toolRisk }) {
   if (INTERNAL_SAFE_TOOLS.has(toolName) || mode === 'ignore') return null
-  const risk = TOOL_RISKS.get(toolName) || '高风险'
+  const risk = toolRisk || TOOL_RISKS.get(toolName) || '高风险'
   if (['read', 'ls', 'grep', 'find', 'edit', 'write'].includes(toolName) && pathOutsideWorkspace(cwd, args?.path || args?.file_path)) {
     return { risk: '高风险', reason: `${toolName} 将访问当前工作目录之外的文件。` }
   }
@@ -48,8 +48,9 @@ export function permissionRequirement({ mode, cwd, toolName, args }) {
 }
 
 export class SessionPermissionService {
-  constructor({ getMode, timeoutMs = 10 * 60_000 } = {}) {
+  constructor({ getMode, getToolRisk, timeoutMs = 10 * 60_000 } = {}) {
     this.getMode = getMode || (() => DEFAULT_PERMISSION_MODE)
+    this.getToolRisk = getToolRisk || (() => null)
     this.timeoutMs = timeoutMs
     this.pending = new Map()
     this.emitters = new Map()
@@ -88,7 +89,7 @@ export class SessionPermissionService {
 
   async authorize({ sessionId, cwd, toolName, toolCallId, args, signal }) {
     const mode = PERMISSION_MODES.has(this.getMode(sessionId)) ? this.getMode(sessionId) : DEFAULT_PERMISSION_MODE
-    const requirement = permissionRequirement({ mode, cwd, toolName, args })
+    const requirement = permissionRequirement({ mode, cwd, toolName, args, toolRisk: this.getToolRisk(toolName) })
     if (!requirement) return undefined
     const approval = await this.requestApproval({ sessionId, toolName, toolCallId, args, mode, ...requirement, signal })
     if (approval.approved) return undefined
