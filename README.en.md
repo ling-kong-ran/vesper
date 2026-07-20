@@ -81,6 +81,7 @@ This project simplifies the orchestration of capable AI agents while keeping int
 vesper/
 ├─ docs/                 # Project documentation and brand assets
 ├─ public/               # Public static assets
+├─ shared/               # Workflow graph logic shared by client and server
 ├─ server/
 │  ├─ http/              # HTTP API, SSE, and static responses
 │  ├─ runtime/           # Pi agent session and model runtime

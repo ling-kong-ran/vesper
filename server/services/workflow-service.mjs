@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
+import { analyzeWorkflowGraph, createLinearWorkflowEdges, normalizeWorkflowEdges } from '../../shared/workflow-graph.mjs'
 
 const NODE_KINDS = new Set(['trigger', 'prompt', 'file', 'mcp', 'notification', 'condition', 'parallel', 'approval'])
 const EXECUTABLE_KINDS = new Set(['prompt', 'file', 'mcp', 'condition'])
@@ -39,6 +40,10 @@ function normalizeNode(node, index) {
 
 function normalizeStoredWorkflow(workflow, cwd) {
   const now = new Date().toISOString()
+  const nodes = (Array.isArray(workflow?.nodes) ? workflow.nodes : []).slice(0, 100).map(normalizeNode)
+  const sourceEdges = Array.isArray(workflow?.edges)
+    ? workflow.edges
+    : createLinearWorkflowEdges(nodes, () => randomUUID())
   return {
     id: String(workflow?.id || randomUUID()),
     name: String(workflow?.name || '未命名工作流').trim().slice(0, 120),
@@ -47,7 +52,8 @@ function normalizeStoredWorkflow(workflow, cwd) {
     cwd: String(workflow?.cwd || cwd),
     model: normalizeModel(workflow?.model),
     notifications: [...new Set((Array.isArray(workflow?.notifications) ? workflow.notifications : []).filter((target) => NOTIFICATION_TARGETS.has(target)))],
-    nodes: (Array.isArray(workflow?.nodes) ? workflow.nodes : []).slice(0, 100).map(normalizeNode),
+    nodes,
+    edges: normalizeWorkflowEdges(sourceEdges.slice(0, 300), nodes, () => randomUUID()),
     createdAt: workflow?.createdAt || now,
     updatedAt: workflow?.updatedAt || now,
     publishedAt: workflow?.publishedAt || null,
@@ -81,12 +87,16 @@ function nodeInstruction(workflow, node, previousSummary) {
 }
 
 function validateRunnable(workflow) {
-  const nodes = workflow.nodes.filter((node) => node.enabled)
-  const executable = nodes.filter((node) => EXECUTABLE_KINDS.has(node.kind))
+  const graph = analyzeWorkflowGraph(workflow.nodes, workflow.edges)
+  const executable = graph.nodes.filter((node) => EXECUTABLE_KINDS.has(node.kind))
   if (!executable.length) throw new Error('工作流至少需要一个可执行节点。')
   const invalid = executable.find((node) => !node.prompt)
   if (invalid) throw new Error(`节点「${invalid.label}」还没有填写 Prompt。`)
-  return nodes
+  if (graph.nodes.length > 1 && !graph.edges.length) throw new Error('工作流节点尚未建立连接。')
+  if (graph.invalidTriggerTargets.length) throw new Error(`触发器「${graph.invalidTriggerTargets[0].label}」不能连接上游节点。`)
+  if (graph.unconnected.length) throw new Error(`节点「${graph.unconnected[0].label}」尚未连接到工作流。`)
+  if (graph.hasCycle) throw new Error('工作流不能包含循环连接。')
+  return graph
 }
 
 export class WorkflowService {
@@ -179,7 +189,7 @@ export class WorkflowService {
     if (!workflow) return null
     if ([...this.active.values()].some((record) => record.workflowId === id)) throw new Error('工作流已经在运行。')
     if (this.active.size >= this.maxConcurrent) throw new Error(`工作流并发已达到上限（${this.maxConcurrent}）。`)
-    const nodes = validateRunnable(workflow)
+    const graph = validateRunnable(workflow)
     const run = {
       id: randomUUID(),
       workflowId: workflow.id,
@@ -190,24 +200,24 @@ export class WorkflowService {
       finishedAt: null,
       durationMs: 0,
       completedNodes: 0,
-      totalNodes: nodes.length,
+      totalNodes: graph.nodes.length,
       currentNodeId: '',
       currentNodeLabel: '',
       summary: '',
       error: '',
       sessionId: '',
       assets: [],
-      nodes: nodes.map((node) => ({ id: node.id, label: node.label, kind: node.kind, status: 'pending', attempts: 0, summary: '', error: '' })),
+      nodes: graph.order.map((node) => ({ id: node.id, label: node.label, kind: node.kind, status: 'pending', attempts: 0, summary: '', error: '', sessionId: '' })),
     }
     this.state.runs.push(run)
     this.state.runs = this.state.runs.slice(-200)
     workflow.lastRunAt = run.startedAt
     workflow.lastStatus = 'running'
     workflow.lastError = ''
-    const record = { runId: run.id, workflowId: workflow.id, cancelled: false, sessionId: '' }
+    const record = { runId: run.id, workflowId: workflow.id, cancelled: false, sessionIds: new Set() }
     this.active.set(run.id, record)
     await this.save()
-    void this.execute(workflow, run, nodes, record)
+    void this.execute(workflow, run, graph, record)
     return clone(run)
   }
 
@@ -215,18 +225,19 @@ export class WorkflowService {
     const record = this.active.get(runId)
     if (!record) return null
     record.cancelled = true
-    if (record.sessionId) await this.agent.abort(record.sessionId).catch(() => {})
+    await Promise.all([...record.sessionIds].map((sessionId) => this.agent.abort(sessionId).catch(() => {})))
     return clone(this.state.runs.find((run) => run.id === runId))
   }
 
-  async execute(workflow, run, nodes, record) {
+  async execute(workflow, run, graph, record) {
     const started = Date.now()
-    let previousSummary = ''
     let failedNode = null
     try {
-      for (const node of nodes) {
+      for (const node of graph.order) {
         if (record.cancelled) throw Object.assign(new Error('工作流已停止。'), { code: 'WORKFLOW_CANCELLED' })
         const nodeRun = run.nodes.find((item) => item.id === node.id)
+        const predecessors = (graph.incoming.get(node.id) || []).map((edge) => run.nodes.find((item) => item.id === edge.source)).filter(Boolean)
+        const previousSummary = predecessors.map((item) => `${item.label}：${item.summary || item.error || '已完成'}`).join('\n')
         run.currentNodeId = node.id
         run.currentNodeLabel = node.label
         nodeRun.status = 'running'
@@ -234,7 +245,9 @@ export class WorkflowService {
 
         if (!EXECUTABLE_KINDS.has(node.kind)) {
           nodeRun.status = 'completed'
-          nodeRun.summary = node.kind === 'notification' ? '通知将在工作流结束后发送。' : '控制节点已通过。'
+          nodeRun.summary = predecessors.length === 1
+            ? predecessors[0].summary
+            : previousSummary || (node.kind === 'notification' ? '通知将在工作流结束后发送。' : node.kind === 'trigger' ? '工作流已触发。' : '控制节点已通过。')
           run.completedNodes += 1
           await this.save()
           continue
@@ -245,20 +258,26 @@ export class WorkflowService {
           nodeRun.attempts = attempt + 1
           try {
             let timeoutTimer
+            const predecessor = predecessors.length === 1 ? predecessors[0] : null
+            const predecessorBranches = predecessor ? (graph.outgoing.get(predecessor.id) || []).length : 0
+            const inheritedSessionId = predecessor && predecessorBranches === 1 ? predecessor.sessionId : ''
+            let activeSessionId = inheritedSessionId
             const prompt = this.agent.prompt({
-              sessionId: run.sessionId,
+              sessionId: inheritedSessionId,
               message: nodeInstruction(workflow, node, previousSummary),
               cwd: workflow.cwd,
               title: `工作流 · ${workflow.name}`,
               model: node.model || workflow.model,
               onSession: (sessionId) => {
-                record.sessionId = sessionId
+                activeSessionId = sessionId
+                record.sessionIds.add(sessionId)
+                nodeRun.sessionId = sessionId
                 run.sessionId = sessionId
               },
             })
             const timeout = new Promise((_resolve, reject) => {
               timeoutTimer = setTimeout(async () => {
-                if (record.sessionId) await this.agent.abort(record.sessionId).catch(() => {})
+                if (activeSessionId) await this.agent.abort(activeSessionId).catch(() => {})
                 const error = Object.assign(new Error(`节点「${node.label}」执行超过 ${node.timeoutMinutes} 分钟。`), { code: 'WORKFLOW_TIMEOUT' })
                 reject(error)
               }, node.timeoutMinutes * 60_000)
@@ -269,10 +288,10 @@ export class WorkflowService {
             finally { clearTimeout(timeoutTimer) }
             if (record.cancelled) throw Object.assign(new Error('工作流已停止。'), { code: 'WORKFLOW_CANCELLED' })
             run.sessionId = result.sessionId || run.sessionId
-            record.sessionId = run.sessionId
+            nodeRun.sessionId = result.sessionId || nodeRun.sessionId
+            if (nodeRun.sessionId) record.sessionIds.add(nodeRun.sessionId)
             nodeRun.summary = String(result.text || '节点已完成。').trim().slice(0, 1200)
             nodeRun.status = 'completed'
-            previousSummary = nodeRun.summary
             run.assets.push(...(result.assets || []).filter((asset) => !run.assets.some((item) => item.id === asset.id)))
             lastError = null
             break
@@ -298,7 +317,8 @@ export class WorkflowService {
       }
 
       run.status = 'completed'
-      run.summary = previousSummary || '工作流已完成。'
+      const terminalNodes = graph.order.filter((node) => !(graph.outgoing.get(node.id) || []).length)
+      run.summary = terminalNodes.map((node) => run.nodes.find((item) => item.id === node.id)?.summary).filter(Boolean).join('\n') || '工作流已完成。'
       workflow.lastStatus = 'completed'
       workflow.lastSummary = run.summary
       workflow.lastError = ''
@@ -334,7 +354,7 @@ export class WorkflowService {
   async dispose() {
     for (const record of this.active.values()) {
       record.cancelled = true
-      if (record.sessionId) await this.agent.abort(record.sessionId).catch(() => {})
+      await Promise.all([...record.sessionIds].map((sessionId) => this.agent.abort(sessionId).catch(() => {})))
     }
     await this.writeQueue.catch(() => {})
   }

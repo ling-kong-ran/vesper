@@ -7,6 +7,7 @@ import { Panel, SectionTitle, Segmented, Toggle } from '../../components/ui.jsx'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
 import { apiJson } from '../../lib/api.js'
 import { relativeTime } from '../../lib/format.js'
+import { createLinearWorkflowEdges, workflowEdgePath, wouldCreateWorkflowCycle } from '../../../shared/workflow-graph.mjs'
 
 const NODE_TYPES = {
   trigger: '触发器',
@@ -37,6 +38,10 @@ function node(id, kind, label, prompt, x, y, extra = {}) {
   return { id, kind, label, prompt, x, y, model: null, retries: 0, timeoutMinutes: 20, failurePolicy: 'stop', enabled: true, ...extra }
 }
 
+function linearEdges(nodes) {
+  return createLinearWorkflowEdges(nodes, () => crypto.randomUUID())
+}
+
 const TEMPLATES = [
   {
     id: 'code-review', name: '代码审查', description: '读取 diff → 运行测试 → 生成 review', Icon: Code2,
@@ -65,14 +70,17 @@ const TEMPLATES = [
 ]
 
 function blankWorkflow(cwd = '') {
+  const nodes = [node(crypto.randomUUID(), 'trigger', '手动触发', '', 65, 45), node(crypto.randomUUID(), 'prompt', '运行 Prompt', '', 235, 45)]
   return {
     id: '', name: '未命名工作流', description: '', status: 'draft', cwd, model: null, notifications: [],
-    nodes: [node(crypto.randomUUID(), 'trigger', '手动触发', '', 65, 45), node(crypto.randomUUID(), 'prompt', '运行 Prompt', '', 235, 45)],
+    nodes,
+    edges: linearEdges(nodes),
   }
 }
 
 function templateWorkflow(template, cwd = '') {
-  return { ...blankWorkflow(cwd), name: template.name, description: template.description, nodes: template.nodes.map((item) => ({ ...item, id: crypto.randomUUID() })) }
+  const nodes = template.nodes.map((item) => ({ ...item, id: crypto.randomUUID() }))
+  return { ...blankWorkflow(cwd), name: template.name, description: template.description, nodes, edges: linearEdges(nodes) }
 }
 
 function runProgress(run) {
@@ -160,7 +168,7 @@ export function WorkflowsPage({ notify, requestConfirm, query = '' }) {
     <Segmented options={filters.map(t)} value={t(filter)} onChange={(label) => setFilter(filters.find((item) => t(item) === label) || '全部')} />
     <div className="workflow-top">
       <Panel><div className="card-head"><SectionTitle title={t('常见预设')} /><a>{t('{count} 个模板', { count: TEMPLATES.length })}</a></div><div className="template-grid">{TEMPLATES.map((template) => { const Icon = template.Icon; return <button onClick={() => openTemplate(template.id)} key={template.id}><span className="list-icon"><Icon size={15} /></span><span><strong>{t(template.name)}</strong><small>{t(template.description)}</small></span><ChevronRight size={14} /></button> })}</div></Panel>
-      <Panel className="workflow-preview"><div className="card-head"><div><SectionTitle title={t('自定义工作流')} />{preview && <small>{preview.name} · {t(preview.status === 'published' ? '已发布' : '草稿')}</small>}</div><button className="text-button" onClick={() => routerNavigate(workflowPath('new'))}>{t('空白创建')}</button></div><WorkflowMiniMap nodes={preview?.nodes} /></Panel>
+      <Panel className="workflow-preview"><div className="card-head"><div><SectionTitle title={t('自定义工作流')} />{preview && <small>{preview.name} · {t(preview.status === 'published' ? '已发布' : '草稿')}</small>}</div><button className="text-button" onClick={() => routerNavigate(workflowPath('new'))}>{t('空白创建')}</button></div><WorkflowMiniMap nodes={preview?.nodes} edges={preview?.edges} /></Panel>
     </div>
     <div className="workflow-bottom">
       <Panel><div className="card-head"><SectionTitle title={t('工作流')} /><a>{t('{count} 个工作流', { count: visible.length })}</a></div>{visible.length ? visible.map((workflow) => { const run = latestRun(workflow.id); const progress = runProgress(run); const running = run?.status === 'running'; return <div className="run-row" key={workflow.id}><span><strong>{workflow.name}</strong><small>{running ? t('正在执行：{node}', { node: run.currentNodeLabel || t('准备中') }) : workflow.lastRunAt ? `${t(workflow.lastStatus === 'completed' ? '已完成' : workflow.lastStatus === 'failed' ? '失败' : workflow.lastStatus === 'cancelled' ? '已停止' : '草稿')} · ${relativeTime(workflow.lastRunAt, language)}` : t(workflow.status === 'published' ? '已发布' : '草稿')}</small></span><div className="run-progress"><i className={runTone(run?.status)} style={{ width: `${progress}%` }} /></div><em>{progress}%</em><div className="button-row">{running ? <button disabled={busyId === run.id} onClick={() => void stopRun(run)}><Square size={12} />{t('停止')}</button> : <button disabled={busyId === workflow.id} onClick={() => void runWorkflow(workflow)}><Play size={12} />{t('运行')}</button>}<button onClick={() => openWorkflow(workflow.id)}><Pencil size={12} />{t('编辑')}</button><button disabled={running || busyId === workflow.id} onClick={() => void removeWorkflow(workflow)}><Trash2 size={12} />{t('删除')}</button></div></div> }) : <div className="channel-route-empty compact"><strong>{t(filter === '预设' ? '从上方选择一个预设开始创建' : '还没有符合条件的工作流')}</strong></div>}</Panel>
@@ -178,6 +186,8 @@ export function WorkflowBuilder({ notify, registerPrimaryAction, registerWorkflo
   const [catalog, setCatalog] = useState({ workflows: [], runs: [], models: [], notificationTargets: {}, cwd: '' })
   const [draft, setDraft] = useState(null)
   const [selectedId, setSelectedId] = useState('')
+  const [selectedEdgeId, setSelectedEdgeId] = useState('')
+  const [connectionDraft, setConnectionDraft] = useState(null)
   const [loading, setLoading] = useState(true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -191,6 +201,7 @@ export function WorkflowBuilder({ notify, registerPrimaryAction, registerWorkflo
       const next = stored ? structuredClone(stored) : template ? templateWorkflow(template, result.cwd) : blankWorkflow(result.cwd)
       setDraft(next)
       setSelectedId((current) => next.nodes.some((item) => item.id === current) ? current : next.nodes[0]?.id || '')
+      setSelectedEdgeId('')
       setError(stored || workflowId === 'new' ? '' : t('工作流不存在，已打开空白编辑器。'))
     } catch (caught) { setError(caught.message) }
     finally { setLoading(false) }
@@ -209,7 +220,85 @@ export function WorkflowBuilder({ notify, registerPrimaryAction, registerWorkflo
 
   const updateDraft = (patch) => setDraft((current) => ({ ...current, ...patch }))
   const updateNode = (patch) => setDraft((current) => ({ ...current, nodes: current.nodes.map((item) => item.id === selectedId ? { ...item, ...patch } : item) }))
-  const current = draft?.nodes.find((item) => item.id === selectedId) || draft?.nodes[0]
+  const current = selectedId ? draft?.nodes.find((item) => item.id === selectedId) || null : null
+  const selectedEdge = draft?.edges?.find((edge) => edge.id === selectedEdgeId) || null
+
+  const canvasPoint = useCallback((clientX, clientY) => {
+    const box = canvasRef.current?.getBoundingClientRect()
+    if (!box) return null
+    return { x: clientX - box.left, y: clientY - box.top }
+  }, [])
+
+  const addEdge = useCallback((source, target, sourcePort = 'output') => {
+    if (!draft || source === target) return
+    const targetNode = draft.nodes.find((item) => item.id === target)
+    if (!targetNode || targetNode.kind === 'trigger') {
+      notify(t('触发器不能连接上游节点'), 'error')
+      return
+    }
+    if ((draft.edges || []).some((edge) => edge.source === source && edge.target === target && edge.sourcePort === sourcePort)) {
+      notify(t('这条连线已经存在'), 'info')
+      return
+    }
+    if (wouldCreateWorkflowCycle(draft.nodes, draft.edges || [], source, target, sourcePort)) {
+      notify(t('工作流不能包含循环连接'), 'error')
+      return
+    }
+    const edge = { id: crypto.randomUUID(), source, sourcePort, target, targetPort: 'input' }
+    setDraft((currentDraft) => ({ ...currentDraft, edges: [...(currentDraft.edges || []), edge] }))
+    setSelectedEdgeId(edge.id)
+    setSelectedId('')
+    notify(t('连线已建立'), 'info')
+  }, [draft, notify, t])
+
+  const beginConnection = (event, source, sourcePort = 'output') => {
+    event.preventDefault()
+    event.stopPropagation()
+    const sourceNode = draft.nodes.find((item) => item.id === source)
+    const point = canvasPoint(event.clientX, event.clientY)
+    if (!sourceNode || !point) return
+    const sourceOffset = sourcePort === 'true' ? 15 : sourcePort === 'false' ? 35 : 25
+    setConnectionDraft({ source, sourcePort, x1: sourceNode.x + 120, y1: sourceNode.y + sourceOffset, x2: point.x, y2: point.y })
+  }
+
+  useEffect(() => {
+    if (!connectionDraft?.source) return undefined
+    const move = (event) => {
+      const point = canvasPoint(event.clientX, event.clientY)
+      if (point) setConnectionDraft((currentDraft) => currentDraft ? { ...currentDraft, x2: point.x, y2: point.y } : null)
+    }
+    const up = (event) => {
+      const targetElement = document.elementFromPoint(event.clientX, event.clientY)?.closest?.('[data-workflow-input]')
+      const target = targetElement?.dataset?.workflowInput
+      if (target) addEdge(connectionDraft.source, target, connectionDraft.sourcePort)
+      setConnectionDraft(null)
+    }
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', up, { once: true })
+    return () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', up)
+    }
+  }, [addEdge, canvasPoint, connectionDraft?.source, connectionDraft?.sourcePort])
+
+  const removeSelectedEdge = useCallback(() => {
+    if (!selectedEdgeId) return
+    setDraft((currentDraft) => ({ ...currentDraft, edges: (currentDraft.edges || []).filter((edge) => edge.id !== selectedEdgeId) }))
+    setSelectedEdgeId('')
+    notify(t('连线已删除'), 'info')
+  }, [notify, selectedEdgeId, t])
+
+  useEffect(() => {
+    if (!selectedEdgeId) return undefined
+    const keydown = (event) => {
+      if (!['Backspace', 'Delete'].includes(event.key)) return
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement?.tagName)) return
+      event.preventDefault()
+      removeSelectedEdge()
+    }
+    window.addEventListener('keydown', keydown)
+    return () => window.removeEventListener('keydown', keydown)
+  }, [removeSelectedEdge, selectedEdgeId])
 
   const saveWorkflow = useCallback(async (status = 'draft', quiet = false) => {
     if (!draft) return null
@@ -268,6 +357,7 @@ export function WorkflowBuilder({ notify, registerPrimaryAction, registerWorkflo
       const id = crypto.randomUUID()
       updateDraft({ nodes: [...draft.nodes, node(id, data.kind, data.label, '', x, y)] })
       setSelectedId(id)
+      setSelectedEdgeId('')
     }
   }
 
@@ -276,20 +366,25 @@ export function WorkflowBuilder({ notify, registerPrimaryAction, registerWorkflo
     const id = crypto.randomUUID()
     updateDraft({ nodes: [...draft.nodes, { ...current, id, label: `${current.label} 副本`, x: current.x + 25, y: current.y + 25 }] })
     setSelectedId(id)
+    setSelectedEdgeId('')
     notify(t('节点已复制'), 'info')
   }
 
   const deleteNode = () => {
     if (!current) return
     const nodes = draft.nodes.filter((item) => item.id !== current.id)
-    updateDraft({ nodes })
+    const edges = (draft.edges || []).filter((edge) => edge.source !== current.id && edge.target !== current.id)
+    updateDraft({ nodes, edges })
     setSelectedId(nodes[0]?.id || '')
+    setSelectedEdgeId('')
     notify(t('节点已删除'), 'info')
   }
 
   const toggleNotification = (target) => updateDraft({ notifications: draft.notifications.includes(target) ? draft.notifications.filter((item) => item !== target) : [...draft.notifications, target] })
-  const edgeNodes = [...(draft?.nodes || [])].sort((a, b) => a.y - b.y || a.x - b.x)
-  const edgePath = edgeNodes.slice(1).map((item, index) => { const previous = edgeNodes[index]; return `M${previous.x + 120} ${previous.y + 25} C${previous.x + 145} ${previous.y + 25},${item.x - 25} ${item.y + 25},${item.x} ${item.y + 25}` }).join(' ')
+  const nodesById = new Map((draft?.nodes || []).map((item) => [item.id, item]))
+  const connectionPath = connectionDraft
+    ? `M${connectionDraft.x1} ${connectionDraft.y1} C${connectionDraft.x1 + Math.max(42, Math.abs(connectionDraft.x2 - connectionDraft.x1) * 0.45)} ${connectionDraft.y1},${connectionDraft.x2 - Math.max(42, Math.abs(connectionDraft.x2 - connectionDraft.x1) * 0.45)} ${connectionDraft.y2},${connectionDraft.x2} ${connectionDraft.y2}`
+    : ''
 
   if (loading || !draft) return <Panel className="empty-state"><RefreshCw className="spin" size={23} /><h2>{t('正在加载工作流编辑器')}</h2></Panel>
   return <div className="preview-page">
@@ -297,19 +392,43 @@ export function WorkflowBuilder({ notify, registerPrimaryAction, registerWorkflo
     {running && <div className="permission-note"><RefreshCw className="spin" size={16} /><span><strong>{t('工作流运行中')}</strong><small>{t('正在执行：{node} · 已完成 {completed}/{total}', { node: currentRun.currentNodeLabel || t('准备中'), completed: currentRun.completedNodes, total: currentRun.totalNodes })}</small></span></div>}
     <div className="builder-layout">
       <Panel className="node-library"><SectionTitle title={t('节点库')} />{PALETTE.map(({ kind, label, Icon, group }) => <div key={kind}><small>{group ? t(group) : ''}</small><button draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', JSON.stringify({ kind, label }))}><Icon size={15} />{t(label)}<span>{t('拖拽')}</span></button></div>)}</Panel>
-      <Panel className="builder-canvas" ref={canvasRef} onDragOver={(event) => event.preventDefault()} onDrop={drop}><div className="canvas-tools"><button type="button"><Plus size={14} /></button><button type="button">−</button><button type="button"><Grid2X2 size={13} /></button></div><svg viewBox="0 0 760 620" preserveAspectRatio="none"><path d={edgePath} /></svg>{draft.nodes.map((item) => <button type="button" draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', JSON.stringify({ id: item.id }))} onClick={() => setSelectedId(item.id)} className={`flow-node ${selectedId === item.id ? 'active' : ''} type-${NODE_TYPES[item.kind]}`} style={{ left: item.x, top: item.y }} key={item.id}><small>{t(NODE_TYPES[item.kind])}</small><strong>{item.label}</strong></button>)}</Panel>
+      <Panel className={`builder-canvas ${connectionDraft ? 'connecting' : ''}`} ref={canvasRef} onDragOver={(event) => event.preventDefault()} onDrop={drop} onPointerDown={(event) => { if (event.target === event.currentTarget) { setSelectedId(''); setSelectedEdgeId('') } }}>
+        <div className="canvas-tools"><button type="button"><Plus size={14} /></button><button type="button">−</button><button type="button"><Grid2X2 size={13} /></button></div>
+        <div className="canvas-hint">{t('从节点右侧端口拖到目标节点左侧端口建立连线')}</div>
+        <svg className="workflow-edge-layer">
+          <defs><marker id="workflow-edge-arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth"><path className="workflow-edge-arrow" d="M0,0 L8,4 L0,8 Z" /></marker></defs>
+          {(draft.edges || []).map((edge) => {
+            const path = workflowEdgePath(nodesById.get(edge.source), nodesById.get(edge.target), edge.sourcePort)
+            if (!path) return null
+            return <g className={`workflow-edge ${selectedEdgeId === edge.id ? 'active' : ''}`} key={edge.id} onPointerDown={(event) => { event.preventDefault(); event.stopPropagation(); setSelectedEdgeId(edge.id); setSelectedId('') }}><path className="workflow-edge-hit" d={path} /><path className="workflow-edge-line" d={path} markerEnd="url(#workflow-edge-arrow)" /></g>
+          })}
+          {connectionPath && <path className="workflow-edge-draft" d={connectionPath} />}
+        </svg>
+        {draft.nodes.map((item) => <div role="button" tabIndex="0" draggable={!connectionDraft} onDragStart={(event) => event.dataTransfer.setData('text/plain', JSON.stringify({ id: item.id }))} onClick={() => { setSelectedId(item.id); setSelectedEdgeId('') }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setSelectedId(item.id); setSelectedEdgeId('') } }} className={`flow-node ${selectedId === item.id ? 'active' : ''} type-${NODE_TYPES[item.kind]}`} style={{ left: item.x, top: item.y }} key={item.id}>{item.kind !== 'trigger' && <span className="flow-port input" data-workflow-input={item.id} title={t('输入端口')} aria-label={t('输入端口')} />}<span className="flow-port output" title={t('输出端口')} aria-label={t('输出端口')} onPointerDown={(event) => beginConnection(event, item.id)} /><small>{t(NODE_TYPES[item.kind])}</small><strong>{item.label}</strong></div>)}
+      </Panel>
       <div className="detail-stack inspector">
         <Panel><SectionTitle title={t('工作流设置')} /><label className="field-label">{t('名称')}<input value={draft.name} onChange={(event) => updateDraft({ name: event.target.value })} /></label><label className="field-label">{t('描述')}<textarea value={draft.description} onChange={(event) => updateDraft({ description: event.target.value })} /></label><label className="field-label">{t('工作目录')}<input value={draft.cwd} onChange={(event) => updateDraft({ cwd: event.target.value })} /></label><label className="field-label">{t('默认模型')}<span className="select-wrap"><select value={draft.model ? `${draft.model.provider}/${draft.model.model}` : ''} onChange={(event) => { const model = catalog.models.find((item) => `${item.provider}/${item.model}` === event.target.value); updateDraft({ model: model ? { provider: model.provider, model: model.model } : null }) }}><option value="">{t('跟随系统默认')}</option>{catalog.models.map((model) => <option value={`${model.provider}/${model.model}`} key={`${model.provider}/${model.model}`}>{model.label}</option>)}</select><ChevronDown size={13} /></span></label>{Object.entries(TARGETS).map(([id, target]) => { const Icon = target.Icon; return <div className="toggle-line" key={id}><span><Icon size={15} />{t(target.name)}</span><Toggle value={draft.notifications.includes(id)} disabled={!catalog.notificationTargets[id]?.enabled} onChange={() => toggleNotification(id)} /></div> })}</Panel>
-        <Panel><SectionTitle title={t('选中节点')} />{current ? <><label className="field-label">{t('节点名称')}<input value={current.label} onChange={(event) => updateNode({ label: event.target.value })} /></label><label className="field-label">{t('节点模型')}<span className="select-wrap"><select value={current.model ? `${current.model.provider}/${current.model.model}` : ''} onChange={(event) => { const model = catalog.models.find((item) => `${item.provider}/${item.model}` === event.target.value); updateNode({ model: model ? { provider: model.provider, model: model.model } : null }) }}><option value="">{t('继承工作流默认模型')}</option>{catalog.models.map((model) => <option value={`${model.provider}/${model.model}`} key={`${model.provider}/${model.model}`}>{model.label}</option>)}</select><ChevronDown size={13} /></span></label><div className="form-grid three"><label className="field-label">{t('重试次数')}<input type="number" min="0" max="3" value={current.retries} onChange={(event) => updateNode({ retries: Number(event.target.value) })} /></label><label className="field-label">{t('超时（分钟）')}<input type="number" min="1" max="240" value={current.timeoutMinutes} onChange={(event) => updateNode({ timeoutMinutes: Number(event.target.value) })} /></label><label className="field-label">{t('失败处理')}<span className="select-wrap"><select value={current.failurePolicy} onChange={(event) => updateNode({ failurePolicy: event.target.value })}><option value="stop">{t('立即停止')}</option><option value="skip">{t('跳过此节点')}</option></select><ChevronDown size={13} /></span></label></div>{['prompt', 'file', 'mcp', 'condition'].includes(current.kind) && <label className="field-label">Prompt<textarea value={current.prompt} onChange={(event) => updateNode({ prompt: event.target.value })} placeholder={t('描述该节点需要 Agent 完成的工作')} /></label>}<div className="button-row"><button className="button secondary" onClick={copyNode}><Copy size={14} />{t('复制节点')}</button><button className="button danger" onClick={deleteNode}><Trash2 size={14} />{t('删除节点')}</button></div></> : <p className="muted-copy">{t('从左侧拖入节点开始编排工作流。')}</p>}</Panel>
+        {selectedEdge && <Panel><SectionTitle title={t('选中连线')} /><div className="workflow-edge-summary"><strong>{nodesById.get(selectedEdge.source)?.label || t('未知节点')}</strong><span>→</span><strong>{nodesById.get(selectedEdge.target)?.label || t('未知节点')}</strong></div><p className="muted-copy">{t('按 Delete 或 Backspace 也可以删除这条连线。')}</p><button className="button danger" onClick={removeSelectedEdge}><Trash2 size={14} />{t('删除连线')}</button></Panel>}
+        <Panel><SectionTitle title={t('选中节点')} />{current ? <><label className="field-label">{t('节点名称')}<input value={current.label} onChange={(event) => updateNode({ label: event.target.value })} /></label><label className="field-label">{t('节点模型')}<span className="select-wrap"><select value={current.model ? `${current.model.provider}/${current.model.model}` : ''} onChange={(event) => { const model = catalog.models.find((item) => `${item.provider}/${item.model}` === event.target.value); updateNode({ model: model ? { provider: model.provider, model: model.model } : null }) }}><option value="">{t('继承工作流默认模型')}</option>{catalog.models.map((model) => <option value={`${model.provider}/${model.model}`} key={`${model.provider}/${model.model}`}>{model.label}</option>)}</select><ChevronDown size={13} /></span></label><div className="form-grid three"><label className="field-label">{t('重试次数')}<input type="number" min="0" max="3" value={current.retries} onChange={(event) => updateNode({ retries: Number(event.target.value) })} /></label><label className="field-label">{t('超时（分钟）')}<input type="number" min="1" max="240" value={current.timeoutMinutes} onChange={(event) => updateNode({ timeoutMinutes: Number(event.target.value) })} /></label><label className="field-label">{t('失败处理')}<span className="select-wrap"><select value={current.failurePolicy} onChange={(event) => updateNode({ failurePolicy: event.target.value })}><option value="stop">{t('立即停止')}</option><option value="skip">{t('跳过此节点')}</option></select><ChevronDown size={13} /></span></label></div>{['prompt', 'file', 'mcp', 'condition'].includes(current.kind) && <label className="field-label">Prompt<textarea value={current.prompt} onChange={(event) => updateNode({ prompt: event.target.value })} placeholder={t('描述该节点需要 Agent 完成的工作')} /></label>}<div className="button-row"><button className="button secondary" onClick={copyNode}><Copy size={14} />{t('复制节点')}</button><button className="button danger" onClick={deleteNode}><Trash2 size={14} />{t('删除节点')}</button></div></> : <p className="muted-copy">{t(selectedEdge ? '当前选中的是连线。' : '从左侧拖入节点开始编排工作流。')}</p>}</Panel>
         {draft.id && <Panel><SectionTitle title={t('最近运行')} />{currentRun ? <div className={`activity-row ${currentRun.status}`}>{currentRun.status === 'running' ? <RefreshCw className="spin" size={15} /> : currentRun.status === 'completed' ? <CheckCircle2 size={15} /> : <AlertTriangle size={15} />}<span><strong>{t(currentRun.status === 'completed' ? currentRun.summary || '工作流已完成' : currentRun.status === 'running' ? currentRun.currentNodeLabel || '正在运行' : currentRun.error || '工作流执行失败')}</strong><small>{relativeTime(currentRun.startedAt, language)} · {durationLabel(currentRun.durationMs)}</small></span></div> : <p className="muted-copy">{t('暂无运行记录')}</p>}</Panel>}
       </div>
     </div>
   </div>
 }
 
-function WorkflowMiniMap({ nodes = [] }) {
+function WorkflowMiniMap({ nodes = [], edges = [] }) {
   const { t } = useI18n()
   const visible = nodes.slice(0, 5)
   if (!visible.length) return <div className="channel-route-empty compact"><strong>{t('还没有自定义工作流')}</strong></div>
-  return <div className="workflow-mini-map"><svg viewBox="0 0 520 170"><path d="M90 85 H190 M250 85 H330 M390 85 H460 M220 110 V142 H330" /></svg>{visible.map((item, index) => <span className={`mini-node mn-${index}`} key={item.id}><small>{t(NODE_TYPES[item.kind] || '任务')}</small><strong>{item.label}</strong></span>)}</div>
+  const positions = [{ x: 16, y: 48 }, { x: 145, y: 48 }, { x: 292, y: 48 }, { x: 426, y: 48 }, { x: 220, y: 108 }]
+  const indexes = new Map(visible.map((item, index) => [item.id, index]))
+  const paths = edges.map((edge) => {
+    const sourceIndex = indexes.get(edge.source)
+    const targetIndex = indexes.get(edge.target)
+    if (sourceIndex === undefined || targetIndex === undefined) return null
+    const source = positions[sourceIndex]
+    const target = positions[targetIndex]
+    return { id: edge.id, path: `M${source.x + 74} ${source.y + 20} C${source.x + 98} ${source.y + 20},${target.x - 24} ${target.y + 20},${target.x} ${target.y + 20}` }
+  }).filter(Boolean)
+  return <div className="workflow-mini-map"><svg viewBox="0 0 520 170">{paths.map((edge) => <path d={edge.path} key={edge.id} />)}</svg>{visible.map((item, index) => <span className="mini-node" style={{ left: positions[index].x, top: positions[index].y }} key={item.id}><small>{t(NODE_TYPES[item.kind] || '任务')}</small><strong>{item.label}</strong></span>)}</div>
 }

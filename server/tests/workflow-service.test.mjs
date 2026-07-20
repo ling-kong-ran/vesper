@@ -53,8 +53,80 @@ test('workflows persist and execute Agent nodes in order with completion notific
   const restored = new WorkflowService({ path: join(directory, 'workflows.json'), cwd: directory, agent: service.agent, notifications: service.notifications })
   await restored.init()
   assert.equal(restored.getState().workflows[0].name, '发布检查')
+  assert.equal(restored.getState().workflows[0].edges.length, 3)
   await service.dispose()
   await restored.dispose()
+  await rm(directory, { recursive: true, force: true })
+})
+
+test('workflow edges determine execution order independently from canvas node order', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-workflow-graph-'))
+  const prompts = []
+  const service = new WorkflowService({
+    path: join(directory, 'workflows.json'), cwd: directory,
+    agent: {
+      validateDirectory: async (value) => value,
+      abort: async () => true,
+      prompt: async (input) => {
+        prompts.push(input)
+        input.onSession?.('graph-session')
+        return { sessionId: 'graph-session', text: input.message.includes('第一步') ? 'first' : 'second', assets: [] }
+      },
+    },
+    notifications: { notify: async () => {} },
+  })
+  await service.init()
+  const workflow = await service.create({
+    name: '图顺序', status: 'published',
+    nodes: [
+      { id: 'second', kind: 'prompt', label: '第二步', prompt: '第二步' },
+      { id: 'trigger', kind: 'trigger', label: '触发器' },
+      { id: 'first', kind: 'prompt', label: '第一步', prompt: '第一步' },
+    ],
+    edges: [
+      { id: 'edge-a', source: 'trigger', target: 'first' },
+      { id: 'edge-b', source: 'first', target: 'second' },
+    ],
+  })
+  const run = await service.runNow(workflow.id)
+  await waitFor(() => service.getState().runs.find((item) => item.id === run.id)?.status === 'completed')
+  assert.match(prompts[0].message, /第一步/)
+  assert.match(prompts[1].message, /第二步/)
+  assert.match(prompts[1].message, /第一步：first/)
+  assert.equal(prompts[1].sessionId, 'graph-session')
+  await service.dispose()
+  await rm(directory, { recursive: true, force: true })
+})
+
+test('published workflows reject cycles and disconnected nodes', async () => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-workflow-invalid-'))
+  const service = new WorkflowService({
+    path: join(directory, 'workflows.json'), cwd: directory,
+    agent: { validateDirectory: async (value) => value, abort: async () => true, prompt: async () => ({ text: '' }) },
+    notifications: { notify: async () => {} },
+  })
+  await service.init()
+  await assert.rejects(() => service.create({
+    name: '循环图', status: 'published',
+    nodes: [
+      { id: 'a', kind: 'prompt', label: 'A', prompt: 'A' },
+      { id: 'b', kind: 'prompt', label: 'B', prompt: 'B' },
+    ],
+    edges: [
+      { id: 'a-b', source: 'a', target: 'b' },
+      { id: 'b-a', source: 'b', target: 'a' },
+    ],
+  }), /循环连接/)
+  await assert.rejects(() => service.create({
+    name: '断开图', status: 'published',
+    nodes: [
+      { id: 'trigger', kind: 'trigger', label: '触发器' },
+      { id: 'a', kind: 'prompt', label: 'A', prompt: 'A' },
+      { id: 'b', kind: 'prompt', label: 'B', prompt: 'B' },
+    ],
+    edges: [{ id: 'trigger-a', source: 'trigger', target: 'a' }],
+  }), /尚未连接/)
+  await service.dispose()
   await rm(directory, { recursive: true, force: true })
 })
 
