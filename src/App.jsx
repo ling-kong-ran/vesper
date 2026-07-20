@@ -60,8 +60,8 @@ const SchedulesPage = lazy(() => import('./features/schedules/SchedulesPage.jsx'
 const AssetsPage = lazy(() => import('./features/assets/AssetsPage.jsx').then((module) => ({ default: module.AssetsPage })))
 const McpPage = lazy(() => import('./features/workflows/PreviewPages.jsx').then((module) => ({ default: module.McpPage })))
 const SkillsPage = lazy(() => import('./features/workflows/PreviewPages.jsx').then((module) => ({ default: module.SkillsPage })))
-const WorkflowsPage = lazy(() => import('./features/workflows/PreviewPages.jsx').then((module) => ({ default: module.WorkflowsPage })))
-const WorkflowBuilder = lazy(() => import('./features/workflows/PreviewPages.jsx').then((module) => ({ default: module.WorkflowBuilder })))
+const WorkflowsPage = lazy(() => import('./features/workflows/WorkflowsPage.jsx').then((module) => ({ default: module.WorkflowsPage })))
+const WorkflowBuilder = lazy(() => import('./features/workflows/WorkflowsPage.jsx').then((module) => ({ default: module.WorkflowBuilder })))
 const LazyMarkdownMessage = lazy(() => import('./components/MarkdownMessage.jsx'))
 
 const EMPTY_LIST = []
@@ -135,6 +135,7 @@ function App() {
   const [pluginStats, setPluginStats] = useState(null)
   const [startupReady, setStartupReady] = useState(false)
   const [notificationSettings, setNotificationSettings] = useState({ browser: { enabled: false }, templates: [] })
+  const [workflowActions, setWorkflowActions] = useState(null)
   const browserEventCursor = useRef('')
   const [primaryActions] = useState(createPrimaryActionRegistry)
   const searchInputRef = useRef(null)
@@ -206,6 +207,11 @@ function App() {
     primaryActions.invoke()
   }, [primaryActions])
 
+  const registerWorkflowActions = useCallback((actions) => {
+    setWorkflowActions(actions)
+    return () => setWorkflowActions((current) => current === actions ? null : current)
+  }, [])
+
   const navigate = useCallback((next, options) => {
     if (!PAGE_IDS.has(next)) return
     routerNavigate(pagePath(next), options)
@@ -215,12 +221,11 @@ function App() {
 
   const handlePrimary = useCallback(() => {
     if (page === 'config' && configSection !== 'models') return
-    if (['chat', 'config', 'assets', 'plugins', 'channels', 'schedules', 'memory', 'mcp', 'skills'].includes(page)) invokePrimaryAction()
+    if (['chat', 'config', 'assets', 'plugins', 'channels', 'schedules', 'memory', 'mcp', 'skills', 'workflowCreate'].includes(page)) invokePrimaryAction()
     else if (page === 'chatHistory') { navigate('chat'); invokePrimaryAction() }
     else if (page === 'workflows') navigate('workflowCreate')
-    else if (page === 'workflowCreate') notify(t('工作流运行时尚未接入，当前不会真实发布'), 'info')
     else setModal(page)
-  }, [configSection, invokePrimaryAction, navigate, notify, page, t])
+  }, [configSection, invokePrimaryAction, navigate, page])
 
   useEffect(() => {
     const focusSearch = () => {
@@ -311,10 +316,10 @@ function App() {
             configSection={configSection}
             onMenu={() => setMobileNav(true)}
             onPrimary={handlePrimary}
-            notify={notify}
             searchInputRef={searchInputRef}
             theme={theme}
             onCycleTheme={cycleTheme}
+            workflowActions={workflowActions}
           />
           <div className={`page-content page-${page}`} key={page}>
             <Routes>
@@ -328,8 +333,9 @@ function App() {
               <Route path={PAGE_PATHS.memory} element={<Suspense fallback={<PageLoader />}><MemoryPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>} />
               <Route path={PAGE_PATHS.mcp} element={<Suspense fallback={<PageLoader />}><McpPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestText={appDialog.prompt} requestConfirm={appDialog.confirm} /></Suspense>} />
               <Route path={PAGE_PATHS.skills} element={<Suspense fallback={<PageLoader />}><SkillsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestText={appDialog.prompt} requestConfirm={appDialog.confirm} /></Suspense>} />
-              <Route path={PAGE_PATHS.workflows} element={<Suspense fallback={<PageLoader />}><WorkflowsPage navigate={navigate} notify={notify} /></Suspense>} />
-              <Route path={PAGE_PATHS.workflowCreate} element={<Suspense fallback={<PageLoader />}><WorkflowBuilder notify={notify} /></Suspense>} />
+              <Route path={PAGE_PATHS.workflows} element={<Suspense fallback={<PageLoader />}><WorkflowsPage query={query} notify={notify} requestConfirm={appDialog.confirm} /></Suspense>} />
+              <Route path={PAGE_PATHS.workflowCreate} element={<Suspense fallback={<PageLoader />}><WorkflowBuilder notify={notify} registerPrimaryAction={registerPrimaryAction} registerWorkflowActions={registerWorkflowActions} /></Suspense>} />
+              <Route path="/workflows/:workflowId" element={<Suspense fallback={<PageLoader />}><WorkflowBuilder notify={notify} registerPrimaryAction={registerPrimaryAction} registerWorkflowActions={registerWorkflowActions} /></Suspense>} />
               <Route path="*" element={<Navigate to={PAGE_PATHS.chat} replace />} />
             </Routes>
           </div>
@@ -440,14 +446,14 @@ function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, plugi
         </div>
         <div className="sidebar-status">
           <span>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? t('功能状态') : page === 'plugins' ? t('插件状态') : t('运行状态')}</span>
-          <b>{['skills', 'mcp'].includes(page) ? <>{t('原生运行时')} <em>{t('已接入')}</em></> : ['workflows', 'workflowCreate'].includes(page) ? <>{t('演示页面')} <em className="amber">{t('尚未接入')}</em></> : page === 'plugins' ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' }) : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</b>
+          <b>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? <>{t('原生运行时')} <em>{t('已接入')}</em></> : page === 'plugins' ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' }) : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</b>
         </div>
       </aside>
     </>
   )
 }
 
-function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, notify, theme, onCycleTheme, searchInputRef }) {
+function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, theme, onCycleTheme, searchInputRef, workflowActions }) {
   const { t } = useI18n()
   const primary = page === 'config' && configSection !== 'models' ? null : ({
     chat: [t('新会话'), Plus], chatHistory: [t('新会话'), Plus], assets: [t('添加链接'), Link2], channels: [t('连接渠道'), Plus], schedules: [t('新建任务'), Plus],
@@ -467,8 +473,8 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
         {page === 'chat' && <Segmented options={[gridLabel, focusLabel]} value={chatMode === 'grid' ? gridLabel : focusLabel} onChange={(value) => setChatMode(value === gridLabel ? 'grid' : 'focus')} compact />}
         {page === 'workflowCreate' ? (
           <>
-            <button className="button secondary" onClick={() => notify(t('当前为演示编辑器，草稿不会持久化'), 'info')}><Save size={15} />{t('保存草稿')}</button>
-            <button className="button dark" onClick={() => notify(t('工作流运行时尚未接入，无法试运行'), 'info')}><Play size={15} />{t('试运行')}</button>
+            <button className="button secondary" disabled={!workflowActions || workflowActions.busy || workflowActions.running} onClick={() => workflowActions?.save()}><Save size={15} />{t('保存草稿')}</button>
+            <button className="button dark" disabled={!workflowActions || workflowActions.busy} onClick={() => workflowActions?.run()}>{workflowActions?.running ? <Square size={15} /> : <Play size={15} />}{t(workflowActions?.running ? '停止' : '试运行')}</button>
           </>
         ) : page === 'chat' && chatMode === 'focus' ? null : (
           <label className="search-box" title={t('搜索（Ctrl/⌘ K 或 /）')}><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? t('搜索平铺会话') : page === 'mcp' ? t('搜索服务或工具') : page === 'memory' ? t('搜索星辰或文件') : t('搜索{page}', { page: meta[0] })} /></label>

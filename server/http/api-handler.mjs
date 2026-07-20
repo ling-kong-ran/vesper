@@ -66,6 +66,41 @@ export function createApiHandler(runtime) {
         else json(res, 200, { deleted: true })
         return true
       }
+      if (req.method === 'GET' && url.pathname === '/api/workflows') {
+        json(res, 200, await runtime.getWorkflows())
+        return true
+      }
+      if (req.method === 'POST' && url.pathname === '/api/workflows') {
+        json(res, 201, await runtime.createWorkflow(await bodyJson(req)))
+        return true
+      }
+      const workflowRunStopMatch = url.pathname.match(/^\/api\/workflows\/runs\/([^/]+)\/stop$/)
+      if (req.method === 'POST' && workflowRunStopMatch) {
+        const result = await runtime.stopWorkflowRun(decodeURIComponent(workflowRunStopMatch[1]))
+        if (!result) json(res, 404, { error: '工作流运行不存在或已经结束。' })
+        else json(res, 202, result)
+        return true
+      }
+      const workflowRunMatch = url.pathname.match(/^\/api\/workflows\/([^/]+)\/run$/)
+      if (req.method === 'POST' && workflowRunMatch) {
+        const result = await runtime.runWorkflow(decodeURIComponent(workflowRunMatch[1]))
+        if (!result) json(res, 404, { error: '工作流不存在。' })
+        else json(res, 202, result)
+        return true
+      }
+      const workflowMatch = url.pathname.match(/^\/api\/workflows\/([^/]+)$/)
+      if (req.method === 'PATCH' && workflowMatch) {
+        const result = await runtime.updateWorkflow(decodeURIComponent(workflowMatch[1]), await bodyJson(req))
+        if (!result) json(res, 404, { error: '工作流不存在。' })
+        else json(res, 200, result)
+        return true
+      }
+      if (req.method === 'DELETE' && workflowMatch) {
+        const deleted = await runtime.deleteWorkflow(decodeURIComponent(workflowMatch[1]))
+        if (!deleted) json(res, 404, { error: '工作流不存在。' })
+        else json(res, 200, { deleted: true })
+        return true
+      }
       if (req.method === 'GET' && url.pathname === '/api/directories') {
         json(res, 200, await runtime.listDirectories(url.searchParams.get('path')))
         return true

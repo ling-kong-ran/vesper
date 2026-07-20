@@ -23,7 +23,12 @@ export function pagePath(page) {
 
 export function pageFromPath(pathname) {
   const normalized = pathname.length > 1 ? pathname.replace(/\/+$/, '') : pathname
+  if (/^\/workflows\/[^/]+$/.test(normalized)) return 'workflowCreate'
   return PATH_PAGES.get(normalized) || null
+}
+
+export function workflowPath(id = 'new') {
+  return `/workflows/${encodeURIComponent(id || 'new')}`
 }
 
 export function legacyHashPath(hash) {

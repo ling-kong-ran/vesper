@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
-import { Bell, Bot, ChevronDown, ChevronRight, CircleDot, Clock3, Code2, Copy, File, FileCode2, GitBranch, Grid2X2, Image, MessageSquare, Network, Package, Pencil, Plus, RefreshCw, Rocket, Save, Search, Send, Server, ShieldCheck, Sparkles, Square, Trash2, Wrench, Zap } from 'lucide-react'
+import { useCallback, useEffect, useState } from 'react'
+import { CircleDot, FileCode2, Image, Package, RefreshCw, Save, Server, Sparkles, Trash2, Wrench } from 'lucide-react'
 import { useI18n } from '../../app/use-i18n.js'
-import { Badge, InputLabel, Metric, Panel, PreviewNotice, SectionTitle, Segmented, SelectLabel, Toggle } from '../../components/ui.jsx'
+import { Badge, Metric, Panel, SectionTitle, Segmented, Toggle } from '../../components/ui.jsx'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
 import { apiJson } from '../../lib/api.js'
 import { relativeTime } from '../../lib/format.js'
@@ -335,72 +335,4 @@ export function SkillsPage({ notify, query = '', registerPrimaryAction, requestT
       </div>
     </div>
   </div>
-}
-
-export function WorkflowsPage({ navigate, notify }) {
-  const { t } = useI18n()
-  const filters = ['全部', '预设', '自定义', '运行中', '失败', '草稿']
-  const templates = [
-    ['代码审查', '读取 diff → 运行测试 → 生成 review', Code2], ['PR 修复', '定位失败 → 修改代码 → 回归测试', GitBranch],
-    ['资料调研', '搜索资料 → 提取引用 → 点亮星忆', Search], ['日报周报', '汇总会话 → 生成摘要 → 渠道通知', File],
-    ['资产生成', '生成图片 → 存入资产库 → 通知验收', Image], ['发布准备', '版本检查 → changelog → 创建发布单', Rocket],
-  ]
-  const runs = [
-    ['PR 修复 #284', '回归测试', 72, 'blue'], ['资料调研：MCP Auth', '整理引用', 46, 'violet'],
-    ['资产生成：活动页', '等待验收', 88, 'green'], ['发布准备 v2.8', '生成 changelog', 31, 'amber'],
-  ]
-
-  return <div className="workflows-page">
-    <PreviewNotice>Workflows 页面当前是产品原型，运行数、队列和进度均为演示数据。</PreviewNotice>
-    <Segmented options={filters.map(t)} value={t('全部')} onChange={() => {}} />
-    <div className="workflow-top">
-      <Panel><div className="card-head"><SectionTitle title={t('常见预设')} /><a>6 templates</a></div><div className="template-grid">{templates.map((template) => { const Icon = template[2]; return <button onClick={() => { navigate('workflowCreate'); notify(t('已载入「{name}」演示模板', { name: t(template[0]) }), 'info') }} key={template[0]}><span className="list-icon"><Icon size={15} /></span><span><strong>{t(template[0])}</strong><small>{t(template[1])}</small></span><ChevronRight size={14} /></button>})}</div></Panel>
-      <Panel className="workflow-preview"><div className="card-head"><SectionTitle title={t('自定义工作流')} /><button className="text-button" onClick={() => navigate('workflowCreate')}>{t('空白创建')}</button></div><WorkflowMiniMap /></Panel>
-    </div>
-    <div className="workflow-bottom">
-      <Panel><div className="card-head"><SectionTitle title={t('并行运行')} /><a>3 running · 5 queued</a></div>{runs.map((run) => <div className="run-row" key={run[0]}><span><strong>{t(run[0])}</strong><small>{t(run[1])}</small></span><div className="run-progress"><i className={run[3]} style={{ width: `${run[2]}%` }} /></div><em>{run[2]}%</em><button onClick={() => notify(t('演示任务没有真实运行实例'), 'info')}><Square size={12} />{t('停止')}</button></div>)}</Panel>
-      <Panel><SectionTitle title={t('队列与限制')} />{[[t('最大并发'), '4', t('当前 3 个运行')], [t('失败重试'), t('2 次'), t('指数退避')], [t('默认模型'), 'GPT-5-Codex', t('可按步骤覆盖')], [t('完成推送'), t('已启用'), t('工作流结束后发送模板消息')]].map((row) => <div className="setting-row" key={row[0]}><span><strong>{row[0]}</strong><small>{row[2]}</small></span><button>{row[1]} <ChevronDown size={12} /></button></div>)}</Panel>
-    </div>
-  </div>
-}
-
-export function WorkflowBuilder({ notify }) {
-  const { t } = useI18n()
-  const canvasRef = useRef(null)
-  const [nodes, setNodes] = useState([
-    { id: 1, label: 'Git push', type: '触发器', x: 65, y: 45 }, { id: 2, label: '读取 diff', type: '任务', x: 235, y: 45 },
-    { id: 3, label: '是否需要测试', type: '判断', x: 405, y: 45 }, { id: 4, label: '测试 + lint', type: '并行', x: 235, y: 160 },
-    { id: 5, label: '生成修复计划', type: '任务', x: 405, y: 160 }, { id: 6, label: '修改代码', type: '任务', x: 235, y: 280 },
-    { id: 7, label: '人工确认', type: '审批', x: 405, y: 280 }, { id: 8, label: '发送结果', type: '通知', x: 320, y: 385 },
-  ])
-  const [selected, setSelected] = useState(6)
-  const palette = [['Git Push', Zap], ['定时', Clock3], ['手动输入', Pencil], ['运行 Prompt', Bot], ['读写文件', FileCode2], ['调用 MCP', Server], ['发送通知', Bell], ['条件判断', GitBranch], ['并行分支', Network], ['等待审批', ShieldCheck]]
-  const drop = (event) => {
-    event.preventDefault()
-    const data = JSON.parse(event.dataTransfer.getData('text/plain') || '{}')
-    const box = canvasRef.current.getBoundingClientRect()
-    const x = Math.max(10, event.clientX - box.left - 60)
-    const y = Math.max(10, event.clientY - box.top - 25)
-    if (data.id) setNodes(nodes.map((node) => node.id === data.id ? { ...node, x, y } : node))
-    else if (data.label) { const id = Date.now(); setNodes([...nodes, { id, label: data.label, type: '节点', x, y }]); setSelected(id) }
-  }
-  const current = nodes.find((node) => node.id === selected) || nodes[0]
-
-  return <div className="preview-page">
-    <PreviewNotice>工作流编辑器当前仅用于交互预览，发布和试运行不会启动真实工作流。</PreviewNotice>
-    <div className="builder-layout">
-      <Panel className="node-library"><SectionTitle title={t('节点库')} />{palette.map(([label, Icon], index) => <div key={label}><small>{[0, 3, 7].includes(index) ? t(['触发', '动作', '控制'][[0, 3, 7].indexOf(index)]) : ''}</small><button draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', JSON.stringify({ label }))}><Icon size={15} />{t(label)}<span>{t('拖拽')}</span></button></div>)}</Panel>
-      <Panel className="builder-canvas" ref={canvasRef} onDragOver={(event) => event.preventDefault()} onDrop={drop}><div className="canvas-tools"><button><Plus size={14} /></button><button>−</button><button><Grid2X2 size={13} /></button></div><svg viewBox="0 0 620 520"><path d="M125 70 H235 M355 70 H405 M465 95 L465 160 M405 185 H355 M295 210 V280 M355 305 H405 M465 330 L380 385 M295 330 L320 385" /></svg>{nodes.map((node) => <button draggable onDragStart={(event) => event.dataTransfer.setData('text/plain', JSON.stringify({ id: node.id }))} onClick={() => setSelected(node.id)} className={`flow-node ${selected === node.id ? 'active' : ''} type-${node.type}`} style={{ left: node.x, top: node.y }} key={node.id}><small>{t(node.type)}</small><strong>{t(node.label)}</strong></button>)}</Panel>
-      <div className="detail-stack inspector">
-        <Panel><SectionTitle title={t('完成后通知')} /><div className="toggle-line"><span><MessageSquare size={15} />{t('微信研发群')}</span><Toggle defaultOn /></div><div className="toggle-line"><span><Send size={15} />{t('飞书 On-call')}</span><Toggle defaultOn /></div><label className="field-label">{t('模板')}<textarea defaultValue={t('{{workflow.name}} 已完成，耗时 {{duration}}，产物 {{asset.count}} 个。')} /></label></Panel>
-        <Panel><SectionTitle title={t('选中节点')} /><h2>{t(current.label)}</h2><p className="muted-copy">{t('配置该步骤使用的模型、插件权限、输入输出和失败处理。')}</p><SelectLabel label={t('模型')} options={['GPT-5-Codex', 'GPT-5', 'DeepSeek']} /><InputLabel label={t('插件')} value="Read, Write, Grep" /><InputLabel label={t('超时')} value={t('20 分钟')} /><SelectLabel label={t('失败处理')} options={[t('重试 2 次'), t('立即停止'), t('跳过')]} /><label className="field-label">Prompt<textarea defaultValue={t('根据测试结果和 diff 修改代码，保留用户已有改动，不执行破坏性命令。')} /></label><div className="button-row"><button className="button secondary" onClick={() => { const id = Date.now(); setNodes([...nodes, { ...current, id, x: current.x + 25, y: current.y + 25 }]); notify(t('节点已复制'), 'info') }}><Copy size={14} />{t('复制节点')}</button><button className="button danger" onClick={() => { setNodes(nodes.filter((node) => node.id !== selected)); setSelected(nodes[0]?.id); notify(t('节点已删除'), 'info') }}><Trash2 size={14} />{t('删除节点')}</button></div></Panel>
-      </div>
-    </div>
-  </div>
-}
-
-function WorkflowMiniMap() {
-  const { t } = useI18n()
-  const nodes = [['触发器', 'Git push'], ['任务', '运行测试'], ['判断', '测试通过?'], ['任务', '生成报告'], ['通知', '飞书 + 微信']]
-  return <div className="workflow-mini-map"><svg viewBox="0 0 520 170"><path d="M90 85 H190 M250 85 H330 M390 85 H460 M220 110 V142 H330" /></svg>{nodes.map((node, index) => <span className={`mini-node mn-${index}`} key={node[1]}><small>{t(node[0])}</small><strong>{t(node[1])}</strong></span>)}</div>
 }

@@ -14,6 +14,7 @@ import { NotificationSettingsService } from '../services/notification-settings-s
 import { McpService } from '../services/mcp-service.mjs'
 import { migrateKimiCodeProvider } from '../services/provider-migrations.mjs'
 import { ScheduleService } from '../services/schedule-service.mjs'
+import { WorkflowService } from '../services/workflow-service.mjs'
 import { SkillsService } from '../services/skills-service.mjs'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, SessionPermissionService } from '../services/session-permission-service.mjs'
 import { ToolPluginService } from '../services/tool-plugin-service.mjs'
@@ -265,6 +266,16 @@ export class AgentRuntimeService {
       },
       notifications: this.notificationSettings,
     })
+    this.workflows = new WorkflowService({
+      path: join(dataDir, 'vesper-workflows.json'),
+      cwd,
+      agent: {
+        prompt: (input) => this.promptFromChannel({ sessionId: '', ...input }),
+        abort: (sessionId) => this.abortSession(sessionId),
+        validateDirectory: (input) => resolveDirectory(input, this.cwd),
+      },
+      notifications: this.notificationSettings,
+    })
     this.sessions = new Map()
     this.sessionRuntimeVersion = 0
     this.liveSessions = new Map()
@@ -316,6 +327,7 @@ export class AgentRuntimeService {
     await this.goals.init({ pauseActive: true })
     await this.channels.init()
     await this.schedules.init()
+    await this.workflows.init()
   }
 
   async reloadModelRuntime() {
@@ -1351,7 +1363,7 @@ export class AgentRuntimeService {
     return this.toolPlugins.getState()
   }
 
-  async promptFromChannel({ sessionId, message, attachments = [], cwd, title, model }) {
+  async promptFromChannel({ sessionId, message, attachments = [], cwd, title, model, onSession }) {
     let id = String(sessionId || '')
     if (id && !this.sessions.has(id) && !(await this.findSessionInfo(id))) id = ''
     if (!id) {
@@ -1363,6 +1375,7 @@ export class AgentRuntimeService {
       const active = await this.getOrCreateSession(id)
       if (active.session.model?.provider !== model.provider || active.session.model?.id !== model.model) await this.setSessionModel(id, model.provider, model.model)
     }
+    onSession?.(id)
     let actualId = id
     let text = ''
     const assetIds = new Set()
@@ -1488,11 +1501,51 @@ export class AgentRuntimeService {
     return task ? { started: true, task } : null
   }
 
+  async getWorkflows() {
+    const config = await this.getConfig()
+    const notificationSettings = await this.notificationSettings.getState()
+    return {
+      ...this.workflows.getState(),
+      cwd: this.cwd,
+      models: config.providers.filter((provider) => provider.enabled && provider.configured).flatMap((provider) => provider.models.filter((model) => model.kind === 'chat').map((model) => ({ provider: provider.id, model: model.id, label: `${provider.name} / ${model.name}` }))),
+      notificationTargets: {
+        browser: { enabled: notificationSettings.browser.enabled },
+        feishu: { enabled: Boolean(notificationSettings.connections.feishu?.enabled) },
+        weixin: { enabled: Boolean(notificationSettings.connections.weixin?.enabled) },
+      },
+    }
+  }
+
+  async createWorkflow(input) {
+    const workflow = await this.workflows.create(input)
+    return { workflow, state: await this.getWorkflows() }
+  }
+
+  async updateWorkflow(id, input) {
+    const workflow = await this.workflows.update(id, input)
+    return workflow ? { workflow, state: await this.getWorkflows() } : null
+  }
+
+  deleteWorkflow(id) {
+    return this.workflows.remove(id)
+  }
+
+  async runWorkflow(id) {
+    const run = await this.workflows.runNow(id)
+    return run ? { started: true, run } : null
+  }
+
+  async stopWorkflowRun(id) {
+    const run = await this.workflows.stop(id)
+    return run ? { stopping: true, run } : null
+  }
+
   notifyChannels(event, data) {
     return this.notificationSettings.notify(event, data)
   }
 
   async dispose() {
+    await this.workflows.dispose()
     await this.schedules.dispose()
     await this.channels.dispose()
     await this.goals.pauseAllActive()
