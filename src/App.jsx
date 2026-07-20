@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import {
   AlertTriangle,
   ArrowDown,
@@ -33,8 +34,9 @@ import {
 import { APP_NAME } from './app/brand.js'
 import { createPrimaryActionRegistry } from './app/primary-action.js'
 import { STORAGE_KEYS } from './app/storage.js'
-import { getNavigation, getPageMeta, PAGE_IDS } from './app/navigation.jsx'
-import { useI18n } from './app/i18n.jsx'
+import { getNavigation, getPageMeta } from './app/navigation.jsx'
+import { PAGE_IDS, PAGE_PATHS, pageFromPath, pagePath } from './app/routes.js'
+import { useI18n } from './app/use-i18n.js'
 import { AgentStatusAvatar } from './components/AgentStatusAvatar.jsx'
 import { BrandLogo } from './components/BrandLogo.jsx'
 import { StarOrbit } from './components/StarOrbit.jsx'
@@ -118,10 +120,11 @@ function isEditableTarget(target) {
 
 function App() {
   const { t } = useI18n()
+  const location = useLocation()
+  const routerNavigate = useNavigate()
   const navigation = useMemo(() => getNavigation(t), [t])
   const pageMeta = useMemo(() => getPageMeta(t), [t])
-  const initialPage = window.location.hash.slice(1)
-  const [page, setPage] = useState(PAGE_IDS.has(initialPage) ? initialPage : 'chat')
+  const page = pageFromPath(location.pathname) || 'chat'
   const [chatMode, setChatModeState] = useState(() => localStorage.getItem(STORAGE_KEYS.chatMode) || 'focus')
   const [query, setQuery] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
@@ -203,12 +206,12 @@ function App() {
     primaryActions.invoke()
   }, [primaryActions])
 
-  const navigate = useCallback((next) => {
-    setPage(next)
-    window.location.hash = next
+  const navigate = useCallback((next, options) => {
+    if (!PAGE_IDS.has(next)) return
+    routerNavigate(pagePath(next), options)
     setQuery('')
     setMobileNav(false)
-  }, [])
+  }, [routerNavigate])
 
   const handlePrimary = useCallback(() => {
     if (page === 'config' && configSection !== 'models') return
@@ -254,25 +257,13 @@ function App() {
         if (!hasUsableProvider(config)) {
           primaryActions.clear()
           primaryActions.invoke()
-          setPage('config')
-          window.location.hash = 'config'
+          navigate('config', { replace: true })
         }
       })
       .catch(() => {})
       .finally(() => active && setStartupReady(true))
     return () => { active = false }
-  }, [primaryActions])
-
-  useEffect(() => {
-    const syncHash = () => {
-      const next = window.location.hash.slice(1)
-      if (PAGE_IDS.has(next)) {
-        setPage(next)
-      }
-    }
-    window.addEventListener('hashchange', syncHash)
-    return () => window.removeEventListener('hashchange', syncHash)
-  }, [])
+  }, [navigate, primaryActions])
 
   useEffect(() => {
     refreshPluginStats()
@@ -326,18 +317,21 @@ function App() {
             onCycleTheme={cycleTheme}
           />
           <div className={`page-content page-${page}`} key={page}>
-            {page === 'chat' && <ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} registerPrimaryAction={registerPrimaryAction} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestText={appDialog.prompt} />}
-            {page === 'chatHistory' && <ChatHistoryPage query={query} navigate={navigate} setChatMode={setChatMode} notify={notify} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />}
-            {page === 'assets' && <Suspense fallback={<PageLoader />}><AssetsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} /></Suspense>}
-            {page === 'channels' && <Suspense fallback={<PageLoader />}><ChannelsPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>}
-            {page === 'schedules' && <Suspense fallback={<PageLoader />}><SchedulesPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} openNotificationSettings={() => { setConfigSection('notifications'); navigate('config') }} /></Suspense>}
-            {page === 'config' && <Suspense fallback={<PageLoader />}><ConfigPage notify={notify} registerPrimaryAction={registerPrimaryAction} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} requestConfirm={appDialog.confirm} /></Suspense>}
-            {page === 'plugins' && <Suspense fallback={<PageLoader />}><PluginsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} onStatusChange={setPluginStats} /></Suspense>}
-            {page === 'memory' && <Suspense fallback={<PageLoader />}><MemoryPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>}
-            {page === 'mcp' && <Suspense fallback={<PageLoader />}><McpPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestText={appDialog.prompt} requestConfirm={appDialog.confirm} /></Suspense>}
-            {page === 'skills' && <Suspense fallback={<PageLoader />}><SkillsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestText={appDialog.prompt} requestConfirm={appDialog.confirm} /></Suspense>}
-            {page === 'workflows' && <Suspense fallback={<PageLoader />}><WorkflowsPage navigate={navigate} notify={notify} /></Suspense>}
-            {page === 'workflowCreate' && <Suspense fallback={<PageLoader />}><WorkflowBuilder notify={notify} /></Suspense>}
+            <Routes>
+              <Route path={PAGE_PATHS.chat} element={<ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} registerPrimaryAction={registerPrimaryAction} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestText={appDialog.prompt} />} />
+              <Route path={PAGE_PATHS.chatHistory} element={<ChatHistoryPage query={query} navigate={navigate} setChatMode={setChatMode} notify={notify} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />} />
+              <Route path={PAGE_PATHS.assets} element={<Suspense fallback={<PageLoader />}><AssetsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} /></Suspense>} />
+              <Route path={PAGE_PATHS.channels} element={<Suspense fallback={<PageLoader />}><ChannelsPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>} />
+              <Route path={PAGE_PATHS.schedules} element={<Suspense fallback={<PageLoader />}><SchedulesPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} openNotificationSettings={() => { setConfigSection('notifications'); navigate('config') }} /></Suspense>} />
+              <Route path={PAGE_PATHS.config} element={<Suspense fallback={<PageLoader />}><ConfigPage notify={notify} registerPrimaryAction={registerPrimaryAction} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} requestConfirm={appDialog.confirm} /></Suspense>} />
+              <Route path={PAGE_PATHS.plugins} element={<Suspense fallback={<PageLoader />}><PluginsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} onStatusChange={setPluginStats} /></Suspense>} />
+              <Route path={PAGE_PATHS.memory} element={<Suspense fallback={<PageLoader />}><MemoryPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>} />
+              <Route path={PAGE_PATHS.mcp} element={<Suspense fallback={<PageLoader />}><McpPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestText={appDialog.prompt} requestConfirm={appDialog.confirm} /></Suspense>} />
+              <Route path={PAGE_PATHS.skills} element={<Suspense fallback={<PageLoader />}><SkillsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestText={appDialog.prompt} requestConfirm={appDialog.confirm} /></Suspense>} />
+              <Route path={PAGE_PATHS.workflows} element={<Suspense fallback={<PageLoader />}><WorkflowsPage navigate={navigate} notify={notify} /></Suspense>} />
+              <Route path={PAGE_PATHS.workflowCreate} element={<Suspense fallback={<PageLoader />}><WorkflowBuilder notify={notify} /></Suspense>} />
+              <Route path="*" element={<Navigate to={PAGE_PATHS.chat} replace />} />
+            </Routes>
           </div>
         </main>
       </div>

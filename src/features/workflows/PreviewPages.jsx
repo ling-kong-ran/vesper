@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Bell, Bot, ChevronDown, ChevronRight, CircleDot, Clock3, Code2, Copy, File, FileCode2, GitBranch, Grid2X2, Image, MessageSquare, Network, Package, Pencil, Plus, RefreshCw, Rocket, Save, Search, Send, Server, ShieldCheck, Sparkles, Square, Trash2, Wrench, Zap } from 'lucide-react'
-import { useI18n } from '../../app/i18n.jsx'
+import { useI18n } from '../../app/use-i18n.js'
 import { Badge, InputLabel, Metric, Panel, PreviewNotice, SectionTitle, Segmented, SelectLabel, Toggle } from '../../components/ui.jsx'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
 import { apiJson } from '../../lib/api.js'

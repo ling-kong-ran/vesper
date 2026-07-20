@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ChevronDown, ChevronRight, FileCode2, Pencil, Plus, RefreshCw, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { Panel, SectionTitle } from '../../components/ui.jsx'
-import { useI18n } from '../../app/i18n.jsx'
+import { useI18n } from '../../app/use-i18n.js'
 import { StarOrbit } from '../../components/StarOrbit.jsx'
 import { apiJson } from '../../lib/api.js'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'

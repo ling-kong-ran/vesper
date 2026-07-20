@@ -1,3 +1,5 @@
+import i18next from 'i18next'
+import { initReactI18next } from 'react-i18next'
 import { STORAGE_KEYS } from './storage.js'
 
 export const DEFAULT_LANGUAGE = 'zh-CN'
@@ -894,22 +896,15 @@ const EN_DYNAMIC_MESSAGES = [
   [/^(.+)成功$/, ([, action]) => `${EN_MESSAGES[action] || EN_EXTENDED_MESSAGES[action] || action} succeeded`],
 ]
 
-function interpolate(message, values) {
-  if (!values) return message
-  return message.replace(/\{(\w+)\}/g, (match, key) => values[key] == null ? match : String(values[key]))
-}
-
 export function translateText(message, language = DEFAULT_LANGUAGE, values) {
   if (typeof message !== 'string') return message
-  if (language !== 'en-US') return interpolate(message, values)
-  const exact = EN_MESSAGES[message] || EN_EXTENDED_MESSAGES[message]
-  if (exact) return interpolate(exact, values)
-  const interpolated = interpolate(message, values)
+  const translated = i18n.getFixedT(language)(message, values)
+  if (language !== 'en-US' || Object.hasOwn(EN_TRANSLATIONS, message)) return translated
   for (const [pattern, replace] of EN_DYNAMIC_MESSAGES) {
-    const match = interpolated.match(pattern)
+    const match = translated.match(pattern)
     if (match) return replace(match)
   }
-  return interpolated
+  return translated
 }
 
 export function storedLanguage() {
@@ -920,3 +915,25 @@ export function storedLanguage() {
     return DEFAULT_LANGUAGE
   }
 }
+
+const EN_TRANSLATIONS = Object.freeze({ ...EN_MESSAGES, ...EN_EXTENDED_MESSAGES })
+
+export const i18n = i18next.createInstance()
+
+void i18n.use(initReactI18next).init({
+  lng: storedLanguage(),
+  fallbackLng: DEFAULT_LANGUAGE,
+  supportedLngs: SUPPORTED_LANGUAGES,
+  resources: {
+    'zh-CN': { translation: {} },
+    'en-US': { translation: EN_TRANSLATIONS },
+  },
+  interpolation: {
+    prefix: '{',
+    suffix: '}',
+    escapeValue: false,
+  },
+  keySeparator: false,
+  nsSeparator: false,
+  initImmediate: false,
+})

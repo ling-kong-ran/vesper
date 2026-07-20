@@ -1,5 +1,5 @@
 import { useId, useState } from 'react'
-import { useI18n } from '../app/i18n.jsx'
+import { useI18n } from '../app/use-i18n.js'
 
 const STATE_LABELS = {
   idle: 'Vesper Agent',

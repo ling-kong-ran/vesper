@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ChevronDown, Eye, Info, X } from 'lucide-react'
-import { useI18n } from '../app/i18n.jsx'
+import { useI18n } from '../app/use-i18n.js'
 
 const BADGE_TONES = {
   blue: 'bg-[var(--brand-blue-soft)] text-[var(--brand-blue-strong)]',

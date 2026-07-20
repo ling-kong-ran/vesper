@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useI18n } from '../app/i18n.jsx'
+import { useI18n } from '../app/use-i18n.js'
 
 export function useAppDialog() {
   const { t } = useI18n()

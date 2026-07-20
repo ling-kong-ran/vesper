@@ -3,7 +3,7 @@ import { Check, Copy } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
-import { useI18n } from '../app/i18n.jsx'
+import { useI18n } from '../app/use-i18n.js'
 
 function textContent(value) {
   if (typeof value === 'string' || typeof value === 'number') return String(value)

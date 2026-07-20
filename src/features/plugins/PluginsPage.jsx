@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Bot, CircleDot, Eye, FileCode2, FolderOpen, Image, Pencil, Plug, RefreshCw, Save, Search, Server, ShieldCheck } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Segmented, Toggle } from '../../components/ui.jsx'
-import { useI18n } from '../../app/i18n.jsx'
+import { useI18n } from '../../app/use-i18n.js'
 import { apiJson } from '../../lib/api.js'
 import { relativeTime } from '../../lib/format.js'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'

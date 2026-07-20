@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Download, ExternalLink, Eye, File, FileImage, FileVideo, Link2, Paperclip, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { STORAGE_KEYS } from '../../app/storage.js'
-import { useI18n } from '../../app/i18n.jsx'
+import { useI18n } from '../../app/use-i18n.js'
 import { Panel, Segmented } from '../../components/ui.jsx'
 import { StarOrbit } from '../../components/StarOrbit.jsx'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'

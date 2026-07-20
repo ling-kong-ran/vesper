@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Check, ChevronRight, Grid2X2, History, MessageSquare, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { APP_NAME } from '../../app/brand.js'
-import { useI18n } from '../../app/i18n.jsx'
+import { useI18n } from '../../app/use-i18n.js'
 import { STORAGE_KEYS } from '../../app/storage.js'
 import { StarOrbit } from '../../components/StarOrbit.jsx'
 import { Panel } from '../../components/ui.jsx'

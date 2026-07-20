@@ -36,8 +36,6 @@ export const PAGE_META = {
   workflowCreate: ['新建工作流', '拖拽节点到画布，自定义 agent 执行流程'],
 }
 
-export const PAGE_IDS = new Set(Object.keys(PAGE_META))
-
 export function getNavigation(t = (value) => value) {
   return NAV_GROUPS.map(([group, items]) => [
     t(group),

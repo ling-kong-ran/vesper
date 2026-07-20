@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { AlertTriangle, Bell, BellOff, RefreshCw, Save, Send, ShieldCheck } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Toggle } from '../../components/ui.jsx'
 import { APP_NAME } from '../../app/brand.js'
-import { useI18n } from '../../app/i18n.jsx'
+import { useI18n } from '../../app/use-i18n.js'
 import { apiJson } from '../../lib/api.js'
 
 const CHANNELS = {

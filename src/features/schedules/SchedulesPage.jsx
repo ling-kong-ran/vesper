@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Bell, Bot, CheckCircle2, ChevronDown, MessageCircle, Play, Plus, RefreshCw, Trash2, X } from 'lucide-react'
 import { Badge, Panel, SectionTitle, Toggle } from '../../components/ui.jsx'
-import { useI18n } from '../../app/i18n.jsx'
+import { useI18n } from '../../app/use-i18n.js'
 import { StarOrbit } from '../../components/StarOrbit.jsx'
 import { apiJson } from '../../lib/api.js'
 import { relativeTime } from '../../lib/format.js'
