@@ -30,6 +30,11 @@ function normalizedKey(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
+function sensitiveKey(value) {
+  const key = normalizedKey(value)
+  return SENSITIVE_KEYS.has(key) || /(?:apikey|secret|password|passwd|authorization|credential|accesstoken|refreshtoken|authtoken|auth)$/.test(key)
+}
+
 export function redactSecretText(value) {
   return String(value ?? '')
     .replace(/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g, REDACTED_SECRET)
@@ -43,7 +48,7 @@ export function redactSecretText(value) {
 }
 
 export function redactSecretValue(value, key = '', seen = new WeakSet()) {
-  if (SENSITIVE_KEYS.has(normalizedKey(key))) return value == null ? value : REDACTED_SECRET
+  if (sensitiveKey(key)) return value == null ? value : REDACTED_SECRET
   if (typeof value === 'string') return redactSecretText(value)
   if (!value || typeof value !== 'object') return value
   if (seen.has(value)) return '[CIRCULAR]'

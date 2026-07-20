@@ -33,6 +33,8 @@ test('main and child Agent runtimes receive filtered Pi skills while MCP definit
   assert.ok(value.session.resourceLoader.getSkills().skills.some((skill) => skill.name === 'runtime-skill'))
   assert.ok(value.session.agent.state.systemPrompt.includes('runtime-skill'))
   assert.ok(value.session.getActiveToolNames().includes('mcp_fixture_echo_12345678'))
+  assert.ok(value.session.getActiveToolNames().includes('mcp_list'))
+  assert.ok(value.session.getActiveToolNames().includes('mcp_manage'))
   assert.ok(value.session.hasExtensionHandlers('tool_result'))
   assert.ok(value.session.hasExtensionHandlers('message_end'))
 

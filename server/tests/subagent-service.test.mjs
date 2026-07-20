@@ -109,7 +109,7 @@ test('read-focused subagents receive only read tools and return structured findi
   assert.equal(installed, session)
   assert.deepEqual(options.tools, ['read', 'grep', 'find', 'ls', 'memory_search'])
   assert.deepEqual(options.customTools, [{ name: 'memory_search' }])
-  assert.deepEqual(new Set(options.excludeTools), new Set(['delegate_task', 'get_goal', 'update_goal']))
+  assert.deepEqual(new Set(options.excludeTools), new Set(['delegate_task', 'get_goal', 'update_goal', 'mcp_list', 'mcp_manage']))
   assert.equal(options.sessionManager.kind, 'in-memory')
   assert.match(options.resourceLoader.rolePrompt, /scout subagent/i)
   assert.equal(session.agent.state.systemPrompt, 'Base system prompt')
@@ -380,4 +380,42 @@ test('delegate_task is registered and streams subagent progress through the tool
   assert.equal(updates[0].details.phase, 'running')
   assert.match(result.content[0].text, /Subagent Scout completed/)
   assert.match(result.content[0].text, /Found the relevant module/)
+})
+
+test('MCP management tools stay parent-only', async () => {
+  const seen = []
+  const service = new SubagentService({
+    getModelRuntime: () => ({}),
+    getSettingsManager: () => ({}),
+    createResourceLoader: async () => ({}),
+    createSessionManager: () => ({}),
+    createSession: async (options) => {
+      seen.push(options)
+      return {
+        session: {
+          subscribe: () => () => {},
+          prompt: async () => {},
+          messages: [{ role: 'assistant', content: [{ type: 'text', text: 'done' }] }],
+          abort: async () => {},
+          dispose: () => {},
+        },
+      }
+    },
+  })
+  await service.run({
+    parentSessionId: 'parent-mcp',
+    cwd: process.cwd(),
+    model: { provider: 'openai', id: 'gpt-5' },
+    role: 'worker',
+    task: 'Implement a bounded change.',
+    allowedTools: ['read', 'write', 'mcp_list', 'mcp_manage'],
+    customTools: [
+      { name: 'mcp_list' },
+      { name: 'mcp_manage' },
+    ],
+  })
+  assert.ok(!seen[0].tools.includes('mcp_list'))
+  assert.ok(!seen[0].tools.includes('mcp_manage'))
+  assert.ok(seen[0].excludeTools.includes('mcp_list'))
+  assert.ok(seen[0].excludeTools.includes('mcp_manage'))
 })

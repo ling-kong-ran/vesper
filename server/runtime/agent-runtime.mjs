@@ -310,6 +310,7 @@ export class AgentRuntimeService {
     await this.mcp.init()
     await this.toolPlugins.ensureDefaultTools(['memory_search', 'memory_remember'], 'memoryToolsV1')
     await this.toolPlugins.ensureDefaultTools(['delegate_task'], 'subagentToolsV1')
+    await this.toolPlugins.ensureDefaultTools(['mcp_list', 'mcp_manage'], 'mcpManagementToolsV1')
     await this.reloadModelRuntime()
     await this.memory.init()
     await this.goals.init({ pauseActive: true })
@@ -997,6 +998,14 @@ export class AgentRuntimeService {
           ? this.recordGeneratedFile(runtimeSession.sessionId, runtimeValue, path)
           : undefined,
         runSubagent,
+        mcpRuntime: {
+          list: (options) => this.getMcpDashboard(options),
+          add: (input) => this.createMcpServer(input),
+          update: (id, input) => this.updateMcpServer(id, input),
+          remove: (id) => this.deleteMcpServer(id),
+          test: (id, options) => this.mcp.test(id, options),
+          setToolEnabled: (id, toolName, nextEnabled) => this.setMcpToolEnabled(id, toolName, nextEnabled),
+        },
       }),
       ...mcpTools,
       ...(enabledTools.includes('bash') ? [createWindowsUtf8BashTool(effectiveCwd)].filter(Boolean) : []),

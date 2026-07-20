@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
-import { resolve } from 'node:path'
+import { stat } from 'node:fs/promises'
+import { isAbsolute, resolve } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { SSEClientTransport } from '@modelcontextprotocol/sdk/client/sse.js'
 import { StdioClientTransport, getDefaultEnvironment } from '@modelcontextprotocol/sdk/client/stdio.js'
@@ -53,6 +54,17 @@ function safeTimeout(value) {
   const number = Number(value)
   if (!Number.isFinite(number)) return DEFAULT_MCP_TIMEOUT_MS
   return Math.max(1_000, Math.min(MAX_MCP_TIMEOUT_MS, Math.round(number)))
+}
+
+function hasControlCharacters(value) {
+  return [...String(value || '')].some((character) => {
+    const code = character.charCodeAt(0)
+    return code <= 31 || code === 127
+  })
+}
+
+function pathLikeCommand(value) {
+  return isAbsolute(value) || /^[a-z]:[\\/]/i.test(value) || /[\\/]/.test(value)
 }
 
 function normalizeTool(tool) {
@@ -437,6 +449,31 @@ export class McpService {
     this.calls = this.state.calls
   }
 
+  async validateServer(server) {
+    if (server.transport !== 'stdio') return server
+    if (hasControlCharacters(server.command)) throw new Error('stdio MCP command contains invalid control characters. Use a structured command field without shell or JavaScript escaping.')
+    if ((server.args || []).some(hasControlCharacters)) throw new Error('stdio MCP args contain invalid control characters.')
+    if (Object.entries(server.env || {}).some(([key, value]) => hasControlCharacters(key) || hasControlCharacters(value))) {
+      throw new Error('stdio MCP environment variables contain invalid control characters.')
+    }
+
+    let workingDirectory = this.cwd
+    if (server.cwd) {
+      workingDirectory = resolve(this.cwd, server.cwd)
+      const cwdInfo = await stat(workingDirectory).catch(() => null)
+      if (!cwdInfo?.isDirectory()) throw new Error(`stdio MCP working directory does not exist: ${workingDirectory}`)
+      server.cwd = workingDirectory
+    }
+    if (!pathLikeCommand(server.command)) return server
+    const commandPath = isAbsolute(server.command) || /^[a-z]:[\\/]/i.test(server.command)
+      ? resolve(server.command)
+      : resolve(workingDirectory, server.command)
+    const commandInfo = await stat(commandPath).catch(() => null)
+    if (!commandInfo?.isFile()) throw new Error(`stdio MCP executable does not exist: ${commandPath}`)
+    server.command = commandPath
+    return server
+  }
+
   save() {
     const snapshot = clone(this.state)
     this.write = this.write.catch(() => {}).then(() => writeJsonAtomic(this.path, snapshot))
@@ -652,6 +689,7 @@ export class McpService {
   async add(input = {}) {
     if (this.state.servers.length >= MAX_MCP_SERVERS) throw new Error(`最多配置 ${MAX_MCP_SERVERS} 个 MCP 服务。`)
     const server = parseMcpServerInput(input, this.cwd)
+    await this.validateServer(server)
     if (this.state.servers.some((item) => item.name === server.name && formatEndpoint(item) === formatEndpoint(server))) {
       throw new Error('该 MCP 服务已存在。')
     }
@@ -666,6 +704,7 @@ export class McpService {
     if (index < 0) return null
     const previous = this.state.servers[index]
     const updated = normalizeServer(input, previous)
+    await this.validateServer(updated)
     this.state.servers[index] = updated
     await this.closeConnection(id)
     await this.save()

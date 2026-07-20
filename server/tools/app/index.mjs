@@ -1,13 +1,15 @@
 import { createVisualGenerateTool, manifest as visualGenerateManifest } from './visual-generate.mjs'
 import { factories as memoryFactories, manifests as memoryManifests } from './memory.mjs'
 import { factories as subagentFactories, manifest as subagentManifest } from './subagent.mjs'
+import { factories as mcpFactories, manifests as mcpManifests } from './mcp-management.mjs'
 
-export const APP_TOOL_CATALOG = [visualGenerateManifest, ...memoryManifests, subagentManifest]
+export const APP_TOOL_CATALOG = [visualGenerateManifest, ...memoryManifests, subagentManifest, ...mcpManifests]
 
 const APP_TOOL_FACTORIES = {
   [visualGenerateManifest.id]: createVisualGenerateTool,
   ...memoryFactories,
   ...subagentFactories,
+  ...mcpFactories,
 }
 
 export function createAppToolDefinitions({ enabledTools, ...context }) {

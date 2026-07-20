@@ -132,17 +132,40 @@ test('stdio MCP dashboard exposes an unambiguous executable and working director
     createTransport: () => ({}),
   })
   await service.init()
+  const executable = join(directory, 'mcp server.exe')
+  await writeFile(executable, '', 'utf8')
   const dashboard = await service.add({
     name: 'Local MCP',
     transport: 'stdio',
-    command: 'C:\\Program Files\\Pencil\\mcp-server.exe',
+    command: executable,
     args: ['--app', 'desktop'],
   })
   const server = dashboard.services[0]
-  assert.equal(server.command, 'C:\\Program Files\\Pencil\\mcp-server.exe')
+  assert.equal(server.command, resolve(executable))
   assert.deepEqual(server.args, ['--app', 'desktop'])
   assert.equal(server.workingDirectory, resolve(directory))
-  assert.match(server.endpoint, /^"C:\\Program Files\\Pencil\\mcp-server\.exe" --app desktop$/)
+  assert.equal(server.endpoint, `"${resolve(executable)}" --app desktop`)
+})
+
+test('stdio MCP validation rejects escaped control characters and missing executable paths', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-mcp-validation-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const service = new McpService({ path: join(directory, 'state.json'), cwd: directory })
+  await service.init()
+
+  await assert.rejects(service.add({
+    name: 'Broken escapes',
+    transport: 'stdio',
+    command: `C:Userspencil\u000bisualmcp.exe`,
+    enabled: false,
+  }), /control characters/)
+  await assert.rejects(service.add({
+    name: 'Missing executable',
+    transport: 'stdio',
+    command: join(directory, 'missing-mcp.exe'),
+    enabled: false,
+  }), /executable does not exist/)
+  assert.equal(service.dashboard().services.length, 0)
 })
 
 test('MCP service connects to a real Streamable HTTP endpoint with configured headers', async (t) => {
