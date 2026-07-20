@@ -26,6 +26,7 @@ import {
   ShieldCheck,
   Square,
   Sun,
+  Target,
   Wrench,
   X,
 } from 'lucide-react'
@@ -37,7 +38,7 @@ import { useI18n } from './app/i18n.jsx'
 import { AgentStatusAvatar } from './components/AgentStatusAvatar.jsx'
 import { BrandLogo } from './components/BrandLogo.jsx'
 import { StarOrbit } from './components/StarOrbit.jsx'
-import { AppDialog, InputLabel, Panel, Segmented, SelectLabel, Toast } from './components/ui.jsx'
+import { AppDialog, InputLabel, Panel, Segmented, SelectLabel, Toast, Toggle } from './components/ui.jsx'
 import { useAttachmentSelection } from './features/chat/attachments.js'
 import { ChatHistoryPage } from './features/chat/ChatHistoryPage.jsx'
 import { ACTIVE_SESSION_CHANGED_EVENT, SESSION_SELECTED_EVENT, SESSIONS_UPDATED_EVENT, announceActiveSession, announceSessionsUpdated, requestSessionSelection } from './features/chat/events.js'
@@ -530,9 +531,10 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         model: data.model || current.model,
         cwd: data.cwd || current.cwd,
         permissionMode: data.permissionMode || current.permissionMode,
+        goal: data.goal ?? current.goal ?? null,
         approvals: data.approvals || [],
       }))
-      setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode } : session))
+      setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null } : session))
     } catch (caught) {
       updateSessionState(id, { recovering: false, loading: false, error: caught.message })
     }
@@ -617,7 +619,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: t('新会话') }) })
         setActiveId(created.id)
         setRemoteSessions((current) => mergeSessionLists(current, [created]))
-        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null })
+        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', goal: created.goal || null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null })
         setTiledSessionIds((current) => current.includes(created.id) ? current : [...current, created.id])
         setMode('focus')
         try {
@@ -707,7 +709,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     return () => { active = false; window.clearInterval(timer) }
   }, [syncLiveSession])
 
-  const sendPrompt = async (text, requestedSessionId = activeId, attachments = []) => {
+  const sendPrompt = async (text, requestedSessionId = activeId, attachments = [], goalMode = false) => {
     const prompt = text.trim() || (attachments.length ? t('请分析这些附件。') : '')
     if (!prompt) return
     let sessionId = requestedSessionId
@@ -724,18 +726,25 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ sessionId, message: prompt, attachments }),
+        body: JSON.stringify({ sessionId, message: prompt, attachments, goalMode }),
       })
       await consumeEventStream(response, (event, data) => {
         if (event === 'meta') {
           setModel(data.model)
-          updateSessionState(sessionId, { model: data.model, cwd: data.cwd, permissionMode: data.permissionMode })
-          if (data.cwd || data.permissionMode) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode } : session))
+          updateSessionState(sessionId, { model: data.model, cwd: data.cwd, permissionMode: data.permissionMode, goal: data.goal ?? null })
+          if (data.cwd || data.permissionMode || data.goal !== undefined) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null } : session))
         } else if (event === 'text_delta') {
           responseText += data.delta || ''
           updateSessionState(sessionId, (current) => ({ ...current, messages: current.messages.map((item) => item.id === agentId ? { ...item, text: item.text + data.delta } : item) }))
         } else if (event === 'tool_start') {
           updateSessionState(sessionId, (current) => ({ ...current, tools: [...current.tools, { id: data.id, name: data.name, status: 'running' }] }))
+        } else if (event === 'tool_update') {
+          updateSessionState(sessionId, (current) => ({
+            ...current,
+            tools: current.tools.map((item) => item.id === data.id
+              ? { ...item, message: data.message || item.message || '', ...(data.subagent ? { subagent: data.subagent } : {}) }
+              : item),
+          }))
         } else if (event === 'tool_end') {
           updateSessionState(sessionId, (current) => ({
             ...current,
@@ -753,6 +762,9 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
               ? { ...item, attachments: [...(item.attachments || []).filter((attachment) => attachment.id !== data.id), data] }
               : item),
           }))
+        } else if (event === 'goal_update') {
+          updateSessionState(sessionId, { goal: data.goal ?? null })
+          setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, goal: data.goal ?? null } : session))
         } else if (event === 'session_title') {
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, name: data.name } : session))
         } else if (event === 'retry') {
@@ -762,6 +774,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         }
       })
       updateSessionState(sessionId, (current) => ({ ...current, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false } : item) }))
+      if (goalMode || sessionStatesRef.current[sessionId]?.goal) await loadSessionMessages(sessionId, { force: true })
       const sessions = await refreshSessions()
       const completed = sessions.find((session) => session.id === sessionId)
       browserNotify?.('chat.completed', { chat: { title: completed?.name || t('{app} 对话', { app: APP_NAME }), summary: responseText.trim().slice(0, 260) || t('Agent 已完成回复。'), model: sessionStatesRef.current[sessionId]?.model || model } })
@@ -775,9 +788,24 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
 
   const abort = async (sessionId = activeId) => {
     if (!sessionId) return
-    await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', body: '{}' })
-    updateSessionState(sessionId, { streaming: false })
+    const result = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', body: '{}' })
+    updateSessionState(sessionId, { streaming: false, goal: result.goal ?? null })
+    setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, goal: result.goal ?? session.goal ?? null } : session))
     notify(t('已停止当前运行'), 'info')
+  }
+
+  const pauseGoal = async (sessionId = activeId) => {
+    if (!sessionId) return
+    try {
+      const result = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/goal`, {
+        method: 'PATCH', body: JSON.stringify({ action: 'pause' }),
+      })
+      updateSessionState(sessionId, { goal: result.goal || null })
+      setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, goal: result.goal || null } : session))
+      notify(t('Goal 已暂停'), 'info')
+    } catch (caught) {
+      updateSessionState(sessionId, { error: caught.message })
+    }
   }
 
   const switchSessionModel = async (sessionId, nextModel) => {
@@ -884,7 +912,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         <div className="session-grid">
           {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} permissionMode={sessionStates[session.id]?.permissionMode || session.permissionMode || 'auto'} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(session.id, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(session.id, approvalId, approved)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onRemoveFromTiled={() => toggleTiled(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
         </div>
-      ) : <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} />}
+      ) : <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} />}
     </div>
     {workspaceSession && <WorkspacePicker session={workspaceSession} onClose={() => setWorkspaceSession(null)} onSelect={(cwd) => switchSessionCwd(workspaceSession, cwd)} />}
     </>
@@ -1049,15 +1077,16 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
+  const [goalArmed, setGoalArmed] = useState(false)
   const selection = useAttachmentSelection()
   const addSelectedAttachments = selection.addAttachments
   const promptRef = useRef(null)
   const prependSnapshot = useRef(null)
   const lastMessage = messages[messages.length - 1]
-  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${error || ''}`
+  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${error || ''}`
   const { scrollRef: transcriptRef, onScroll: onTranscriptScroll, hasUnread, scrollToBottom } = useAutoScroll(transcriptVersion)
   const loadOlder = useCallback(async () => {
     const node = transcriptRef.current
@@ -1078,6 +1107,9 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
     prependSnapshot.current = null
   }, [messageStart, transcriptRef])
   useEffect(() => {
+    setGoalArmed(false)
+  }, [session?.id])
+  useEffect(() => {
     if (!pendingAsset) return
     addSelectedAttachments([pendingAsset])
     onAssetConsumed?.()
@@ -1095,9 +1127,10 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   const submit = (event) => {
     event.preventDefault()
     if (!value.trim() && !selection.attachments.length) return
-    onSend(value, undefined, selection.attachments)
+    onSend(value, undefined, selection.attachments, goalArmed)
     scrollToBottom('smooth')
     setValue('')
+    setGoalArmed(false)
     if (promptRef.current) promptRef.current.style.height = 'auto'
     selection.clearAttachments()
   }
@@ -1112,13 +1145,55 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
           const agentState = message.streaming || (isLatestAgent && streaming) ? 'thinking' : isLatestAgent && !message.error ? 'waiting' : 'idle'
           return <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? <AgentStatusAvatar state={agentState} /> : 'You'}</span><div className="message-content"><MarkdownMessage>{message.text || (message.streaming ? t('正在思考…') : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}</div></div>
         })}
-        {tools.length > 0 && <div className="tool-trace"><strong>{t('工具执行')}</strong>{tools.map((tool) => <span key={tool.id} className={tool.status}><Wrench size={12} />{tool.name}<em>{t(tool.status === 'running' ? '运行中' : tool.status === 'done' ? '完成' : '失败')}</em></span>)}</div>}
+        {tools.length > 0 && <div className="tool-trace"><strong>{t('工具执行')}</strong>{tools.map((tool) => <span key={tool.id} className={tool.status} title={tool.message || tool.name}><Wrench size={12} />{tool.name === 'delegate_task' ? t('子 Agent') : tool.name}<em>{t(tool.status === 'running' ? '运行中' : tool.status === 'done' ? '完成' : '失败')}</em>{tool.message && <small>{tool.message}</small>}</span>)}</div>}
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
       {hasUnread && <button type="button" className="button secondary jump-to-latest" onClick={() => scrollToBottom('smooth')}><ArrowDown size={14} />{t('有新内容')}</button>}
-      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title={t('添加附件')} aria-label={t('添加附件')} onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onPaste={selection.pasteImages} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={t(streaming ? 'Agent 正在运行，可停止后继续输入' : '输入消息，Shift + Enter 换行')} disabled={streaming} /><button className="send-button" title={t('发送消息')} aria-label={t('发送消息')} disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
+      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title={t('添加附件')} aria-label={t('添加附件')} onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><GoalModeControl goal={goal} armed={goalArmed} onChange={(enabled) => { if (!enabled && goal?.status === 'active') void onGoalPause?.(); else setGoalArmed(enabled) }} /><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onPaste={selection.pasteImages} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={t(streaming ? 'Agent 正在运行，可停止后继续输入' : '输入消息，Shift + Enter 换行')} disabled={streaming} /><button className="send-button" title={t('发送消息')} aria-label={t('发送消息')} disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
     </Panel>
   )
+}
+
+function GoalModeControl({ goal, armed, onChange }) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+  const rootRef = useRef(null)
+  const active = goal?.status === 'active'
+  const enabled = active || armed
+  const status = active
+    ? t('正在自动执行')
+    : armed
+      ? t('下一条消息将启动 Goal')
+      : goal?.status === 'complete'
+        ? t('Goal 已完成')
+        : goal?.status === 'budget_limited'
+          ? t('Goal 已达到预算')
+          : goal?.status === 'paused'
+            ? t('Goal 已暂停')
+            : t('仅对下一条消息启用')
+  const objective = String(goal?.objective || '').replace(/\s+/g, ' ').trim()
+  const detail = armed ? status : objective || status
+  const usage = active ? t('已用 {used}/{budget} tokens', { used: goal.tokensUsed || 0, budget: goal.tokenBudget || 0 }) : ''
+  const label = [t('Goal 模式'), detail, usage].filter(Boolean).join(' · ')
+
+  useEffect(() => {
+    if (!open) return undefined
+    const close = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false) }
+    const escape = (event) => { if (event.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', close)
+    document.addEventListener('keydown', escape)
+    return () => {
+      document.removeEventListener('mousedown', close)
+      document.removeEventListener('keydown', escape)
+    }
+  }, [open])
+
+  const change = (next) => {
+    onChange(next)
+    setOpen(false)
+  }
+
+  return <div ref={rootRef} className={`goal-mode-select ${open ? 'open' : ''} ${active || armed ? 'active' : ''}`}><button type="button" className="goal-mode-trigger" title={label} aria-label={label} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((visible) => !visible)}><Target size={14} /></button>{open && <div className="goal-mode-menu" role="dialog" aria-label={t('Goal 模式')}><div className="goal-mode-menu-row"><span className="goal-mode-menu-icon"><Target size={15} /></span><span><strong>{t('Goal 模式')}</strong><small title={detail}>{detail}</small></span><Toggle value={enabled} onChange={change} ariaLabel={label} title={label} /></div>{active && <p>{usage}</p>}</div>}</div>
 }
 
 function SessionActionsMenu({ session, tiled, streaming, switchingCwd, onToggleTiled, onWorkspace, onRename }) {

@@ -18,9 +18,12 @@ import { ToolPluginService } from '../services/tool-plugin-service.mjs'
 import { extractConversationMemories } from '../services/memory/conversation-memory.mjs'
 import { LocalMemoryRuntime } from '../services/memory/local-memory-runtime.mjs'
 import { inferModelKind, VisualGenerationService } from '../services/visual-generation/index.mjs'
+import { SubagentService } from '../services/subagent-service.mjs'
+import { GoalService, goalBudgetPrompt, goalContinuationPrompt, isGoalContinuationMessage } from '../services/goal-service.mjs'
 import { assetMessageAttachment, attachGeneratedAssets } from '../services/session-assets.mjs'
 import { forceNextToolCall, isVisualGenerationRequest } from '../services/visual-tool-routing.mjs'
 import { createAppTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry.mjs'
+import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
 import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
 
 const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'kimi-coding', 'zai-coding-cn']
@@ -62,6 +65,7 @@ function textFromContent(content) {
 function serializeMessage(message, index) {
   if (!message || !['user', 'assistant'].includes(message.role)) return null
   const rawText = textFromContent(message.content)
+  if (message.role === 'user' && isGoalContinuationMessage(rawText)) return null
   const text = message.role === 'user' ? rawText.split(ATTACHMENT_MARKER)[0] : rawText
   if (!text) return null
   const attachments = Array.isArray(message.content)
@@ -229,6 +233,8 @@ export class AgentRuntimeService {
     this.assetsDir = join(dataDir, 'vesper-assets')
     this.assetIndexPath = join(dataDir, 'vesper-assets.json')
     this.memory = new LocalMemoryRuntime({ path: join(dataDir, 'vesper-memory.sqlite'), cwd })
+    this.goals = new GoalService({ path: join(dataDir, 'vesper-goals.json') })
+    this.goalEmitters = new Map()
     this.channels = new ChannelService({
       path: join(dataDir, 'vesper-channels.json'),
       cwd,
@@ -258,6 +264,11 @@ export class AgentRuntimeService {
     this.permissions = new SessionPermissionService({
       getMode: (sessionId) => this.sessionMeta[sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
     })
+    this.subagents = new SubagentService({
+      agentDir: this.dataDir,
+      getModelRuntime: () => this.modelRuntime,
+      getSettingsManager: () => this.settingsManager,
+    })
     this.sessionMetaWrite = Promise.resolve()
     this.usageLedger = { days: {} }
     this.usageWrite = Promise.resolve()
@@ -281,8 +292,10 @@ export class AgentRuntimeService {
     })
     this.settingsManager = SettingsManager.create(this.cwd, this.dataDir)
     await this.toolPlugins.ensureDefaultTools(['memory_search', 'memory_remember'], 'memoryToolsV1')
+    await this.toolPlugins.ensureDefaultTools(['delegate_task'], 'subagentToolsV1')
     await this.reloadModelRuntime()
     await this.memory.init()
+    await this.goals.init({ pauseActive: true })
     await this.channels.init()
     await this.schedules.init()
   }
@@ -295,8 +308,37 @@ export class AgentRuntimeService {
     })
   }
 
+  emitGoalUpdate(sessionId, goal, send = this.goalEmitters.get(sessionId)) {
+    const live = this.liveSessions.get(sessionId)
+    if (live) live.goal = goal || null
+    try { send?.('goal_update', { sessionId, goal: goal || null }) } catch {}
+  }
+
+  syncGoalTools(value, goal) {
+    if (!value?.session) return
+    const names = [...new Set([
+      ...(value.baseToolNames || []),
+      ...(goal?.status === 'active' ? GOAL_TOOL_NAMES : []),
+    ])]
+    value.session.setActiveToolsByName(names)
+  }
+
+  async pauseSessionGoal(id) {
+    const goal = await this.goals.pause(id)
+    const value = this.sessions.get(id)
+    if (value) this.syncGoalTools(value, goal)
+    this.emitGoalUpdate(id, goal)
+    return goal
+  }
+
+  getSessionGoal(id) {
+    return this.goals.get(id)
+  }
+
   async disposeSessions() {
     for (const [id, value] of this.sessions) {
+      await this.pauseSessionGoal(id)
+      this.subagents.abortParent(id)
       this.permissions.resolveSession(id, false, 'Agent Runtime 正在重新加载，工具未执行。')
       value.session.dispose()
     }
@@ -555,6 +597,7 @@ export class AgentRuntimeService {
         modified: session.modified.toISOString(),
         streaming: Boolean(active?.session.isStreaming),
         permissionMode: this.sessionMeta[session.id]?.permissionMode || DEFAULT_PERMISSION_MODE,
+        goal: this.goals.get(session.id),
       }
     })
     const persistedIds = new Set(result.map((session) => session.id))
@@ -571,6 +614,7 @@ export class AgentRuntimeService {
         modified: value.modified,
         streaming: Boolean(value.session.isStreaming),
         permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
+        goal: this.goals.get(id),
       })
     }
     return result
@@ -591,6 +635,7 @@ export class AgentRuntimeService {
       created: new Date().toISOString(),
       modified: new Date().toISOString(),
       permissionMode: this.sessionMeta[value.session.sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
+      goal: null,
     }
   }
 
@@ -739,6 +784,7 @@ export class AgentRuntimeService {
       model: active?.session.model ? `${active.session.model.provider}/${active.session.model.id}` : '',
       cwd: active?.cwd || this.sessionMeta[id]?.cwd || this.cwd,
       permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
+      goal: live?.goal ?? this.goals.get(id),
       approvals: this.permissions.getPending(id),
       pageInfo: page.pageInfo,
     }
@@ -860,30 +906,71 @@ export class AgentRuntimeService {
     const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only' })
     const effectiveCwd = await resolveDirectory(this.sessionMeta[sessionManager.getSessionId()]?.cwd, sessionManager.getCwd() || this.cwd)
     const enabledTools = toolsFromConfig(appConfig)
-    const platformBashTool = enabledTools.includes('bash')
-      ? createWindowsUtf8BashTool(effectiveCwd)
-      : null
+    const runtimeSessionId = sessionManager.getSessionId()
     let runtimeValue = null
     let runtimeSession = null
+    const goalTools = createGoalTools({
+      getGoal: () => this.goals.get(runtimeSessionId),
+      completeGoal: async () => {
+        const goal = await this.goals.complete(runtimeSessionId)
+        if (runtimeValue) this.syncGoalTools(runtimeValue, goal)
+        this.emitGoalUpdate(runtimeSessionId, goal)
+        return goal
+      },
+    })
+    const installSubagentPermissions = (subagentSession) => this.permissions.install(subagentSession, {
+      sessionId: runtimeSession.sessionId,
+      cwd: effectiveCwd,
+    })
+    const accountSubagentUsage = async ({ id, usage, completedAt }) => {
+      await this.recordUsage(localDayKey(completedAt), `subagent:${runtimeSession.sessionId}:${id}`, usage)
+      const goal = this.goals.get(runtimeSession.sessionId)
+      if (goal?.status !== 'active') return
+      const accounting = this.goals.account(runtimeSession.sessionId, { goalId: goal.id, usage })
+      const updatedGoal = this.goals.get(runtimeSession.sessionId)
+      if (runtimeValue) this.syncGoalTools(runtimeValue, updatedGoal)
+      this.emitGoalUpdate(runtimeSession.sessionId, updatedGoal)
+      await accounting
+    }
+    const parentActiveToolNames = () => [...new Set([
+      ...enabledTools,
+      ...(this.goals.get(runtimeSessionId)?.status === 'active' ? GOAL_TOOL_NAMES : []),
+    ])]
+    const runSubagent = (input, execution) => {
+      if (!runtimeSession?.model) throw new Error('当前会话没有可用模型，无法启动子 Agent。')
+      return this.subagents.run({
+        ...input,
+        ...execution,
+        parentSessionId: runtimeSession.sessionId,
+        cwd: effectiveCwd,
+        model: runtimeSession.model,
+        allowedTools: parentActiveToolNames(),
+        customTools: [...createInheritedCustomTools(), ...goalTools],
+        onSession: installSubagentPermissions,
+        onCompleted: accountSubagentUsage,
+      })
+    }
+    const createInheritedCustomTools = () => [
+      ...createAppTools({
+        cwd: effectiveCwd,
+        enabledTools,
+        memoryRuntime: this.memory,
+        visualGenerationService: this.visualGeneration,
+        onGeneratedFile: ({ path }) => runtimeValue && runtimeSession
+          ? this.recordGeneratedFile(runtimeSession.sessionId, runtimeValue, path)
+          : undefined,
+        runSubagent,
+      }),
+      ...(enabledTools.includes('bash') ? [createWindowsUtf8BashTool(effectiveCwd)].filter(Boolean) : []),
+    ]
     const { session, modelFallbackMessage } = await createAgentSession({
       cwd: effectiveCwd,
       agentDir: this.dataDir,
       modelRuntime: this.modelRuntime,
       settingsManager: this.settingsManager,
       sessionManager,
-      tools: enabledTools,
-      customTools: [
-        ...createAppTools({
-          cwd: effectiveCwd,
-          enabledTools,
-          memoryRuntime: this.memory,
-          visualGenerationService: this.visualGeneration,
-          onGeneratedFile: ({ path }) => runtimeValue && runtimeSession
-            ? this.recordGeneratedFile(runtimeSession.sessionId, runtimeValue, path)
-            : undefined,
-        }),
-        ...(platformBashTool ? [platformBashTool] : []),
-      ],
+      tools: [...enabledTools, ...GOAL_TOOL_NAMES],
+      customTools: [...createInheritedCustomTools(), ...goalTools],
     })
     const now = new Date().toISOString()
     const value = {
@@ -893,15 +980,17 @@ export class AgentRuntimeService {
       created: now,
       modified: now,
       cwd: effectiveCwd,
+      baseToolNames: [...enabledTools],
     }
     runtimeValue = value
     runtimeSession = session
+    this.syncGoalTools(value, this.goals.get(session.sessionId))
     this.permissions.install(session, { sessionId: session.sessionId, cwd: effectiveCwd })
     this.sessions.set(session.sessionId, value)
     return value
   }
 
-  async streamPrompt({ sessionId, message, attachments = [], send }) {
+  async streamPrompt({ sessionId, message, attachments = [], goalMode = false, send }) {
     const value = await this.getOrCreateSession(sessionId)
     const { session } = value
     const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
@@ -912,8 +1001,12 @@ export class AgentRuntimeService {
       throw new Error('没有可用模型，请先在配置页设置 Provider、模型和 API Key。')
     }
     if (session.isStreaming) throw new Error('当前会话仍在运行，请等待完成或先停止。')
-    const live = { streaming: true, text: '', tools: [], assets: [], error: '', startedAt: new Date().toISOString() }
+    let goal = this.goals.get(session.sessionId)
+    if (goalMode) goal = await this.goals.start(session.sessionId, { objective: message })
+    this.syncGoalTools(value, goal)
+    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, startedAt: new Date().toISOString() }
     this.liveSessions.set(session.sessionId, live)
+    this.goalEmitters.set(session.sessionId, send)
 
     const firstTurn = !session.messages.some((item) => item.role === 'user')
     const sessionMeta = this.sessionMeta[session.sessionId]
@@ -932,9 +1025,14 @@ export class AgentRuntimeService {
       thinkingLevel: session.thinkingLevel,
       cwd: value.cwd,
       permissionMode: this.sessionMeta[session.sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
+      goal,
     })
 
     const toolArgs = new Map()
+    let goalTurnId = ''
+    let goalTurnStartedAt = 0
+    let continuationQueued = false
+    let budgetSummaryQueued = false
     const unsubscribe = session.subscribe((event) => {
       if (event.type === 'message_update') {
         const update = event.assistantMessageEvent
@@ -945,7 +1043,12 @@ export class AgentRuntimeService {
         live.tools.push({ id: event.toolCallId, name: event.toolName, status: 'running' })
         send('tool_start', { id: event.toolCallId, name: event.toolName, args: event.args })
       } else if (event.type === 'tool_execution_update') {
-        send('tool_update', { id: event.toolCallId, name: event.toolName })
+        const message = textFromContent(event.partialResult?.content).replace(/\s+/g, ' ').trim().slice(0, 180)
+        const subagent = event.toolName === 'delegate_task' ? event.partialResult?.details : undefined
+        live.tools = live.tools.map((item) => item.id === event.toolCallId
+          ? { ...item, message: message || item.message || '', ...(subagent ? { subagent } : {}) }
+          : item)
+        send('tool_update', { id: event.toolCallId, name: event.toolName, message, ...(subagent ? { subagent } : {}) })
       } else if (event.type === 'tool_execution_end') {
         if (!event.isError) void this.recordGeneratedAsset(session.sessionId, value, event.toolName, toolArgs.get(event.toolCallId))
         toolArgs.delete(event.toolCallId)
@@ -958,13 +1061,41 @@ export class AgentRuntimeService {
             send('generated_asset', attachment)
           }
         }
-        live.tools = live.tools.map((item) => item.id === event.toolCallId ? { ...item, status: event.isError ? 'error' : 'done', message: event.isError ? textFromContent(event.result?.content) || '工具执行失败。' : '' } : item)
+        const resultMessage = event.isError ? textFromContent(event.result?.content) || '工具执行失败。' : ''
+        const completedTool = live.tools.find((item) => item.id === event.toolCallId)
+        live.tools = live.tools.map((item) => item.id === event.toolCallId ? { ...item, status: event.isError ? 'error' : 'done', message: resultMessage || item.message || '' } : item)
         send('tool_end', {
           id: event.toolCallId,
           name: event.toolName,
           error: event.isError,
-          message: event.isError ? textFromContent(event.result?.content) || '工具执行失败。' : '',
+          message: resultMessage || completedTool?.message || '',
         })
+      } else if (event.type === 'turn_start') {
+        const activeGoal = this.goals.get(session.sessionId)
+        goalTurnId = activeGoal?.status === 'active' ? activeGoal.id : ''
+        goalTurnStartedAt = Date.now()
+      } else if (event.type === 'turn_end') {
+        if (!goalTurnId) return
+        const accounting = this.goals.account(session.sessionId, {
+          goalId: goalTurnId,
+          usage: event.message?.usage,
+          elapsedSeconds: goalTurnStartedAt ? (Date.now() - goalTurnStartedAt) / 1000 : 0,
+        })
+        goalTurnId = ''
+        goalTurnStartedAt = 0
+        const updatedGoal = this.goals.get(session.sessionId)
+        this.syncGoalTools(value, updatedGoal)
+        this.emitGoalUpdate(session.sessionId, updatedGoal)
+        if (updatedGoal?.status === 'budget_limited' && !budgetSummaryQueued) {
+          budgetSummaryQueued = true
+          void session.followUp(goalBudgetPrompt(updatedGoal)).catch(() => {})
+        }
+        void accounting.catch(() => {})
+      } else if (event.type === 'agent_end') {
+        const activeGoal = this.goals.get(session.sessionId)
+        if (activeGoal?.status !== 'active' || continuationQueued) return
+        continuationQueued = true
+        void session.followUp(goalContinuationPrompt(activeGoal)).catch(() => {}).finally(() => { continuationQueued = false })
       } else if (event.type === 'auto_retry_start') {
         send('retry', { attempt: event.attempt, maxAttempts: event.maxAttempts, message: event.errorMessage })
       }
@@ -977,6 +1108,8 @@ export class AgentRuntimeService {
       const images = []
       const contexts = []
       const memoryContext = await this.memory.relevantContext(message, value.cwd)
+      const activeGoal = this.goals.get(session.sessionId)
+      if (activeGoal?.status === 'active') contexts.push(goalContinuationPrompt(activeGoal))
       for (const attachment of safeAttachments) {
         const name = safeAttachmentName(attachment.name)
         if (attachment.kind === 'image') {
@@ -1020,7 +1153,7 @@ export class AgentRuntimeService {
           send('session_title', { sessionId: session.sessionId, name: generatedTitle, source: 'generated' })
         }
       }
-      send('done', { sessionId: session.sessionId })
+      send('done', { sessionId: session.sessionId, goal: this.goals.get(session.sessionId) })
       void this.captureConversationMemory({
         sessionId: session.sessionId,
         cwd: value.cwd,
@@ -1030,10 +1163,12 @@ export class AgentRuntimeService {
       }).catch(() => {})
     } catch (error) {
       live.error = error instanceof Error ? error.message : String(error)
+      if (this.goals.get(session.sessionId)?.status === 'active') await this.pauseSessionGoal(session.sessionId)
       throw error
     } finally {
       unsubscribe()
       this.permissions.detachEmitter(session.sessionId, send)
+      if (this.goalEmitters.get(session.sessionId) === send) this.goalEmitters.delete(session.sessionId)
       live.streaming = false
       const timer = setTimeout(() => { if (this.liveSessions.get(session.sessionId) === live) this.liveSessions.delete(session.sessionId) }, 60_000)
       timer.unref?.()
@@ -1106,12 +1241,16 @@ export class AgentRuntimeService {
   async abortSession(id) {
     const value = this.sessions.get(id)
     if (!value) return false
+    await this.pauseSessionGoal(id)
+    this.subagents.abortParent(id)
     this.permissions.resolveSession(id, false, '会话已停止，工具未执行。')
     await value.session.abort()
     return true
   }
 
   async deleteSession(id) {
+    await this.goals.remove(id)
+    this.subagents.abortParent(id)
     this.permissions.resolveSession(id, false, '会话已删除，工具未执行。')
     const active = this.sessions.get(id)
     let sessionFile = active?.session.sessionFile
@@ -1293,6 +1432,8 @@ export class AgentRuntimeService {
   async dispose() {
     await this.schedules.dispose()
     await this.channels.dispose()
+    await this.goals.pauseAllActive()
+    await this.subagents.dispose()
     this.permissions.dispose()
     await this.disposeSessions()
     this.memory.dispose()

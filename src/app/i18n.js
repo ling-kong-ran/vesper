@@ -758,6 +758,27 @@ const EN_EXTENDED_MESSAGES = Object.freeze({
   '测试通过?': 'Tests pass?',
   '生成报告': 'Generate report',
   '飞书 + 微信': 'Feishu + WeChat',
+
+  '子 Agent': 'Subagent',
+  '协作': 'Collaboration',
+  '委派任务给隔离上下文的只读子 Agent，用于代码调研、规划和审查。': 'Delegate a task to an isolated, read-only subagent for codebase research, planning, or review.',
+  '当前会话工作目录；独立内存会话；继承当前模型与权限边界': 'Current chat workspace; isolated in-memory session; inherits the active model and permission boundary',
+  '并行运行受限的只读调研、规划或审查任务，并返回结果给主 Agent': 'Run bounded read-only research, planning, or review tasks and return their results to the primary agent',
+  '委派隔离上下文的子 Agent 执行调研、规划、审查或受权限约束的代码实现。': 'Delegate an isolated subagent to research, plan, review, or implement code within the active permission boundary.',
+  '当前会话工作目录；独立内存会话；继承当前模型、已启用工具与权限边界': 'Current chat workspace; isolated in-memory session; inherits the active model, enabled tools, and permission boundary',
+  '运行受限的调研、规划或审查任务；worker 可在父会话授权范围内修改代码': 'Run bounded research, planning, or review tasks; worker can modify code within the parent chat’s authorized scope',
+  '委派隔离上下文的子 Agent 执行调研、规划、审查或代码实现。': 'Delegate an isolated subagent to research, plan, review, or implement code.',
+  '当前会话工作目录；独立内存会话；继承当前模型、已启用工具与权限模式': 'Current chat workspace; isolated in-memory session; inherits the active model, enabled tools, and permission mode',
+  '并行运行隔离任务；所有角色继承主 Agent 的已启用工具与权限边界': 'Run isolated tasks in parallel; every role inherits the primary agent’s enabled tools and permission boundary',
+
+  'Goal 模式': 'Goal mode',
+  '正在自动执行': 'Running autonomously',
+  '下一条消息将启动 Goal': 'The next message will start a Goal',
+  'Goal 已完成': 'Goal complete',
+  'Goal 已达到预算': 'Goal reached its budget',
+  'Goal 已暂停': 'Goal paused',
+  '仅对下一条消息启用': 'Enable for the next message only',
+  '已用 {used}/{budget} tokens': '{used}/{budget} tokens used',
 })
 
 const EN_DYNAMIC_MESSAGES = [

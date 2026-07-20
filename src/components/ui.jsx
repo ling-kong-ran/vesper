@@ -41,10 +41,10 @@ export function Metric({ value, label, note, tone }) {
   return <Panel className={`metric ${tone}`}><small>{label}</small><strong>{value}</strong><span>{note}</span></Panel>
 }
 
-export function Toggle({ defaultOn = false, value, onChange, disabled = false }) {
+export function Toggle({ defaultOn = false, value, onChange, disabled = false, ariaLabel, title }) {
   const [internal, setInternal] = useState(defaultOn)
   const on = value ?? internal
-  return <button type="button" aria-pressed={on} disabled={disabled} className={`toggle relative inline-flex h-8 w-12 min-w-12 items-center rounded-full border-0 p-1 transition disabled:cursor-not-allowed disabled:opacity-45 ${on ? 'on bg-[var(--star)]' : 'bg-[var(--control-muted)]'}`} onClick={(event) => { event.stopPropagation(); if (onChange) onChange(!on); else setInternal(!on) }}><i className={`block size-6 rounded-full bg-[var(--control-thumb)] shadow-sm transition ${on ? 'translate-x-4' : ''}`} /></button>
+  return <button type="button" aria-pressed={on} aria-label={ariaLabel} title={title} disabled={disabled} className={`toggle relative inline-flex h-8 w-12 min-w-12 items-center rounded-full border-0 p-1 transition disabled:cursor-not-allowed disabled:opacity-45 ${on ? 'on bg-[var(--star)]' : 'bg-[var(--control-muted)]'}`} onClick={(event) => { event.stopPropagation(); const next = !on; if (value === undefined) setInternal(next); onChange?.(next) }}><i className={`block size-6 rounded-full bg-[var(--control-thumb)] shadow-sm transition ${on ? 'translate-x-4' : ''}`} /></button>
 }
 
 export function Segmented({ options, value, onChange, compact = false }) {

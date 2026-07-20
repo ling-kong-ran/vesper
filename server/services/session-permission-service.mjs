@@ -7,6 +7,7 @@ export const DEFAULT_PERMISSION_MODE = 'auto'
 
 const TOOL_RISKS = new Map(TOOL_CATALOG.map((tool) => [tool.id, tool.risk]))
 const SENSITIVE_RISKS = new Set(['中风险', '高风险'])
+const INTERNAL_SAFE_TOOLS = new Set(['get_goal', 'update_goal'])
 const DANGEROUS_COMMAND = /(?:\brm\s+-[^\r\n]*r[^\r\n]*f|\brmdir\s+\/s|\bdel\s+\/s|remove-item[^\r\n]*(?:-recurse|-force)|\bformat(?:\.com)?\b|\bshutdown(?:\.exe)?\b|\btaskkill[^\r\n]*\/f|\bgit\s+(?:reset\s+--hard|clean\s+-[^\r\n]*f)|\breg\s+delete\b|\bdrop\s+(?:database|table)\b|\btruncate\s+table\b)/i
 
 function safeArgs(value, depth = 0, key = '') {
@@ -31,7 +32,7 @@ function pathOutsideWorkspace(cwd, input) {
 }
 
 export function permissionRequirement({ mode, cwd, toolName, args }) {
-  if (mode === 'ignore') return null
+  if (INTERNAL_SAFE_TOOLS.has(toolName) || mode === 'ignore') return null
   const risk = TOOL_RISKS.get(toolName) || '高风险'
   if (['read', 'ls', 'grep', 'find', 'edit', 'write'].includes(toolName) && pathOutsideWorkspace(cwd, args?.path || args?.file_path)) {
     return { risk: '高风险', reason: `${toolName} 将访问当前工作目录之外的文件。` }

@@ -1,0 +1,84 @@
+import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import test from 'node:test'
+import { isGoalContinuationMessage } from '../services/goal-service.mjs'
+import { AgentRuntimeService } from '../runtime/agent-runtime.mjs'
+
+test('goal mode queues hidden continuation turns until the goal is completed', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-goal-runtime-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  await runtime.goals.init()
+  runtime.archiveAttachments = async () => {}
+  runtime.generateSessionTitle = async () => ''
+  runtime.captureConversationMemory = async () => []
+  runtime.memory = { relevantContext: async () => ({ text: '' }) }
+
+  const listeners = new Set()
+  const queued = []
+  let turns = 0
+  const emit = (event) => { for (const listener of listeners) listener(event) }
+  const session = {
+    sessionId: 'goal-session',
+    model: { provider: 'openai', id: 'gpt-5' },
+    thinkingLevel: 'medium',
+    isStreaming: false,
+    messages: [],
+    agent: { state: { systemPrompt: '' } },
+    getActiveToolNames: () => ['get_goal', 'update_goal'],
+    setActiveToolsByName: () => {},
+    setSessionName: () => {},
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    async followUp(text) {
+      queued.push(text)
+    },
+    async prompt(text) {
+      session.isStreaming = true
+      const processTurn = async (promptText) => {
+        session.messages.push({ role: 'user', content: promptText, timestamp: Date.now() })
+        emit({ type: 'turn_start' })
+        turns += 1
+        if (isGoalContinuationMessage(promptText)) await runtime.goals.complete('goal-session')
+        const assistant = {
+          role: 'assistant',
+          content: [{ type: 'text', text: `turn ${turns}` }],
+          usage: { totalTokens: 10 },
+          timestamp: Date.now(),
+        }
+        session.messages.push(assistant)
+        emit({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: `turn ${turns}` } })
+        emit({ type: 'turn_end', message: assistant })
+        emit({ type: 'agent_end', messages: [assistant] })
+      }
+      await processTurn(text)
+      while (queued.length) await processTurn(queued.shift())
+      session.isStreaming = false
+    },
+    async abort() {},
+    dispose() {},
+  }
+  const value = { session, cwd: directory, name: 'Goal test', baseToolNames: [] }
+  runtime.sessions.set(session.sessionId, value)
+  runtime.getOrCreateSession = async () => value
+
+  const events = []
+  await runtime.streamPrompt({
+    sessionId: session.sessionId,
+    message: 'Implement the focused Goal.',
+    goalMode: true,
+    send: (event, data) => events.push({ event, data }),
+  })
+
+  assert.equal(turns, 2)
+  assert.equal(runtime.getSessionGoal(session.sessionId).status, 'complete')
+  assert.equal(events.find((item) => item.event === 'meta').data.goal.status, 'active')
+  assert.equal(events.find((item) => item.event === 'done').data.goal.status, 'complete')
+  const messages = await runtime.getSessionMessages(session.sessionId)
+  assert.deepEqual(messages.map((message) => message.role), ['user', 'agent', 'agent'])
+  assert.deepEqual(messages.map((message) => message.text), ['Implement the focused Goal.', 'turn 1', 'turn 2'])
+})

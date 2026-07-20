@@ -254,6 +254,22 @@ export function createApiHandler(runtime) {
         else json(res, 200, updated)
         return true
       }
+      const sessionGoalMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/goal$/)
+      if (req.method === 'GET' && sessionGoalMatch) {
+        const goal = runtime.getSessionGoal(decodeURIComponent(sessionGoalMatch[1]))
+        if (!goal) json(res, 404, { error: '当前会话没有 Goal。' })
+        else json(res, 200, { goal })
+        return true
+      }
+      if (req.method === 'PATCH' && sessionGoalMatch) {
+        const id = decodeURIComponent(sessionGoalMatch[1])
+        const body = await bodyJson(req)
+        if (body.action !== 'pause') throw new Error('Goal 操作无效。')
+        const goal = await runtime.pauseSessionGoal(id)
+        if (!goal) json(res, 404, { error: '当前会话没有进行中的 Goal。' })
+        else json(res, 200, { goal })
+        return true
+      }
       const sessionPermissionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/permission$/)
       if (req.method === 'PUT' && sessionPermissionMatch) {
         const body = await bodyJson(req)
@@ -304,7 +320,8 @@ export function createApiHandler(runtime) {
       }
       const abortMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/abort$/)
       if (req.method === 'POST' && abortMatch) {
-        json(res, 200, { aborted: await runtime.abortSession(decodeURIComponent(abortMatch[1])) })
+        const id = decodeURIComponent(abortMatch[1])
+        json(res, 200, { aborted: await runtime.abortSession(id), goal: runtime.getSessionGoal(id) })
         return true
       }
       if (req.method === 'POST' && url.pathname === '/api/chat') {
@@ -322,6 +339,7 @@ export function createApiHandler(runtime) {
             sessionId: body.sessionId,
             message: String(body.message).trim(),
             attachments: body.attachments,
+            goalMode: Boolean(body.goalMode),
             send: (event, data) => { if (!res.destroyed && !res.writableEnded) sseSend(res, event, data) },
           })
         } catch (error) {

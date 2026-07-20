@@ -7,6 +7,8 @@ test('permission modes progress from ask to automatic to ignored checks', () => 
   assert.equal(permissionRequirement({ mode: 'ask', cwd, toolName: 'read', args: { path: 'README.md' } }), null)
   assert.match(permissionRequirement({ mode: 'ask', cwd, toolName: 'read', args: { path: 'C:\\secret.txt' } }).reason, /工作目录之外/)
   assert.match(permissionRequirement({ mode: 'ask', cwd, toolName: 'write', args: { path: 'README.md' } }).reason, /需要确认/)
+  assert.match(permissionRequirement({ mode: 'ask', cwd, toolName: 'delegate_task', args: { task: 'inspect the repository' } }).reason, /需要确认/)
+  assert.equal(permissionRequirement({ mode: 'ask', cwd, toolName: 'update_goal', args: { status: 'complete' } }), null)
   assert.equal(permissionRequirement({ mode: 'auto', cwd, toolName: 'write', args: { path: 'README.md' } }), null)
   assert.match(permissionRequirement({ mode: 'auto', cwd, toolName: 'write', args: { path: 'C:\\outside.txt' } }).reason, /工作目录之外/)
   assert.match(permissionRequirement({ mode: 'auto', cwd, toolName: 'bash', args: { command: 'git reset --hard' } }).reason, /Shell/)
