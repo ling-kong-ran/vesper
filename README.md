@@ -1,86 +1,169 @@
+<p align="right"><strong>简体中文</strong> | <a href="./README.en.md">English</a></p>
+
+<div id="top">
+
+<!-- HEADER STYLE: MODERN -->
+<div align="left" style="position: relative; width: 100%; height: 100%; ">
+
+<img src="docs/brand/vesper-logo.svg" width="30%" style="position: absolute; top: 0; right: 0;" alt="Vesper 项目标志"/>
+
 # Vesper
 
-Vesper 是基于 React、Vite 和 `@earendil-works/pi-coding-agent` 的桌面式 Agent 工作台。
+<em>让大胆的想法成为持续的行动。</em>
 
-## 开发
+<!-- BADGES -->
+<em>主要技术与工具：</em>
+
+<img src="https://img.shields.io/badge/JSON-000000.svg?style=flat-square&logo=JSON&logoColor=white" alt="JSON">
+<img src="https://img.shields.io/badge/npm-CB3837.svg?style=flat-square&logo=npm&logoColor=white" alt="npm">
+<img src="https://img.shields.io/badge/JavaScript-F7DF1E.svg?style=flat-square&logo=JavaScript&logoColor=black" alt="JavaScript">
+<img src="https://img.shields.io/badge/i18next-26A69A.svg?style=flat-square&logo=i18next&logoColor=white" alt="i18next">
+<img src="https://img.shields.io/badge/React-61DAFB.svg?style=flat-square&logo=React&logoColor=black" alt="React">
+<img src="https://img.shields.io/badge/Vite-646CFF.svg?style=flat-square&logo=Vite&logoColor=white" alt="Vite">
+<img src="https://img.shields.io/badge/OpenAI-412991.svg?style=flat-square&logo=OpenAI&logoColor=white" alt="OpenAI">
+
+</div>
+</div>
+<br clear="right">
+
+---
+
+## ☀️ 目录
+
+- [🌞 概览](#-概览)
+- [🔥 功能](#-功能)
+- [🌅 项目结构](#-项目结构)
+- [🚀 快速开始](#-快速开始)
+    - [🌟 环境要求](#-环境要求)
+    - [⚡ 安装](#-安装)
+    - [🔆 使用](#-使用)
+    - [🌠 测试](#-测试)
+- [🤝 参与贡献](#-参与贡献)
+- [✨ 致谢](#-致谢)
+
+---
+
+## 🌞 概览
+
+Vesper 是一个用于构建、扩展和自动化 AI Agent 工作流的全栈工作台。它将持久上下文、外部工具、定时执行与多渠道集成统一到简洁的开发者界面中。
+
+**为什么选择 Vesper？**
+
+Vesper 在保障集成、自动化和数据可控的同时，降低了编排智能 Agent 的复杂度。核心能力包括：
+
+- **🟣 Agent Runtime：** 使用可配置模型、工具、文档和持久会话运行具备上下文能力的编码 Agent。
+- **🔵 MCP 集成：** 发现并安全连接外部 Model Context Protocol 服务和工具。
+- **🟢 工作流自动化：** 通过 Prompt、判断、审批、并行分支和通知设计并监控工作流。
+- **🟡 定时任务与渠道：** 自动执行周期任务，并通过浏览器、飞书或微信发送结果。
+- **🟠 Skills 与 Subagent：** 使用可复用技能扩展 Agent，并将边界清晰的任务委派给专业子 Agent。
+- **🔴 本地记忆：** 通过限定作用域的本地存储和敏感信息脱敏，长期保留项目知识、决策、风险与偏好。
+
+---
+
+## 🔥 功能
+
+|      | 模块 | 说明 |
+| :--- | :--- | :--- |
+| 💬 | **对话** | 持久会话、分页历史、Markdown 渲染、文件与图片附件、模型切换、工作目录和多会话平铺。 |
+| 🧠 | **Agent Runtime** | 集成 Pi Coding Agent，支持权限控制、结构化工具活动、Goal、可复用 Skills 与隔离的 Subagent 委派。 |
+| 🔌 | **工具与 MCP** | 内置及应用工具注册表、插件控制、MCP 服务管理，以及不暴露凭据的结构化配置。 |
+| 🌌 | **记忆** | 按工作空间隔离的轻量本地 SQLite 记忆，支持搜索、主动保存、编辑和对话记忆提取。 |
+| 🎨 | **多模态** | 分析图片、文档和代码，并通过已配置的 OpenAI 兼容、Gemini、Imagen、Veo 或 xAI 模型生成视觉内容。 |
+| ⚡ | **自动化** | 定时任务与可视化工作流，支持模型选择、重试、超时、失败策略、执行历史和通知。 |
+| 📡 | **渠道** | 飞书和个人微信双向通信，可配置渠道回复模型、工作目录、附件传输与复用通知模板。 |
+| 🛡️ | **安全** | 会话级权限模式、敏感操作审批、服务端凭据脱敏，以及仓库外的用户数据存储。 |
+
+---
+
+## 🌅 项目结构
+
+```text
+vesper/
+├─ docs/                 # 项目文档与品牌资源
+├─ public/               # 公共静态资源
+├─ server/
+│  ├─ http/              # HTTP API、SSE 与静态资源响应
+│  ├─ runtime/           # Pi Agent 会话与模型运行时
+│  ├─ security/          # 凭据与输出脱敏
+│  ├─ services/          # 领域服务与外部集成
+│  ├─ storage/           # 本地持久化工具
+│  ├─ tests/             # Node.js 测试
+│  └─ tools/             # 内置工具与应用工具注册表
+└─ src/
+   ├─ app/               # 路由、导航与国际化
+   ├─ components/        # 通用 React 组件
+   ├─ features/          # 功能页面与交互
+   ├─ hooks/             # 通用 React Hooks
+   └─ lib/               # API 与格式化工具
+```
+
+---
+
+## 🚀 快速开始
+
+### 🌟 环境要求
+
+- Node.js 20 或更高版本
+- npm
+- 至少一个受支持的模型 Provider 和 API Key
+
+### ⚡ 安装
 
 ```bash
+git clone https://github.com/ling-kong-ran/vesper.git
+cd vesper
 npm install
+```
+
+### 🔆 使用
+
+启动开发服务，默认地址为 `http://127.0.0.1:5173`：
+
+```bash
 npm run dev
 ```
 
-默认地址为 `http://127.0.0.1:5173`。生产构建使用：
+构建并运行生产版本：
 
 ```bash
 npm run build
 npm start
 ```
 
-## 目录结构
+Vesper 默认将本地配置和运行数据保存在 `~/.vesper/agent`。可以通过 `VESPER_AGENT_DIR` 指定其他目录。
 
-```text
-server/
-├── index.mjs                    # 服务入口与生命周期
-├── http/                        # API、SSE 和静态资源响应
-├── runtime/                     # Agent 会话与模型运行时
-├── services/                    # 跨请求领域服务
-├── storage/                     # 配置和数据持久化工具
-└── tools/
-    ├── builtin-catalog.mjs      # Agent 内置工具元数据和预设
-    ├── registry.mjs             # 应用工具统一注册表
-    └── app/                     # Vesper 自己实现的工具
+### 🌠 测试
 
-src/
-├── app/                         # 导航和应用级配置
-├── components/                  # 通用 UI 组件
-├── features/                    # 按业务功能组织的页面与逻辑
-├── lib/                         # API、格式化等无 UI 依赖模块
-├── App.jsx                      # 应用外壳和未迁移页面
-└── main.jsx                     # 前端入口
+```bash
+npm run lint
+npm test
+npm run build
 ```
 
-## 添加应用工具
+项目使用 Node.js 内置测试运行器，测试文件位于 `server/tests/`。
 
-1. 在 `server/tools/app/` 中为工具创建独立文件。
-2. 导出工具 `manifest` 和 `create...Tool(context)` 工厂。
-3. 在 `server/tools/app/index.mjs` 注册 manifest 与工厂。
-4. 插件页面会从服务端注册表读取工具，无需在前端重复维护目录。
+---
 
-工具使用 `defineTool()` 定义，并通过 `customTools` 注入 Agent。权限状态由 `ToolPluginService` 保存；`agent-runtime` 只负责按当前会话工作目录创建已启用工具。
+## 🤝 参与贡献
 
-`visual-generate.mjs` 展示了如何把领域服务注入工具。视觉模型调用分别位于 `server/services/visual-generation/` 的模型选择、OpenAI 兼容、Google 和输出模块中。新增高风险工具时，应准确填写 `risk`、`scope` 和 `capability`，并默认保持关闭。
+欢迎提交 Issue 和 Pull Request：
 
-## 视觉生成工具
+- [报告问题](https://github.com/ling-kong-ran/vesper/issues)
+- [提交 Pull Request](https://github.com/ling-kong-ran/vesper/pulls)
+- [查看贡献者](https://github.com/ling-kong-ran/vesper/graphs/contributors)
 
-`generate_visual` 会从已启用且已配置认证的视觉模型中自动选模，也可以由 Agent 指定 `provider/model`。配置页添加模型时将“模型用途”设为图像生成或视频生成即可；常见的 GPT Image、Sora、Gemini/Imagen、Veo 和 Grok Imagine 模型 ID 也能自动识别。
+提交修改前，请运行上方的 lint、测试和构建命令。请勿提交 API Key、机器人凭据、本地会话数据或 `~/.vesper/agent` 中的文件。
 
-- OpenAI、xAI 及兼容服务通过 Images/Videos 兼容接口调用。
-- Gemini/Imagen 使用 `generateContent`，Veo 使用长任务接口并自动轮询下载。
-- OpenRouter 图像模型通过带 `image` modality 的 Chat Completions 调用。
-- 结果写入会话工作目录的 `generated/visuals/`，同时加入资产索引。
-- 生成完成后通过 SSE 追加到当前 Agent 回复，图片直接展示、视频直接播放；重新打开历史会话时会从资产索引恢复。
+---
 
-该工具会消耗外部 Provider 额度并写文件，因此默认保持关闭，需要在插件页手动启用。
+## ✨ 致谢
 
-## 双向渠道
+Vesper 基于 [Pi Coding Agent](https://github.com/earendil-works/pi/tree/main/packages/coding-agent) 运行时及上方列出的开源项目构建。
 
-渠道页只提供能够与 Agent 双向通信的平台连接，不提供单向 Webhook。目前支持：
+<div align="right">
 
-- 飞书应用机器人：调用飞书官方 Node SDK 的一键注册能力，扫码确认后自动创建机器人应用，并通过 WebSocket 长连接接收私聊或群聊 @ 消息。无需手工填写 App ID、App Secret，也不需要公网 IP、域名或回调地址。
-- 个人微信：使用腾讯官方 iLink Bot 协议扫码登录，通过 `getupdates` 持续长轮询接收私聊消息，并使用同一连接回复文字、图片、视频和文件。它不是企业微信，也不是 WebSocket 帧传输。
+[![][back-to-top]](#top)
 
-每个渠道中的聊天对象会映射到独立的 Vesper 会话，文字、图片和文档可以交给 Agent 分析，Agent 生成的媒体和文件也会回传原渠道。默认仅允许扫码创建者使用；每个渠道可以分别设置访问范围、新会话工作目录和回复模型。修改回复模型不会重建渠道连接，后续消息会在对应 Agent 会话中切换到所选模型。
+</div>
 
-“配置 → 通知设置”提供可复用的事件通知模板。目前内置对话完成、定时任务完成/失败、工作流完成/失败五类事件。定时任务和工作流模板可以分别设置浏览器、飞书和微信内容；渠道发送时会自动定位最近活跃的会话。对话完成模板用于对话页 Agent 回复完成后的浏览器通知，并可通过独立开关停用。模板支持 `{{chat.title}}`、`{{task.name}}`、`{{workflow.runId}}` 等变量，并提供预览和测试发送。
-
-通知设置中还可以启用浏览器通知。首次开启会请求站点通知权限；启用后，对话完成以及选择了浏览器目标的定时任务事件会发送系统通知。浏览器通知开关保存在 `vesper.json`，浏览器自身的授权状态仍由站点权限控制。
-
-## 定时任务
-
-定时任务保存在用户目录的 `vesper-schedules.json`，服务启动后由内置调度器执行。页面支持创建、编辑、启停、删除和立即运行，可设置每隔若干分钟/小时/天执行，或按每天、每周、每月运行。时区使用浏览器支持的完整 IANA 时区列表，并保留最近执行状态、摘要、错误和对应会话。
-
-每个任务可以多选浏览器、飞书和微信通知，也可以选择“完成或失败”或“仅失败”。任务本身不再保存模板文本，执行完成或失败时统一使用“配置 → 通知设置”中的 `schedule.completed` / `schedule.failed` 平台模板。
-
-## 用户数据
-
-Provider、模型、工具权限、会话、资产和渠道默认保存在用户目录下的 `~/.vesper/agent` 中；可通过 `VESPER_AGENT_DIR` 覆盖。飞书/微信登录凭据、渠道级模型设置、会话映射和通知模板位于 `vesper-channels.json`，接口只返回脱敏信息。不要把 API Key、Bot Token 或应用密钥写入仓库文件。
+[back-to-top]: https://img.shields.io/badge/-返回顶部-151515?style=flat-square
