@@ -23,12 +23,16 @@ test('live session snapshot restores partial assistant output and tool state', a
     tools: [{ id: 'tool-1', name: 'bash', status: 'running' }],
     assets: [],
     error: '',
+    startedAt: '2026-07-20T10:00:00.000Z',
+    lastActivityAt: '2026-07-20T10:00:05.000Z',
   })
   const live = await runtime.getSessionLive('session-live')
   assert.equal(live.streaming, true)
   assert.equal(live.messages.at(-1).role, 'agent')
   assert.equal(live.messages.at(-1).text, '正在处理剩余测试…')
   assert.deepEqual(live.tools, [{ id: 'tool-1', name: 'bash', status: 'running' }])
+  assert.equal(live.startedAt, '2026-07-20T10:00:00.000Z')
+  assert.equal(live.lastActivityAt, '2026-07-20T10:00:05.000Z')
   assert.equal(live.model, 'openai/gpt-5.4')
 })
 

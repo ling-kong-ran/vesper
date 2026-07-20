@@ -781,6 +781,8 @@ export class AgentRuntimeService {
       messages,
       tools: live?.tools || [],
       error: live?.error || '',
+      startedAt: live?.startedAt || null,
+      lastActivityAt: live?.lastActivityAt || null,
       model: active?.session.model ? `${active.session.model.provider}/${active.session.model.id}` : '',
       cwd: active?.cwd || this.sessionMeta[id]?.cwd || this.cwd,
       permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
@@ -1005,7 +1007,8 @@ export class AgentRuntimeService {
         : await this.goals.start(session.sessionId, { objective: message })
     }
     this.syncGoalTools(value, goal)
-    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, startedAt: new Date().toISOString() }
+    const startedAt = new Date().toISOString()
+    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, startedAt, lastActivityAt: startedAt }
     this.liveSessions.set(session.sessionId, live)
     this.goalEmitters.set(session.sessionId, send)
 
@@ -1027,6 +1030,8 @@ export class AgentRuntimeService {
       cwd: value.cwd,
       permissionMode: this.sessionMeta[session.sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
       goal,
+      startedAt: live.startedAt,
+      lastActivityAt: live.lastActivityAt,
     })
 
     const toolArgs = new Map()
@@ -1035,21 +1040,23 @@ export class AgentRuntimeService {
     let continuationQueued = false
     let budgetSummaryQueued = false
     const unsubscribe = session.subscribe((event) => {
+      live.lastActivityAt = new Date().toISOString()
       if (event.type === 'message_update') {
         const update = event.assistantMessageEvent
         if (update.type === 'text_delta') { live.text += update.delta || ''; send('text_delta', { delta: update.delta }) }
         if (update.type === 'thinking_delta') send('thinking_delta', { delta: update.delta })
       } else if (event.type === 'tool_execution_start') {
         toolArgs.set(event.toolCallId, event.args)
-        live.tools.push({ id: event.toolCallId, name: event.toolName, status: 'running' })
-        send('tool_start', { id: event.toolCallId, name: event.toolName, args: event.args })
+        const toolStartedAt = live.lastActivityAt
+        live.tools.push({ id: event.toolCallId, name: event.toolName, status: 'running', startedAt: toolStartedAt, updatedAt: toolStartedAt })
+        send('tool_start', { id: event.toolCallId, name: event.toolName, args: event.args, startedAt: toolStartedAt })
       } else if (event.type === 'tool_execution_update') {
         const message = textFromContent(event.partialResult?.content).replace(/\s+/g, ' ').trim().slice(0, 180)
         const subagent = event.toolName === 'delegate_task' ? event.partialResult?.details : undefined
         live.tools = live.tools.map((item) => item.id === event.toolCallId
-          ? { ...item, message: message || item.message || '', ...(subagent ? { subagent } : {}) }
+          ? { ...item, message: message || item.message || '', updatedAt: live.lastActivityAt, ...(subagent ? { subagent } : {}) }
           : item)
-        send('tool_update', { id: event.toolCallId, name: event.toolName, message, ...(subagent ? { subagent } : {}) })
+        send('tool_update', { id: event.toolCallId, name: event.toolName, message, updatedAt: live.lastActivityAt, ...(subagent ? { subagent } : {}) })
       } else if (event.type === 'tool_execution_end') {
         if (!event.isError) void this.recordGeneratedAsset(session.sessionId, value, event.toolName, toolArgs.get(event.toolCallId))
         toolArgs.delete(event.toolCallId)
@@ -1064,12 +1071,14 @@ export class AgentRuntimeService {
         }
         const resultMessage = event.isError ? textFromContent(event.result?.content) || '工具执行失败。' : ''
         const completedTool = live.tools.find((item) => item.id === event.toolCallId)
-        live.tools = live.tools.map((item) => item.id === event.toolCallId ? { ...item, status: event.isError ? 'error' : 'done', message: resultMessage || item.message || '' } : item)
+        const toolFinishedAt = live.lastActivityAt
+        live.tools = live.tools.map((item) => item.id === event.toolCallId ? { ...item, status: event.isError ? 'error' : 'done', message: resultMessage || item.message || '', updatedAt: toolFinishedAt, finishedAt: toolFinishedAt } : item)
         send('tool_end', {
           id: event.toolCallId,
           name: event.toolName,
           error: event.isError,
           message: resultMessage || completedTool?.message || '',
+          finishedAt: toolFinishedAt,
         })
       } else if (event.type === 'turn_start') {
         const activeGoal = this.goals.get(session.sessionId)

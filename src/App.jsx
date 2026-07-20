@@ -5,6 +5,7 @@ import {
   Bot,
   Check,
   ChevronRight,
+  Clock3,
   Download,
   File,
   FolderOpen,
@@ -27,7 +28,6 @@ import {
   Square,
   Sun,
   Target,
-  Wrench,
   X,
 } from 'lucide-react'
 import { APP_NAME } from './app/brand.js'
@@ -43,6 +43,7 @@ import { useAttachmentSelection } from './features/chat/attachments.js'
 import { ChatHistoryPage } from './features/chat/ChatHistoryPage.jsx'
 import { ACTIVE_SESSION_CHANGED_EVENT, SESSION_SELECTED_EVENT, SESSIONS_UPDATED_EVENT, announceActiveSession, announceSessionsUpdated, requestSessionSelection } from './features/chat/events.js'
 import { mergeSessionLists, toggleTiledSession } from './features/chat/session-list.js'
+import { deriveRunActivity, formatRunDuration, groupToolCalls, runDurationMs } from './features/chat/run-activity.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, consumeEventStream } from './lib/api.js'
@@ -525,6 +526,10 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         tools: data.tools || [],
         streaming: data.streaming,
         recovering: data.streaming,
+        runStartedAt: data.startedAt || current.runStartedAt || null,
+        lastActivityAt: data.lastActivityAt || current.lastActivityAt || data.startedAt || null,
+        runFinishedAt: data.streaming ? null : (current.runFinishedAt || new Date().toISOString()),
+        runNotice: data.streaming ? current.runNotice || '' : '',
         loaded: true,
         loading: false,
         error: data.error || '',
@@ -619,7 +624,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: t('新会话') }) })
         setActiveId(created.id)
         setRemoteSessions((current) => mergeSessionLists(current, [created]))
-        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', goal: created.goal || null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null })
+        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', goal: created.goal || null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
         setTiledSessionIds((current) => current.includes(created.id) ? current : [...current, created.id])
         setMode('focus')
         try {
@@ -720,8 +725,9 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     setError('')
     const userMessage = { id: `user-${Date.now()}`, role: 'user', text: prompt, attachments: attachments.map(({ id, kind, name, mimeType, size, data }) => ({ id, kind, name, mimeType, size, data: kind === 'image' ? data : undefined })) }
     const agentId = `agent-${Date.now()}`
+    const runStartedAt = new Date().toISOString()
     let responseText = ''
-    updateSessionState(sessionId, (current) => ({ ...current, messages: [...current.messages, userMessage, { id: agentId, role: 'agent', text: '', streaming: true }], tools: [], approvals: [], error: '', streaming: true, loaded: true }))
+    updateSessionState(sessionId, (current) => ({ ...current, messages: [...current.messages, userMessage, { id: agentId, role: 'agent', text: '', streaming: true }], tools: [], approvals: [], error: '', streaming: true, loaded: true, runStartedAt, lastActivityAt: runStartedAt, runFinishedAt: null, runStopped: false, runNotice: '' }))
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -729,35 +735,40 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         body: JSON.stringify({ sessionId, message: prompt, attachments, goalMode }),
       })
       await consumeEventStream(response, (event, data) => {
+        const eventAt = new Date().toISOString()
         if (event === 'meta') {
           setModel(data.model)
-          updateSessionState(sessionId, { model: data.model, cwd: data.cwd, permissionMode: data.permissionMode, goal: data.goal ?? null })
+          updateSessionState(sessionId, (current) => ({ ...current, model: data.model, cwd: data.cwd, permissionMode: data.permissionMode, goal: data.goal ?? null, runStartedAt: data.startedAt || current.runStartedAt, lastActivityAt: data.lastActivityAt || eventAt }))
           if (data.cwd || data.permissionMode || data.goal !== undefined) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null } : session))
         } else if (event === 'text_delta') {
           responseText += data.delta || ''
-          updateSessionState(sessionId, (current) => ({ ...current, messages: current.messages.map((item) => item.id === agentId ? { ...item, text: item.text + data.delta } : item) }))
+          updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, runNotice: '', messages: current.messages.map((item) => item.id === agentId ? { ...item, text: item.text + data.delta } : item) }))
+        } else if (event === 'thinking_delta') {
+          updateSessionState(sessionId, { lastActivityAt: eventAt })
         } else if (event === 'tool_start') {
-          updateSessionState(sessionId, (current) => ({ ...current, tools: [...current.tools, { id: data.id, name: data.name, status: 'running' }] }))
+          updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, runNotice: '', tools: [...current.tools, { id: data.id, name: data.name, status: 'running', startedAt: data.startedAt || eventAt, updatedAt: eventAt }] }))
         } else if (event === 'tool_update') {
           updateSessionState(sessionId, (current) => ({
             ...current,
+            lastActivityAt: data.updatedAt || eventAt,
             tools: current.tools.map((item) => item.id === data.id
-              ? { ...item, message: data.message || item.message || '', ...(data.subagent ? { subagent: data.subagent } : {}) }
+              ? { ...item, message: data.message || item.message || '', updatedAt: data.updatedAt || eventAt, ...(data.subagent ? { subagent: data.subagent } : {}) }
               : item),
           }))
         } else if (event === 'tool_end') {
           updateSessionState(sessionId, (current) => ({
             ...current,
-            error: data.error ? data.message || t('{tool} 执行失败', { tool: data.name }) : current.error,
-            tools: current.tools.map((item) => item.id === data.id ? { ...item, status: data.error ? 'error' : 'done', message: data.message || '' } : item),
+            lastActivityAt: data.finishedAt || eventAt,
+            tools: current.tools.map((item) => item.id === data.id ? { ...item, status: data.error ? 'error' : 'done', message: data.message || '', updatedAt: data.finishedAt || eventAt, finishedAt: data.finishedAt || eventAt } : item),
           }))
         } else if (event === 'permission_request') {
-          updateSessionState(sessionId, (current) => ({ ...current, approvals: [...(current.approvals || []).filter((item) => item.id !== data.id), data] }))
+          updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, approvals: [...(current.approvals || []).filter((item) => item.id !== data.id), data] }))
         } else if (event === 'permission_resolved') {
-          updateSessionState(sessionId, (current) => ({ ...current, approvals: (current.approvals || []).filter((item) => item.id !== data.id) }))
+          updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, approvals: (current.approvals || []).filter((item) => item.id !== data.id) }))
         } else if (event === 'generated_asset') {
           updateSessionState(sessionId, (current) => ({
             ...current,
+            lastActivityAt: eventAt,
             messages: current.messages.map((item) => item.id === agentId
               ? { ...item, attachments: [...(item.attachments || []).filter((attachment) => attachment.id !== data.id), data] }
               : item),
@@ -768,18 +779,20 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         } else if (event === 'session_title') {
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, name: data.name } : session))
         } else if (event === 'retry') {
-          updateSessionState(sessionId, { error: t('正在重试 {attempt}/{maxAttempts}：{message}', { attempt: data.attempt, maxAttempts: data.maxAttempts, message: data.message }) })
+          updateSessionState(sessionId, { runNotice: t('正在重试 {attempt}/{maxAttempts}：{message}', { attempt: data.attempt, maxAttempts: data.maxAttempts, message: data.message }), lastActivityAt: eventAt })
         } else if (event === 'error') {
           throw new Error(data.message)
         }
       })
-      updateSessionState(sessionId, (current) => ({ ...current, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false } : item) }))
+      const runFinishedAt = new Date().toISOString()
+      updateSessionState(sessionId, (current) => ({ ...current, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false } : item) }))
       if (goalMode || sessionStatesRef.current[sessionId]?.goal) await loadSessionMessages(sessionId, { force: true })
       const sessions = await refreshSessions()
       const completed = sessions.find((session) => session.id === sessionId)
       browserNotify?.('chat.completed', { chat: { title: completed?.name || t('{app} 对话', { app: APP_NAME }), summary: responseText.trim().slice(0, 260) || t('Agent 已完成回复。'), model: sessionStatesRef.current[sessionId]?.model || model } })
     } catch (caught) {
-      updateSessionState(sessionId, (current) => ({ ...current, error: caught.message, messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || caught.message } : item) }))
+      const runFinishedAt = new Date().toISOString()
+      updateSessionState(sessionId, (current) => ({ ...current, error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || caught.message } : item) }))
     } finally {
       updateSessionState(sessionId, { streaming: false })
       window.dispatchEvent(new Event(USAGE_UPDATED_EVENT))
@@ -789,7 +802,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   const abort = async (sessionId = activeId) => {
     if (!sessionId) return
     const result = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', body: '{}' })
-    updateSessionState(sessionId, { streaming: false, goal: result.goal ?? null })
+    const runFinishedAt = new Date().toISOString()
+    updateSessionState(sessionId, { streaming: false, goal: result.goal ?? null, runFinishedAt, lastActivityAt: runFinishedAt, runStopped: true, runNotice: '' })
     setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, goal: result.goal ?? session.goal ?? null } : session))
     notify(t('已停止当前运行'), 'info')
   }
@@ -912,7 +926,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         <div className="session-grid">
           {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} permissionMode={sessionStates[session.id]?.permissionMode || session.permissionMode || 'auto'} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(session.id, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(session.id, approvalId, approved)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onRemoveFromTiled={() => toggleTiled(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
         </div>
-      ) : <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} />}
+      ) : <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} runStartedAt={activeState.runStartedAt} lastActivityAt={activeState.lastActivityAt} runFinishedAt={activeState.runFinishedAt} runStopped={activeState.runStopped} runNotice={activeState.runNotice} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} />}
     </div>
     {workspaceSession && <WorkspacePicker session={workspaceSession} onClose={() => setWorkspaceSession(null)} onSelect={(cwd) => switchSessionCwd(workspaceSession, cwd)} />}
     </>
@@ -927,7 +941,7 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
   const tools = state?.tools || EMPTY_LIST
   const streaming = Boolean(state?.streaming)
   const lastMessage = messages[messages.length - 1]
-  const liveVersion = `${session.id}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${state?.error || ''}`
+  const liveVersion = `${session.id}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}:${tool.message?.length || 0}`).join('|')}:${state?.lastActivityAt || ''}:${state?.error || ''}`
   const { scrollRef: liveRef, onScroll: onLiveScroll, scrollToBottom } = useAutoScroll(liveVersion)
   const submit = (event) => {
     event.preventDefault()
@@ -941,8 +955,8 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
     <Panel className="session-card">
       <div className="card-head"><button className="session-title-button" onClick={onOpen}><h3 title={session.name}>{session.name}</h3><span className={streaming ? 'success' : ''}>{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || messages.length })} · {relativeTime(session.modified, language)}</span><small className="workspace-summary" title={state?.cwd || session.cwd}><FolderOpen size={10} />{workspaceName(state?.cwd || session.cwd, language)}</small></button><div className="card-head-actions"><button className="icon-button" title={t('设置工作目录')} onClick={onWorkspace} disabled={streaming || state?.switchingCwd}><FolderOpen size={14} /></button><button className="icon-button" title={t('重命名会话')} onClick={onRename}><Pencil size={14} /></button><button className="icon-button" title={t('移出平铺')} aria-label={t('将 {name} 移出平铺', { name: session.name })} onClick={onRemoveFromTiled}><X size={14} /></button>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={11} />{t('停止')}</button> : <button className="icon-button" onClick={onOpen}><MoreHorizontal size={17} /></button>}</div></div>
       <div className="session-live-body" ref={liveRef} onScroll={onLiveScroll}>
-        {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />{t('加载消息…')}</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />{t('开始一个新的编码任务')}</button> : messages.map((message) => <div className={`mini-message ${message.role}`} key={message.id}><span>{message.role === 'agent' ? 'Vesper' : 'You'}</span><div className="mini-message-content"><MarkdownMessage>{message.text || (message.streaming ? t('正在思考…') : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} compact />}</div></div>)}
-        {tools.some((tool) => tool.status === 'running') && <div className="mini-tool-status"><Wrench size={11} />{tools.filter((tool) => tool.status === 'running').map((tool) => tool.name).join(language === 'en-US' ? ', ' : '、')} {t('运行中')}</div>}
+        {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />{t('加载消息…')}</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />{t('开始一个新的编码任务')}</button> : messages.map((message) => <div className={`mini-message ${message.role}`} key={message.id}><span>{message.role === 'agent' ? 'Vesper' : 'You'}</span><div className="mini-message-content">{(message.text || !message.streaming) && <MarkdownMessage>{message.text}</MarkdownMessage>}{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} compact />}</div></div>)}
+        {(streaming || state?.runStartedAt) && <AgentRunActivity compact streaming={streaming} text={lastMessage?.role === 'agent' ? lastMessage.text : ''} tools={tools} error={state?.error} stopped={state?.runStopped} notice={state?.runNotice} startedAt={state?.runStartedAt} lastActivityAt={state?.lastActivityAt} finishedAt={state?.runFinishedAt} />}
         {state?.error && <div className="mini-session-error"><AlertTriangle size={11} />{state.error}</div>}
       </div>
       <form className="mini-composer-shell" onSubmit={submit}>
@@ -1077,7 +1091,111 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort }) {
+const TOOL_ACTIVITY_LABELS = {
+  read: '读取文件',
+  grep: '搜索内容',
+  find: '查找文件',
+  ls: '浏览目录',
+  edit: '修改文件',
+  write: '写入文件',
+  bash: '运行命令',
+  memory_search: '搜索记忆',
+  memory_remember: '保存记忆',
+  delegate_task: '子 Agent',
+  generate_visual: '生成视觉内容',
+}
+
+function useRunActivityClock(streaming) {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    setNow(Date.now())
+    if (!streaming) return undefined
+    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
+    return () => window.clearInterval(timer)
+  }, [streaming])
+  return now
+}
+
+function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, error, stopped, notice, startedAt, lastActivityAt, finishedAt, compact = false }) {
+  const { t, language } = useI18n()
+  const [expanded, setExpanded] = useState(false)
+  const now = useRunActivityClock(streaming)
+  const activity = deriveRunActivity({ streaming, text, tools, error, stopped, lastActivityAt, now })
+  const groups = useMemo(() => groupToolCalls(tools), [tools])
+  const duration = formatRunDuration(runDurationMs(startedAt, finishedAt, now), language)
+  const completedCount = tools.filter((tool) => tool.status === 'done').length
+  const runningCount = groups.running.length
+  const errorCount = groups.errors.length
+  const toolLabel = (name) => t(TOOL_ACTIVITY_LABELS[name] || name || '使用工具')
+  const stageLabel = ({ stage, activeTool }) => ({
+    thinking: t('正在理解任务'),
+    researching: t('正在检查项目内容'),
+    editing: t('正在修改文件'),
+    validating: t('正在运行命令或验证'),
+    subagent: t('子 Agent 正在处理'),
+    generating_visual: t('正在生成视觉内容'),
+    using_tool: t('正在使用 {tool}', { tool: toolLabel(activeTool?.name) }),
+    responding: t('正在整理回复'),
+    waiting_model: t('正在等待模型响应'),
+    waiting_tool: t('正在等待工具返回'),
+    completed: t('已完成回复'),
+    failed: t('本轮执行失败'),
+    stopped: t('已停止运行'),
+  })[stage] || t('正在处理')
+  const summary = [
+    completedCount ? t('已完成 {count} 项操作', { count: completedCount }) : '',
+    runningCount ? t('{count} 项运行中', { count: runningCount }) : '',
+    errorCount ? t('{count} 项失败', { count: errorCount }) : '',
+  ].filter(Boolean).join(' · ')
+  const inactivity = activity.inactiveMs >= 10_000
+    ? t('{count} 秒无新进度', { count: Math.floor(activity.inactiveMs / 1000) })
+    : ''
+  const details = expanded
+    ? [
+        ...groups.running.map((tool) => ({ ...tool, count: 1 })),
+        ...groups.errors.map((tool) => ({ ...tool, count: 1 })),
+        ...groups.completed.map((group) => ({ ...group, id: `completed-${group.name}`, status: 'done' })),
+      ]
+    : [
+        ...groups.running.map((tool) => ({ ...tool, count: 1 })),
+        ...groups.errors.map((tool) => ({ ...tool, count: 1 })),
+      ]
+  const expandable = !compact && tools.length > 0
+
+  useEffect(() => {
+    if (!streaming) setExpanded(false)
+  }, [streaming])
+
+  const statusIcon = activity.stage === 'failed'
+    ? <AlertTriangle size={14} />
+    : activity.stage === 'stopped'
+      ? <Square size={12} />
+      : streaming
+        ? <RefreshCw className="spin" size={14} />
+        : <Check size={14} />
+
+  return <section className={`agent-run-activity ${compact ? 'compact' : ''} ${activity.stage}`}>
+    <button type="button" className="agent-run-summary" disabled={!expandable} aria-expanded={expandable ? expanded : undefined} onClick={() => expandable && setExpanded((value) => !value)} title={expandable ? t(expanded ? '收起工作过程' : '展开工作过程') : stageLabel(activity)}>
+      <span className="agent-run-status-icon">{statusIcon}</span>
+      <span className="agent-run-copy"><strong>{stageLabel(activity)}</strong><small>{inactivity || notice || summary || t('尚未调用工具')}</small></span>
+      <span className="agent-run-duration"><Clock3 size={12} />{duration}</span>
+      {expandable && <ChevronRight className={expanded ? 'expanded' : ''} size={14} />}
+    </button>
+    {!compact && details.length > 0 && <div className="agent-run-tools">
+      {details.map((tool) => {
+        const toolDuration = tool.count === 1 && tool.startedAt ? formatRunDuration(runDurationMs(tool.startedAt, tool.finishedAt, now), language) : ''
+        return <div className={`agent-run-tool ${tool.status}`} key={tool.id || `${tool.name}-${tool.status}`}>
+          <span>{tool.status === 'error' ? <AlertTriangle size={13} /> : tool.status === 'running' ? <RefreshCw className="spin" size={13} /> : <Check size={13} />}</span>
+          <span><strong>{toolLabel(tool.name)}{tool.count > 1 ? ` × ${tool.count}` : ''}</strong>{tool.message && <small title={tool.message}>{tool.message}</small>}</span>
+          <em>{toolDuration || t(tool.status === 'running' ? '运行中' : tool.status === 'error' ? '失败' : '完成')}</em>
+        </div>
+      })}
+      {!expanded && completedCount > 0 && <button type="button" className="agent-run-more" onClick={() => setExpanded(true)}>{t('展开查看已完成的 {count} 项操作', { count: completedCount })}<ChevronRight size={13} /></button>}
+    </div>}
+  </section>
+}
+
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const [goalArmed, setGoalArmed] = useState(false)
@@ -1086,7 +1204,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   const promptRef = useRef(null)
   const prependSnapshot = useRef(null)
   const lastMessage = messages[messages.length - 1]
-  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${error || ''}`
+  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}:${tool.message?.length || 0}`).join('|')}:${lastActivityAt || ''}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${error || ''}`
   const { scrollRef: transcriptRef, onScroll: onTranscriptScroll, hasUnread, scrollToBottom } = useAutoScroll(transcriptVersion)
   const loadOlder = useCallback(async () => {
     const node = transcriptRef.current
@@ -1143,9 +1261,9 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
         {messages.map((message, index) => {
           const isLatestAgent = message.role === 'agent' && index === messages.length - 1
           const agentState = message.streaming || (isLatestAgent && streaming) ? 'thinking' : isLatestAgent && !message.error ? 'waiting' : 'idle'
-          return <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? <AgentStatusAvatar state={agentState} /> : 'You'}</span><div className="message-content"><MarkdownMessage>{message.text || (message.streaming ? t('正在思考…') : '')}</MarkdownMessage>{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}</div></div>
+          const showRunActivity = isLatestAgent && (streaming || runStartedAt)
+          return <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? <AgentStatusAvatar state={agentState} /> : 'You'}</span><div className="message-content">{showRunActivity && <AgentRunActivity streaming={streaming} text={message.text} tools={tools} error={error || message.error} stopped={runStopped} notice={runNotice} startedAt={runStartedAt} lastActivityAt={lastActivityAt} finishedAt={runFinishedAt} />}{(message.text || !message.streaming) && <MarkdownMessage>{message.text}</MarkdownMessage>}{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}</div></div>
         })}
-        {tools.length > 0 && <div className="tool-trace"><strong>{t('工具执行')}</strong>{tools.map((tool) => <span key={tool.id} className={tool.status} title={tool.message || tool.name}><Wrench size={12} />{tool.name === 'delegate_task' ? t('子 Agent') : tool.name}<em>{t(tool.status === 'running' ? '运行中' : tool.status === 'done' ? '完成' : '失败')}</em>{tool.message && <small>{tool.message}</small>}</span>)}</div>}
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
       {hasUnread && <button type="button" className="button secondary jump-to-latest" onClick={() => scrollToBottom('smooth')}><ArrowDown size={14} />{t('有新内容')}</button>}
