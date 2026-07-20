@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import test from 'node:test'
-import { SubagentService } from '../services/subagent-service.mjs'
+import { MAX_SUBAGENT_OUTPUT_BYTES, SubagentService } from '../services/subagent-service.mjs'
 import { TOOL_CATALOG, createAppTools } from '../tools/registry.mjs'
 
 function createFakeSession({ onPrompt } = {}) {
@@ -27,7 +30,40 @@ function createFakeSession({ onPrompt } = {}) {
   return session
 }
 
-test('subagent sessions inherit the parent tool set and return structured findings', async () => {
+const createFakeResourceLoader = async ({ role, rolePrompt }) => ({ role, rolePrompt })
+
+test('default Pi resource loader appends the role system prompt', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-subagent-loader-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  let appendedPrompt = ''
+  const service = new SubagentService({
+    agentDir: directory,
+    createSessionManager: () => ({}),
+    createSession: async (options) => {
+      appendedPrompt = options.resourceLoader.getAppendSystemPrompt().at(-1) || ''
+      return {
+        session: createFakeSession({
+          onPrompt: async ({ session }) => {
+            session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Inspected safely.' }] })
+          },
+        }),
+      }
+    },
+  })
+
+  await service.run({
+    parentSessionId: 'parent-loader',
+    cwd: directory,
+    model: { provider: 'openai', id: 'gpt-5' },
+    role: 'planner',
+    task: 'Plan the change.',
+    allowedTools: ['read'],
+  })
+
+  assert.match(appendedPrompt, /planning subagent/i)
+})
+
+test('read-focused subagents receive only read tools and return structured findings', async () => {
   const session = createFakeSession({
     onPrompt: async ({ emit, session: active }) => {
       emit({ type: 'tool_execution_start', toolCallId: 'read-1', toolName: 'read' })
@@ -50,6 +86,7 @@ test('subagent sessions inherit the parent tool set and return structured findin
     getModelRuntime: () => ({ name: 'runtime' }),
     getSettingsManager: () => ({ name: 'settings' }),
     createSessionManager: (cwd) => ({ cwd, kind: 'in-memory' }),
+    createResourceLoader: createFakeResourceLoader,
     createSession: async (value) => {
       options = value
       return { session }
@@ -70,14 +107,17 @@ test('subagent sessions inherit the parent tool set and return structured findin
   })
 
   assert.equal(installed, session)
-  assert.deepEqual(options.tools, parentTools)
-  assert.deepEqual(options.customTools, customTools.slice(0, 5))
+  assert.deepEqual(options.tools, ['read', 'grep', 'find', 'ls', 'memory_search'])
+  assert.deepEqual(options.customTools, [{ name: 'memory_search' }])
+  assert.deepEqual(new Set(options.excludeTools), new Set(['delegate_task', 'get_goal', 'update_goal']))
   assert.equal(options.sessionManager.kind, 'in-memory')
-  assert.match(session.agent.state.systemPrompt, /scout subagent/i)
+  assert.match(options.resourceLoader.rolePrompt, /scout subagent/i)
+  assert.equal(session.agent.state.systemPrompt, 'Base system prompt')
   assert.equal(completed, result)
   assert.equal(result.parentSessionId, 'parent-1')
   assert.equal(result.role, 'scout')
-  assert.equal(result.writeCapable, true)
+  assert.equal(result.writeCapable, false)
+  assert.deepEqual(result.availableTools, ['read', 'grep', 'find', 'ls', 'memory_search'])
   assert.equal(result.model, 'openai/gpt-5')
   assert.match(result.output, /agent-runtime/)
   assert.deepEqual(result.usage, { input: 120, output: 45, cacheRead: 10, cacheWrite: 0, reasoning: 0, totalTokens: 165 })
@@ -88,7 +128,7 @@ test('subagent sessions inherit the parent tool set and return structured findin
   assert.deepEqual(service.getActive(), [])
 })
 
-test('worker and read-focused roles both inherit the parent permission tool set', async () => {
+test('only worker inherits parent write tools and parent-only tools are always excluded', async () => {
   const sessions = []
   const options = []
   const service = new SubagentService({
@@ -103,17 +143,18 @@ test('worker and read-focused roles both inherit the parent permission tool set'
       return { session }
     },
     createSessionManager: () => ({}),
+    createResourceLoader: createFakeResourceLoader,
   })
 
-  const readOnlyTools = ['read', 'grep', 'find', 'ls', 'memory_search']
+  const parentTools = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'memory_search', 'memory_remember', 'delegate_task', 'get_goal', 'update_goal']
   const workerResult = await service.run({
     parentSessionId: 'parent-worker',
     cwd: '/workspace',
     model: { provider: 'openai', id: 'gpt-5' },
     role: 'worker',
     task: 'Investigate the focused change.',
-    allowedTools: readOnlyTools,
-    customTools: [{ name: 'memory_search' }],
+    allowedTools: parentTools,
+    customTools: [{ name: 'memory_search' }, { name: 'memory_remember' }, { name: 'delegate_task' }, { name: 'get_goal' }, { name: 'update_goal' }],
   })
   const reviewerResult = await service.run({
     parentSessionId: 'parent-reviewer',
@@ -121,19 +162,23 @@ test('worker and read-focused roles both inherit the parent permission tool set'
     model: { provider: 'openai', id: 'gpt-5' },
     role: 'reviewer',
     task: 'Review the focused change.',
-    allowedTools: ['read', 'edit', 'write'],
+    allowedTools: parentTools,
+    customTools: [{ name: 'memory_search' }, { name: 'memory_remember' }, { name: 'delegate_task' }],
   })
 
-  assert.deepEqual(options[0].tools, readOnlyTools)
-  assert.deepEqual(options[0].customTools, [{ name: 'memory_search' }])
-  assert.equal(workerResult.writeCapable, false)
-  assert.deepEqual(options[1].tools, ['read', 'edit', 'write'])
-  assert.equal(reviewerResult.writeCapable, true)
-  assert.match(sessions[0].agent.state.systemPrompt, /implementation subagent/i)
-  assert.match(sessions[1].agent.state.systemPrompt, /code-review subagent/i)
+  assert.deepEqual(options[0].tools, ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'memory_search', 'memory_remember'])
+  assert.deepEqual(options[0].customTools, [{ name: 'memory_search' }, { name: 'memory_remember' }])
+  assert.equal(workerResult.writeCapable, true)
+  assert.deepEqual(options[1].tools, ['read', 'grep', 'find', 'ls', 'memory_search'])
+  assert.deepEqual(options[1].customTools, [{ name: 'memory_search' }])
+  assert.equal(reviewerResult.writeCapable, false)
+  assert.match(options[0].resourceLoader.rolePrompt, /implementation subagent/i)
+  assert.match(options[1].resourceLoader.rolePrompt, /code-review subagent/i)
+  assert.equal(sessions[0].agent.state.systemPrompt, 'Base system prompt')
+  assert.equal(sessions[1].agent.state.systemPrompt, 'Base system prompt')
 })
 
-test('multiple subagents with write tools can run for one parent session', async () => {
+test('concurrent roles preserve write access only for workers', async () => {
   let releasePrompt
   let startedCount = 0
   let bothStarted
@@ -151,6 +196,7 @@ test('multiple subagents with write tools can run for one parent session', async
       }),
     }),
     createSessionManager: () => ({}),
+    createResourceLoader: createFakeResourceLoader,
   })
   const workerInput = {
     parentSessionId: 'parent-concurrent-writers',
@@ -165,11 +211,12 @@ test('multiple subagents with write tools can run for one parent session', async
   releasePrompt()
   const [firstResult, secondResult] = await Promise.all([first, second])
   assert.equal(firstResult.writeCapable, true)
-  assert.equal(secondResult.writeCapable, true)
+  assert.equal(secondResult.writeCapable, false)
 })
 
-test('subagent output limits follow model context metadata instead of a fixed character cap', async () => {
-  const outputs = ['x'.repeat(30_000), 'y'.repeat(1_000)]
+test('subagent output has a UTF-8-aware 50 KB cap in addition to model context limits', async () => {
+  const largeOutput = '你'.repeat(20_000)
+  const outputs = [largeOutput, 'y'.repeat(1_000)]
   const service = new SubagentService({
     createSession: async () => ({
       session: createFakeSession({
@@ -179,6 +226,7 @@ test('subagent output limits follow model context metadata instead of a fixed ch
       }),
     }),
     createSessionManager: () => ({}),
+    createResourceLoader: createFakeResourceLoader,
   })
 
   const largeContext = await service.run({
@@ -187,9 +235,12 @@ test('subagent output limits follow model context metadata instead of a fixed ch
     model: { provider: 'openai', id: 'gpt-5', contextWindow: 200_000, maxTokens: 128_000 },
     task: 'Return the complete result.',
   })
-  assert.equal(largeContext.output.length, 30_000)
-  assert.equal(largeContext.outputTruncated, false)
-  assert.equal(largeContext.outputEstimatedTokens, 7_500)
+  assert.ok(Buffer.byteLength(largeContext.output, 'utf8') <= MAX_SUBAGENT_OUTPUT_BYTES)
+  assert.equal(largeContext.output.includes('\ufffd'), false)
+  assert.equal(largeContext.outputTruncated, true)
+  assert.equal(largeContext.fullOutput, largeOutput)
+  assert.equal(largeContext.outputBytes, Buffer.byteLength(largeOutput, 'utf8'))
+  assert.equal(largeContext.outputByteLimit, MAX_SUBAGENT_OUTPUT_BYTES)
   assert.equal(largeContext.outputTokenLimit, 128_000)
 
   const smallContext = await service.run({
@@ -227,6 +278,7 @@ test('subagent inactivity timeout resets whenever the child emits activity', asy
   const service = new SubagentService({
     createSession: async () => ({ session }),
     createSessionManager: () => ({}),
+    createResourceLoader: createFakeResourceLoader,
     setTimer,
     clearTimer,
   })
@@ -263,6 +315,7 @@ test('subagent service rejects oversized tasks before creating a child session',
   let created = false
   const service = new SubagentService({
     createSession: async () => { created = true; return { session: createFakeSession() } },
+    createResourceLoader: createFakeResourceLoader,
   })
   await assert.rejects(service.run({
     parentSessionId: 'parent-long-task',
@@ -286,6 +339,7 @@ test('stopping a parent session cancels its active subagents', async () => {
   const service = new SubagentService({
     createSession: async () => ({ session }),
     createSessionManager: () => ({}),
+    createResourceLoader: createFakeResourceLoader,
   })
 
   const running = service.run({

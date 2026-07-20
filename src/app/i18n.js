@@ -774,6 +774,7 @@ const EN_EXTENDED_MESSAGES = Object.freeze({
   'Goal 模式': 'Goal mode',
   '正在自动执行': 'Running autonomously',
   '下一条消息将启动 Goal': 'The next message will start a Goal',
+  '下一条消息将继续 Goal': 'The next message will resume the Goal',
   'Goal 已完成': 'Goal complete',
   'Goal 已达到预算': 'Goal reached its budget',
   'Goal 已暂停': 'Goal paused',

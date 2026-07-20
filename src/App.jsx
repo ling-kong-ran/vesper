@@ -1163,7 +1163,7 @@ function GoalModeControl({ goal, armed, onChange }) {
   const status = active
     ? t('正在自动执行')
     : armed
-      ? t('下一条消息将启动 Goal')
+      ? t(goal?.status === 'paused' ? '下一条消息将继续 Goal' : '下一条消息将启动 Goal')
       : goal?.status === 'complete'
         ? t('Goal 已完成')
         : goal?.status === 'budget_limited'

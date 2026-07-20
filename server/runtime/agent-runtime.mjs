@@ -932,10 +932,7 @@ export class AgentRuntimeService {
       this.emitGoalUpdate(runtimeSession.sessionId, updatedGoal)
       await accounting
     }
-    const parentActiveToolNames = () => [...new Set([
-      ...enabledTools,
-      ...(this.goals.get(runtimeSessionId)?.status === 'active' ? GOAL_TOOL_NAMES : []),
-    ])]
+    const parentActiveToolNames = () => [...enabledTools]
     const runSubagent = (input, execution) => {
       if (!runtimeSession?.model) throw new Error('当前会话没有可用模型，无法启动子 Agent。')
       return this.subagents.run({
@@ -945,7 +942,7 @@ export class AgentRuntimeService {
         cwd: effectiveCwd,
         model: runtimeSession.model,
         allowedTools: parentActiveToolNames(),
-        customTools: [...createInheritedCustomTools(), ...goalTools],
+        customTools: createInheritedCustomTools(),
         onSession: installSubagentPermissions,
         onCompleted: accountSubagentUsage,
       })
@@ -1002,7 +999,11 @@ export class AgentRuntimeService {
     }
     if (session.isStreaming) throw new Error('当前会话仍在运行，请等待完成或先停止。')
     let goal = this.goals.get(session.sessionId)
-    if (goalMode) goal = await this.goals.start(session.sessionId, { objective: message })
+    if (goalMode) {
+      goal = goal?.status === 'paused'
+        ? await this.goals.resume(session.sessionId)
+        : await this.goals.start(session.sessionId, { objective: message })
+    }
     this.syncGoalTools(value, goal)
     const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, startedAt: new Date().toISOString() }
     this.liveSessions.set(session.sessionId, live)
@@ -1092,6 +1093,9 @@ export class AgentRuntimeService {
         }
         void accounting.catch(() => {})
       } else if (event.type === 'agent_end') {
+        if (event.willRetry) return
+        const finalAssistant = [...(event.messages || [])].reverse().find((item) => item?.role === 'assistant')
+        if (finalAssistant?.stopReason === 'error' || finalAssistant?.stopReason === 'aborted' || finalAssistant?.errorMessage) return
         const activeGoal = this.goals.get(session.sessionId)
         if (activeGoal?.status !== 'active' || continuationQueued) return
         continuationQueued = true

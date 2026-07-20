@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { createAgentSession, estimateTokens, SessionManager } from '@earendil-works/pi-coding-agent'
+import { createAgentSession, DefaultResourceLoader, estimateTokens, SessionManager } from '@earendil-works/pi-coding-agent'
 
 export const SUBAGENT_ROLES = Object.freeze({
   scout: Object.freeze({
@@ -8,7 +8,7 @@ export const SUBAGENT_ROLES = Object.freeze({
 
 Guidelines:
 - Focus on evidence gathering, relevant imports, and the smallest useful set of files.
-- Use the inherited parent-session tools and permission mode as needed for the task.
+- Use only the read-only tools exposed to this role.
 - Cite exact file paths and important functions, data structures, or line ranges when possible.
 - Separate verified findings from assumptions.
 - Respond in the language used by the delegated task.`,
@@ -18,7 +18,7 @@ Guidelines:
     prompt: `You are a planning subagent working in an isolated context. Turn the delegated task into a concrete, safe implementation plan.
 
 Guidelines:
-- Inspect the relevant code before proposing changes and use inherited parent-session tools as needed.
+- Inspect the relevant code before proposing changes and use only the read-only tools exposed to this role.
 - Return a numbered plan, affected files, expected behavior, and risks or validation steps.
 - Clearly distinguish proposed work from verified completed work.
 - Respond in the language used by the delegated task.`,
@@ -28,7 +28,7 @@ Guidelines:
     prompt: `You are a code-review subagent working in an isolated context. Analyze the delegated task or code for correctness, regressions, security, and maintainability.
 
 Guidelines:
-- Use inherited parent-session tools and permission mode as needed to investigate the task.
+- Use only the read-only tools exposed to this role to investigate the task.
 - Report concrete findings first, with file paths and rationale. Clearly say when no blocking issue is found.
 - Distinguish critical issues, warnings, and suggestions.
 - Respond in the language used by the delegated task.`,
@@ -38,7 +38,7 @@ Guidelines:
     prompt: `You are an implementation subagent working in an isolated context. Complete the delegated coding task in the current workspace.
 
 Guidelines:
-- You receive the parent session's enabled tools and permission mode. Respect the resulting approvals and workspace boundary.
+- You receive the safe subset of the parent session's enabled tools and permission mode. Respect the resulting approvals and workspace boundary.
 - Make only the changes required for the delegated task. Preserve existing user changes and do not revert unrelated work.
 - Inspect relevant files before editing. Run focused validation when a shell tool is available and it is useful.
 - At the end, report changed files, validation performed, and any remaining risk.
@@ -51,6 +51,10 @@ export const DEFAULT_SUBAGENT_TIMEOUT_SECONDS = 180
 export const MAX_SUBAGENT_TIMEOUT_SECONDS = 300
 export const MAX_CONCURRENT_SUBAGENTS = 4
 export const MAX_SUBAGENT_TASK_CHARS = 12_000
+export const MAX_SUBAGENT_OUTPUT_BYTES = 50 * 1024
+
+const READ_ONLY_SUBAGENT_TOOL_NAMES = new Set(['read', 'grep', 'find', 'ls', 'memory_search'])
+const PARENT_ONLY_TOOL_NAMES = new Set(['delegate_task', 'get_goal', 'update_goal'])
 
 function textFromContent(content) {
   if (typeof content === 'string') return content
@@ -90,20 +94,38 @@ function estimatedTextTokens(text) {
   return estimateTokens({ role: 'custom', content: [{ type: 'text', text }] })
 }
 
+function utf8Prefix(value, maxBytes) {
+  const buffer = Buffer.from(value, 'utf8')
+  if (buffer.length <= maxBytes) return value
+  let end = maxBytes
+  while (end > 0 && (buffer[end] & 0xc0) === 0x80) end -= 1
+  return buffer.subarray(0, end).toString('utf8')
+}
+
 function contextLimitedText(value, model) {
   const text = String(value || '').trim()
   const tokenLimit = modelOutputTokenLimit(model)
   const estimatedTokens = estimatedTextTokens(text)
-  if (!tokenLimit || estimatedTokens <= tokenLimit) {
-    return { text, truncated: false, estimatedTokens, tokenLimit }
+  const outputBytes = Buffer.byteLength(text, 'utf8')
+  const tokenTruncated = Boolean(tokenLimit && estimatedTokens > tokenLimit)
+  const byteTruncated = outputBytes > MAX_SUBAGENT_OUTPUT_BYTES
+  if (!tokenTruncated && !byteTruncated) {
+    return { text, fullText: text, truncated: false, estimatedTokens, tokenLimit, outputBytes, byteLimit: MAX_SUBAGENT_OUTPUT_BYTES }
   }
-  const suffix = '\n\n[Truncated to model context.]'
-  const charLimit = Math.max(0, tokenLimit * 4 - suffix.length)
+  const reasons = [tokenTruncated ? 'model context' : '', byteTruncated ? '50 KB tool-output limit' : ''].filter(Boolean).join(' and ')
+  const suffix = `\n\n[Output truncated for ${reasons}. Full output is preserved in tool details.]`
+  const suffixBytes = Buffer.byteLength(suffix, 'utf8')
+  const byteBudget = Math.max(0, MAX_SUBAGENT_OUTPUT_BYTES - suffixBytes)
+  const charBudget = tokenTruncated ? Math.max(0, tokenLimit * 4 - suffix.length) : text.length
+  const prefix = utf8Prefix(text.slice(0, charBudget), byteBudget)
   return {
-    text: `${text.slice(0, charLimit)}${suffix}`,
+    text: `${prefix}${suffix}`,
+    fullText: text,
     truncated: true,
     estimatedTokens,
     tokenLimit,
+    outputBytes,
+    byteLimit: MAX_SUBAGENT_OUTPUT_BYTES,
   }
 }
 
@@ -113,8 +135,10 @@ function timeoutSeconds(value) {
   return Math.max(15, Math.min(MAX_SUBAGENT_TIMEOUT_SECONDS, Math.floor(number)))
 }
 
-function childToolsFor(allowedTools) {
-  return [...new Set(Array.isArray(allowedTools) ? allowedTools.filter(Boolean) : [])]
+function childToolsFor(role, allowedTools) {
+  const inherited = [...new Set(Array.isArray(allowedTools) ? allowedTools.filter(Boolean) : [])]
+    .filter((tool) => !PARENT_ONLY_TOOL_NAMES.has(tool))
+  return role === 'worker' ? inherited : inherited.filter((tool) => READ_ONLY_SUBAGENT_TOOL_NAMES.has(tool))
 }
 
 function canModifyWorkspace(tools) {
@@ -130,6 +154,17 @@ function safeProgressMessage(value) {
   return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 180)
 }
 
+async function createRoleResourceLoader({ cwd, agentDir, settingsManager, rolePrompt }) {
+  const loader = new DefaultResourceLoader({
+    cwd,
+    agentDir: agentDir || cwd,
+    ...(settingsManager ? { settingsManager } : {}),
+    appendSystemPromptOverride: (base) => [...base, rolePrompt],
+  })
+  await loader.reload()
+  return loader
+}
+
 export class SubagentService {
   constructor({
     agentDir,
@@ -137,6 +172,7 @@ export class SubagentService {
     getSettingsManager,
     createSession = createAgentSession,
     createSessionManager = (cwd) => SessionManager.inMemory(cwd),
+    createResourceLoader = createRoleResourceLoader,
     maxConcurrent = MAX_CONCURRENT_SUBAGENTS,
     setTimer = setTimeout,
     clearTimer = clearTimeout,
@@ -146,6 +182,7 @@ export class SubagentService {
     this.getSettingsManager = getSettingsManager || (() => null)
     this.createSession = createSession
     this.createSessionManager = createSessionManager
+    this.createResourceLoader = createResourceLoader
     this.maxConcurrent = Math.max(1, Number(maxConcurrent) || MAX_CONCURRENT_SUBAGENTS)
     this.setTimer = setTimer
     this.clearTimer = clearTimer
@@ -185,7 +222,7 @@ export class SubagentService {
     const normalizedTask = String(task || '').trim()
     if (!normalizedTask) throw new Error('Subagent task cannot be empty.')
     if (normalizedTask.length > MAX_SUBAGENT_TASK_CHARS) throw new Error(`Subagent task is limited to ${MAX_SUBAGENT_TASK_CHARS} characters.`)
-    const childTools = childToolsFor(allowedTools)
+    const childTools = childToolsFor(role, allowedTools)
     const childCustomTools = inheritedCustomTools(childTools, customTools)
     const writeCapable = canModifyWorkspace(childTools)
     if (this.active.size >= this.maxConcurrent) throw new Error(`Subagent concurrency limit reached (${this.maxConcurrent}).`)
@@ -260,21 +297,30 @@ export class SubagentService {
       if (signal?.aborted) abort()
       signal?.addEventListener?.('abort', abort, { once: true })
       emit('starting', `${definition.label} is starting`)
+      const settingsManager = this.getSettingsManager()
+      const resourceLoader = await this.createResourceLoader({
+        cwd,
+        agentDir: this.agentDir || cwd,
+        settingsManager,
+        role,
+        rolePrompt: definition.prompt,
+      })
       const result = await this.createSession({
         cwd,
         agentDir: this.agentDir,
         model,
         modelRuntime: this.getModelRuntime(),
-        settingsManager: this.getSettingsManager(),
+        settingsManager,
+        resourceLoader,
         sessionManager: this.createSessionManager(cwd),
         tools: childTools,
+        excludeTools: [...PARENT_ONLY_TOOL_NAMES],
         ...(childCustomTools.length ? { customTools: childCustomTools } : {}),
       })
       const session = result?.session
       if (!session) throw new Error('Subagent session could not be created.')
       record.session = session
       onSession?.(session)
-      session.agent.state.systemPrompt = `${session.agent.state.systemPrompt || ''}\n\n${definition.prompt}`
       unsubscribe = session.subscribe((event) => {
         touchActivity()
         if (event.type === 'tool_execution_start') {
@@ -309,9 +355,12 @@ export class SubagentService {
         task: normalizedTask,
         model: modelLabel(model),
         output: output.text || '(Subagent returned no text output.)',
+        fullOutput: output.fullText,
         outputTruncated: output.truncated,
         outputEstimatedTokens: output.estimatedTokens,
         outputTokenLimit: output.tokenLimit,
+        outputBytes: output.outputBytes,
+        outputByteLimit: output.byteLimit,
         usage: usageTotal(session.messages),
         tools: record.tools,
         startedAt: record.startedAt,

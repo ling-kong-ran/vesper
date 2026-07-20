@@ -8,13 +8,13 @@ export const manifest = {
   category: '协作',
   risk: '中风险',
   description: '委派隔离上下文的子 Agent 执行调研、规划、审查或代码实现。',
-  scope: '当前会话工作目录；独立内存会话；继承当前模型、已启用工具与权限模式',
-  capability: '并行运行隔离任务；所有角色继承主 Agent 的已启用工具与权限边界',
+  scope: '当前会话工作目录；独立内存会话；继承当前模型、角色允许的工具与权限模式',
+  capability: '调研、规划和审查角色只读；worker 可继承父会话的工作区写入工具',
   source: 'app',
 }
 
 const roleSchema = Type.Union(SUBAGENT_ROLE_NAMES.map((role) => Type.Literal(role)), {
-  description: '子 Agent 角色用于任务侧重点：scout 调研，planner 方案，reviewer 审查，worker 实现；均继承主 Agent 工具与权限',
+  description: '子 Agent 角色用于任务侧重点：scout 调研，planner 方案，reviewer 审查，worker 实现；只有 worker 可继承写入工具',
 })
 
 function formatResult(result) {
@@ -32,7 +32,8 @@ export function createSubagentTool({ runSubagent }) {
     promptGuidelines: [
       'Use delegate_task when an isolated codebase investigation, implementation plan, independent review, or well-scoped implementation would improve the answer.',
       'Choose scout for evidence gathering, planner for a concrete implementation plan, reviewer for finding regressions or risks, and worker for code changes.',
-      'Every role inherits the parent session’s enabled tools and permission mode. Parent-session approvals and the workspace boundary continue to apply.',
+      'Scout, planner, and reviewer receive read-only tools. Only worker may inherit enabled write tools from the parent session.',
+      'Subagents cannot delegate recursively or read or update the parent Goal. Parent-session approvals and the workspace boundary continue to apply.',
       'timeoutSeconds is an inactivity timeout: model or tool activity resets it; it is not a total task duration limit.',
       'Give each subagent a focused, self-contained task and synthesize its result before replying to the user.',
     ],
