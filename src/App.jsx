@@ -16,6 +16,8 @@ import {
   Monitor,
   Moon,
   MoreHorizontal,
+  PanelLeftClose,
+  PanelLeftOpen,
   Paperclip,
   Pencil,
   Play,
@@ -128,6 +130,7 @@ function App() {
   const [chatMode, setChatModeState] = useState(() => localStorage.getItem(STORAGE_KEYS.chatMode) || 'focus')
   const [query, setQuery] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(STORAGE_KEYS.sidebarCollapsed) === '1')
   const [toast, setToast] = useState(null)
   const [modal, setModal] = useState(null)
   const [configSection, setConfigSection] = useState('models')
@@ -158,6 +161,12 @@ function App() {
   }, [theme])
 
   const cycleTheme = () => setTheme((current) => THEME_SEQUENCE[(THEME_SEQUENCE.indexOf(current) + 1) % THEME_SEQUENCE.length])
+
+  const toggleSidebarCollapsed = () => setSidebarCollapsed((current) => {
+    const next = !current
+    localStorage.setItem(STORAGE_KEYS.sidebarCollapsed, next ? '1' : '0')
+    return next
+  })
 
   const refreshPluginStats = useCallback(async () => {
     try {
@@ -304,7 +313,7 @@ function App() {
   return (
     <div className="app-shell">
       <div className="app-body">
-        <Sidebar page={page} navigation={navigation} navigate={navigate} setChatMode={setChatMode} open={mobileNav} onClose={() => setMobileNav(false)} pluginStats={pluginStats} />
+        <Sidebar page={page} navigation={navigation} navigate={navigate} setChatMode={setChatMode} open={mobileNav} onClose={() => setMobileNav(false)} pluginStats={pluginStats} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebarCollapsed} />
         <main className="main-surface">
           <PageHeader
             meta={activeMeta}
@@ -353,7 +362,7 @@ function PageLoader() {
   return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在加载页面')}</h2><p>{t('按需加载功能模块…')}</p></Panel>
 }
 
-function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, pluginStats }) {
+function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, pluginStats, collapsed, onToggleCollapse }) {
   const { t, language } = useI18n()
   const [usage, setUsage] = useState(null)
   const [sessions, setSessions] = useState([])
@@ -422,14 +431,14 @@ function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, plugi
   return (
     <>
       {open && <button className="nav-scrim" aria-label={t('关闭导航')} onClick={onClose} />}
-      <aside className={`sidebar ${open ? 'is-open' : ''}`}>
+      <aside className={`sidebar ${open ? 'is-open' : ''} ${collapsed ? 'collapsed' : ''}`}>
         <div className="brand"><BrandLogo size={22} /><strong>{APP_NAME}</strong><button className="mobile-close" onClick={onClose}><X size={18} /></button></div>
         <div className="nav-list">
           <nav className="nav-primary" aria-label={t('主导航')}>
             {navigation.map(([group, items]) => (
               <div className="nav-group" key={group}>
                 <span className="nav-group-label">{group}</span>
-                {items.map(([id, label, Icon]) => <button className={`nav-main ${active === id ? 'active' : ''}`} key={id} onClick={() => navigate(id)}><Icon size={16} /><span>{label}</span></button>)}
+                {items.map(([id, label, Icon]) => <button className={`nav-main ${active === id ? 'active' : ''}`} key={id} title={label} onClick={() => navigate(id)}><Icon size={16} /><span>{label}</span></button>)}
               </div>
             ))}
           </nav>
@@ -448,6 +457,7 @@ function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, plugi
           <span>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? t('功能状态') : page === 'plugins' ? t('插件状态') : t('运行状态')}</span>
           <b>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? <>{t('原生运行时')} <em>{t('已接入')}</em></> : page === 'plugins' ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' }) : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</b>
         </div>
+        <button className="sidebar-collapse" title={t(collapsed ? '展开侧栏' : '收起侧栏')} aria-label={t(collapsed ? '展开侧栏' : '收起侧栏')} onClick={onToggleCollapse}>{collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}<span>{t(collapsed ? '展开侧栏' : '收起侧栏')}</span></button>
       </aside>
     </>
   )
@@ -497,6 +507,11 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   const [availableModels, setAvailableModels] = useState([])
   const [workspaceSession, setWorkspaceSession] = useState(null)
   const [tiledSessionIds, setTiledSessionIds] = useState(() => readStoredArray(STORAGE_KEYS.tiledSessions))
+  const [railOpen, setRailOpenState] = useState(() => localStorage.getItem(STORAGE_KEYS.sessionRail) !== '0')
+  const setRailOpen = useCallback((open) => {
+    setRailOpenState(open)
+    localStorage.setItem(STORAGE_KEYS.sessionRail, open ? '1' : '0')
+  }, [])
   const tiledStorageWasEmpty = useRef(localStorage.getItem(STORAGE_KEYS.tiledSessions) === null)
   const creatingSessionRef = useRef(null)
   const sessionStatesRef = useRef(sessionStates)
@@ -920,15 +935,48 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
 
   return (
     <>
-    <div className={`chat-layout mode-${mode}`}>
+    <div className={`chat-layout mode-${mode} ${mode === 'focus' && railOpen ? 'rail-open' : ''}`}>
       {loading ? <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在启动 Agent')}</h2><p>{t('加载模型目录与历史会话…')}</p></Panel> : mode === 'grid' ? (
         <div className="session-grid">
           {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} permissionMode={sessionStates[session.id]?.permissionMode || session.permissionMode || 'auto'} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(session.id, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(session.id, approvalId, approved)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onRemoveFromTiled={() => toggleTiled(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
         </div>
-      ) : <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} runStartedAt={activeState.runStartedAt} lastActivityAt={activeState.lastActivityAt} runFinishedAt={activeState.runFinishedAt} runStopped={activeState.runStopped} runNotice={activeState.runNotice} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} />}
+      ) : (<>
+        {railOpen && <SessionRail sessions={remoteSessions} states={sessionStates} activeId={activeId} onSelect={setActiveId} onCreate={createSession} onClose={() => setRailOpen(false)} />}
+        <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} runStartedAt={activeState.runStartedAt} lastActivityAt={activeState.lastActivityAt} runFinishedAt={activeState.runFinishedAt} runStopped={activeState.runStopped} runNotice={activeState.runNotice} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} onOpenRail={railOpen ? null : () => setRailOpen(true)} /></>)}
     </div>
     {workspaceSession && <WorkspacePicker session={workspaceSession} onClose={() => setWorkspaceSession(null)} onSelect={(cwd) => switchSessionCwd(workspaceSession, cwd)} />}
     </>
+  )
+}
+
+function SessionRail({ sessions, states, activeId, onSelect, onCreate, onClose }) {
+  const { t, language } = useI18n()
+  const [railQuery, setRailQuery] = useState('')
+  const filtered = useMemo(() => {
+    const keyword = railQuery.trim().toLowerCase()
+    return [...sessions]
+      .sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified))
+      .filter((session) => !keyword || `${session.name} ${session.firstMessage || ''}`.toLowerCase().includes(keyword))
+  }, [sessions, railQuery])
+  return (
+    <aside className="session-rail" aria-label={t('会话列表')}>
+      <div className="session-rail-head">
+        <strong>{t('会话')}</strong>
+        <button className="icon-button" title={t('新会话')} aria-label={t('新会话')} onClick={onCreate}><Plus size={15} /></button>
+        <button className="icon-button" title={t('收起会话列表')} aria-label={t('收起会话列表')} onClick={onClose}><PanelLeftClose size={15} /></button>
+      </div>
+      <label className="session-rail-search"><Search size={13} /><input value={railQuery} onChange={(event) => setRailQuery(event.target.value)} placeholder={t('搜索会话')} /></label>
+      <div className="session-rail-list">
+        {filtered.map((session) => {
+          const streaming = Boolean(states[session.id]?.streaming)
+          return <button className={`session-rail-item ${session.id === activeId ? 'active' : ''}`} key={session.id} onClick={() => onSelect(session.id)}>
+            <span className="session-rail-item-name">{streaming && <i className="session-rail-live" />}{session.name || t('未命名会话')}</span>
+            <span className="session-rail-item-meta">{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || 0 })} · {relativeTime(session.modified, language)}</span>
+          </button>
+        })}
+        {!filtered.length && <span className="session-rail-empty">{t(railQuery.trim() ? '没有匹配的会话' : '暂无历史会话')}</span>}
+      </div>
+    </aside>
   )
 }
 
@@ -1194,7 +1242,7 @@ function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, error, stopped,
   </section>
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort, onOpenRail }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const [goalArmed, setGoalArmed] = useState(false)
@@ -1253,7 +1301,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   }
   return (
     <Panel className="focus-session">
-      <div className="card-head"><div className="session-runtime-meta"><span className={streaming ? 'success' : ''}>{t(streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} tiled={tiled} streaming={streaming} switchingCwd={switchingCwd} onToggleTiled={onToggleTiled} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
+      <div className="card-head"><div className="session-runtime-meta">{onOpenRail && <button className="icon-button session-rail-open-btn" title={t('展开会话列表')} aria-label={t('展开会话列表')} onClick={onOpenRail}><PanelLeftOpen size={15} /></button>}<span className={streaming ? 'success' : ''}>{t(streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} tiled={tiled} streaming={streaming} switchingCwd={switchingCwd} onToggleTiled={onToggleTiled} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
         {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />{t('重试加载更早消息')}</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />{t('正在加载更早消息…')}</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />{t('加载更早消息')}</button>}</div>}
         {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>{t('准备好开始编码')}</h2><p>{t('Agent 可以读取当前工作区、搜索代码并持续处理任务。默认使用只读工具权限。')}</p><div className="welcome-chips">{welcomeChips(t).map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
