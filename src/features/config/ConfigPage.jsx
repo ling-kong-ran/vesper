@@ -7,6 +7,7 @@ import { Badge, Panel, SectionTitle, Toggle } from '../../components/ui.jsx'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
 import { apiJson } from '../../lib/api.js'
 import { NotificationSettings } from './NotificationSettings.jsx'
+import { UpdateSettings } from './UpdateSettings.jsx'
 
 function configDraft(data, provider, preferredModel) {
   const chatModels = provider?.models.filter((item) => item.kind === 'chat') || []
@@ -143,8 +144,9 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
     }
   }
 
-  const subnav = <div className="config-subnav"><button className={section === 'models' ? 'active' : ''} onClick={() => setSection('models')}>{t('模型配置')}</button><button className={section === 'notifications' ? 'active' : ''} onClick={() => setSection('notifications')}>{t('通知设置')}</button><button className={section === 'interface' ? 'active' : ''} onClick={() => setSection('interface')}>{t('界面设置')}</button></div>
+  const subnav = <div className="config-subnav"><button className={section === 'models' ? 'active' : ''} onClick={() => setSection('models')}>{t('模型配置')}</button><button className={section === 'notifications' ? 'active' : ''} onClick={() => setSection('notifications')}>{t('通知设置')}</button><button className={section === 'interface' ? 'active' : ''} onClick={() => setSection('interface')}>{t('界面设置')}</button><button className={section === 'updates' ? 'active' : ''} onClick={() => setSection('updates')}>{t('应用更新')}</button></div>
   if (section === 'interface') return <>{subnav}<LanguageSettings notify={notify} /></>
+  if (section === 'updates') return <>{subnav}<UpdateSettings notify={notify} /></>
   if (!config || !draft) return <>{subnav}<Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在加载模型目录')}</h2><p>{t('读取 Provider 与认证状态…')}</p></Panel></>
   const selectedProvider = config.providers.find((item) => item.id === draft.provider) || config.providers[0]
   const selectedModel = selectedProvider.models.find((item) => item.id === draft.model)

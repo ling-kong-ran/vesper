@@ -78,8 +78,11 @@ This project simplifies the orchestration of capable AI agents while keeping int
 
 ```text
 vesper/
+├─ .github/              # CI, release notes, and cross-platform releases
 ├─ docs/                 # Project documentation and brand assets
+├─ electron/             # Electron main process and secure preload
 ├─ public/               # Public static assets
+├─ scripts/              # Icon generation, packaging, and release scripts
 ├─ shared/               # Workflow graph logic shared by client and server
 ├─ server/
 │  ├─ http/              # HTTP API, SSE, and static responses
@@ -131,6 +134,20 @@ npm start
 ```
 
 Vesper stores local configuration and runtime data in `~/.vesper/agent` by default. Set `VESPER_AGENT_DIR` to use another location.
+
+Start or package the desktop app:
+
+```bash
+npm run desktop:dev
+npm run desktop:pack
+```
+
+To publish a release, the script updates and commits `package.json` and `package-lock.json`, creates a Git tag, then lets GitHub Actions generate the release notes and publish Windows, macOS, and Linux packages:
+
+```bash
+npm run release -- patch
+# minor, major, or an explicit version such as 1.2.0 are also supported
+```
 
 ### 🌠 Testing
 

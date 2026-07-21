@@ -1,11 +1,18 @@
 {
   "name": "vesper",
   "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
+  "description": "A local-first workspace for building and running AI agents.",
+  "author": "ling-kong-ran",
   "type": "module",
+  "main": "electron/main.mjs",
   "scripts": {
     "dev": "node server/index.mjs",
     "build": "vite build",
+    "icons": "node scripts/generate-icons.mjs",
+    "desktop:dev": "npm run icons && npm run build && electron .",
+    "desktop:pack": "npm run icons && npm run build && electron-builder --publish never",
+    "release": "node scripts/release.mjs",
     "lint": "oxlint",
     "test": "node --test server/tests/*.test.mjs",
     "preview": "node server/index.mjs --production",
@@ -16,6 +23,7 @@
     "@larksuiteoapi/node-sdk": "^1.71.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@tailwindcss/vite": "^4.3.3",
+    "electron-updater": "^6.8.9",
     "i18next": "^26.3.6",
     "lucide-react": "^1.24.0",
     "officeparser": "^7.3.0",
@@ -35,7 +43,83 @@
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
+    "electron": "^43.1.1",
+    "electron-builder": "^26.15.3",
     "oxlint": "^1.71.0",
+    "sharp": "^0.35.3",
     "vite": "^8.1.1"
+  },
+  "build": {
+    "appId": "com.lingkongran.vesper",
+    "productName": "Vesper",
+    "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
+    "asar": true,
+    "npmRebuild": false,
+    "directories": {
+      "output": "release",
+      "buildResources": "build"
+    },
+    "files": [
+      "dist/**/*",
+      "build/icon.png",
+      "build/icons/**/*",
+      "electron/**/*",
+      "server/**/*",
+      "shared/**/*",
+      "package.json",
+      "!server/tests/**/*"
+    ],
+    "win": {
+      "icon": "build/icon.png",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Vesper"
+    },
+    "mac": {
+      "icon": "build/icon.png",
+      "category": "public.app-category.developer-tools",
+      "target": [
+        {
+          "target": "dmg",
+          "arch": ["x64", "arm64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64", "arm64"]
+        }
+      ]
+    },
+    "linux": {
+      "icon": "build/icons",
+      "category": "Development",
+      "target": [
+        {
+          "target": "AppImage",
+          "arch": ["x64"]
+        },
+        {
+          "target": "deb",
+          "arch": ["x64"]
+        }
+      ]
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "ling-kong-ran",
+        "repo": "vesper",
+        "releaseType": "release"
+      }
+    ]
   }
 }

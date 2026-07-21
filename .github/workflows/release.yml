@@ -1,0 +1,113 @@
+name: Release desktop apps
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prepare release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Validate version and generate release notes
+        run: node scripts/prepare-release.mjs "${{ github.ref_name }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-metadata
+          if-no-files-found: error
+          path: |
+            release-body.md
+            public/release-notes.json
+
+  build:
+    name: Build ${{ matrix.name }}
+    needs: prepare
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows x64
+            os: windows-latest
+            args: --win nsis --x64
+          - name: macOS x64 + arm64
+            os: macos-latest
+            args: --mac dmg zip --x64 --arm64
+          - name: Linux x64
+            os: ubuntu-latest
+            args: --linux AppImage deb --x64
+    runs-on: ${{ matrix.os }}
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      CSC_LINK: ${{ matrix.os == 'windows-latest' && secrets.WINDOWS_CSC_LINK || matrix.os == 'macos-latest' && secrets.MACOS_CSC_LINK || '' }}
+      CSC_KEY_PASSWORD: ${{ matrix.os == 'windows-latest' && secrets.WINDOWS_CSC_KEY_PASSWORD || matrix.os == 'macos-latest' && secrets.MACOS_CSC_KEY_PASSWORD || '' }}
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-metadata
+          path: .
+      - run: npm ci
+      - run: npm test
+      - run: npm run lint
+      - run: npm run desktop:pack -- ${{ matrix.args }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: vesper-${{ runner.os }}
+          if-no-files-found: error
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.AppImage
+            release/*.deb
+            release/latest.yml
+            release/latest-mac.yml
+            release/latest-linux.yml
+            release/*.blockmap
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-metadata
+          path: .
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: vesper-*
+          path: artifacts
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Vesper ${{ github.ref_name }}
+          body_path: release-body.md
+          fail_on_unmatched_files: true
+          make_latest: true
+          files: artifacts/*

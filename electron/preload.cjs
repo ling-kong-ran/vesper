@@ -1,0 +1,16 @@
+const { contextBridge, ipcRenderer } = require('electron')
+
+contextBridge.exposeInMainWorld('vesperDesktop', Object.freeze({
+  platform: process.platform,
+  getAppInfo: () => ipcRenderer.invoke('vesper:get-app-info'),
+  checkForUpdates: () => ipcRenderer.invoke('vesper:check-for-updates'),
+  downloadUpdate: () => ipcRenderer.invoke('vesper:download-update'),
+  installUpdate: () => ipcRenderer.invoke('vesper:install-update'),
+  openReleases: () => ipcRenderer.invoke('vesper:open-releases'),
+  onUpdateStatus(callback) {
+    if (typeof callback !== 'function') return () => {}
+    const listener = (_event, status) => callback(status)
+    ipcRenderer.on('vesper:update-status', listener)
+    return () => ipcRenderer.removeListener('vesper:update-status', listener)
+  },
+}))

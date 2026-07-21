@@ -1,0 +1,105 @@
+import { execFileSync } from 'node:child_process'
+import { readFile } from 'node:fs/promises'
+import { dirname, join, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
+const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
+const packagePath = join(root, 'package.json')
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const input = process.argv.slice(2).find((value) => !value.startsWith('--')) || 'patch'
+
+function run(command, args, { capture = false } = {}) {
+  const result = execFileSync(command, args, {
+    cwd: root,
+    encoding: 'utf8',
+    stdio: capture ? 'pipe' : 'inherit',
+  })
+  return typeof result === 'string' ? result.trim() : ''
+}
+
+function assertVersionInput(value) {
+  if (!['major', 'minor', 'patch'].includes(value) && !/^\d+\.\d+\.\d+$/.test(value)) {
+    throw new Error(`版本参数无效：${value}。请使用 major、minor、patch 或 x.y.z。`)
+  }
+}
+
+function parseVersion(value) {
+  return String(value).split('.').map(Number)
+}
+
+function compareVersions(left, right) {
+  const a = parseVersion(left)
+  const b = parseVersion(right)
+  for (let index = 0; index < 3; index += 1) {
+    if (a[index] !== b[index]) return a[index] - b[index]
+  }
+  return 0
+}
+
+function resolveVersion(current, target) {
+  if (/^\d+\.\d+\.\d+$/.test(target)) return target
+  const [major, minor, patch] = parseVersion(current)
+  if (target === 'major') return `${major + 1}.0.0`
+  if (target === 'minor') return `${major}.${minor + 1}.0`
+  return `${major}.${minor}.${patch + 1}`
+}
+
+assertVersionInput(input)
+
+const dirty = run('git', ['status', '--porcelain'], { capture: true })
+if (dirty) throw new Error('发布前工作区必须保持干净，请先提交或处理现有修改。')
+
+const branch = run('git', ['branch', '--show-current'], { capture: true })
+if (!branch) throw new Error('当前处于 detached HEAD，无法创建版本提交。')
+const releaseBranch = String(process.env.VESPER_RELEASE_BRANCH || 'main').trim()
+if (branch !== releaseBranch) throw new Error(`只能从 ${releaseBranch} 分支发布，当前分支为 ${branch}。`)
+
+run('git', ['fetch', '--tags', 'origin'])
+
+let upstream = ''
+try {
+  upstream = run('git', ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{upstream}'], { capture: true })
+} catch {
+  throw new Error(`当前分支 ${branch} 没有上游分支，请先设置 origin/${branch}。`)
+}
+const behind = Number(run('git', ['rev-list', '--count', `HEAD..${upstream}`], { capture: true }))
+if (behind > 0) throw new Error(`当前分支落后于 ${upstream} ${behind} 个提交，请先同步远端。`)
+
+console.log('正在执行发布前检查…')
+run(npm, ['test'])
+run(npm, ['run', 'lint'])
+run(npm, ['run', 'build'])
+
+const packageJson = JSON.parse(await readFile(packagePath, 'utf8'))
+const nextVersion = resolveVersion(packageJson.version, input)
+if (compareVersions(nextVersion, packageJson.version) <= 0) {
+  throw new Error(`新版本 ${nextVersion} 必须高于当前版本 ${packageJson.version}。`)
+}
+const tag = `v${nextVersion}`
+if (run('git', ['tag', '--list', tag], { capture: true })) throw new Error(`标签 ${tag} 已经存在。`)
+
+const latestTag = run('git', ['tag', '--list', 'v*', '--sort=-version:refname'], { capture: true })
+  .split(/\r?\n/)
+  .find((value) => /^v\d+\.\d+\.\d+$/.test(value))
+if (latestTag && compareVersions(nextVersion, latestTag.replace(/^v/i, '')) <= 0) {
+  throw new Error(`新版本 ${nextVersion} 必须高于最新标签 ${latestTag}。`)
+}
+
+const bumpedVersion = run(npm, [
+  'version',
+  nextVersion,
+  '--ignore-scripts',
+  '--message',
+  'chore(release): v%s',
+], { capture: true }).replace(/^v/i, '')
+if (bumpedVersion !== nextVersion) throw new Error(`npm version 返回了意外版本：${bumpedVersion}`)
+
+try {
+  run('git', ['push', '--atomic', 'origin', `HEAD:${branch}`, tag])
+} catch (error) {
+  console.error(`版本提交和标签 ${tag} 已在本地创建，但推送失败。网络或权限恢复后可执行：`)
+  console.error(`git push --atomic origin HEAD:${branch} ${tag}`)
+  throw error
+}
+
+console.log(`已发布 ${tag}。GitHub Actions 将生成更新日志并构建全平台安装包。`)

@@ -1,0 +1,5 @@
+{
+  "version": "0.1.0",
+  "date": "2026-07-21",
+  "notes": "## Vesper 0.1.0\n\n- 首个 Vesper 桌面版本。\n- 提供本地 Agent、模型配置、插件、渠道、定时任务、记忆和工作流能力。\n- 支持 Windows、macOS 和 Linux 安装包及应用内版本检查。"
+}

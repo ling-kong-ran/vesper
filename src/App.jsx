@@ -336,6 +336,7 @@ function App() {
             theme={theme}
             onCycleTheme={cycleTheme}
             workflowActions={workflowActions}
+            desktopPlatform={window.vesperDesktop?.platform || ''}
           />
           <div className={`page-content page-${page}`} key={page}>
             <Routes>
@@ -490,7 +491,7 @@ function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, colla
   )
 }
 
-function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, theme, onCycleTheme, searchInputRef, workflowActions }) {
+function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, theme, onCycleTheme, searchInputRef, workflowActions, desktopPlatform }) {
   const { t } = useI18n()
   const primary = page === 'config' && configSection !== 'models' ? null : ({
     chat: [t('新会话'), Plus], chatHistory: [t('新会话'), Plus], assets: [t('添加链接'), Link2], channels: [t('连接渠道'), Plus], schedules: [t('新建任务'), Plus],
@@ -502,11 +503,12 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
   const themeLabel = t(theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统')
   const gridLabel = t('平铺')
   const focusLabel = t('聚集')
+  const desktop = Boolean(desktopPlatform)
   return (
-    <header className="page-header">
-      <button className="mobile-menu" onClick={onMenu}><Menu size={19} /></button>
+    <header className={`page-header ${desktop ? '[-webkit-app-region:drag]' : ''} ${desktopPlatform === 'darwin' ? 'pl-[74px]' : ''}`}>
+      <button className={`mobile-menu ${desktop ? '[-webkit-app-region:no-drag]' : ''}`} onClick={onMenu}><Menu size={19} /></button>
       <div className="title-block"><h1>{meta[0]}</h1><p>{meta[1]}</p></div>
-      <div className="header-actions">
+      <div className={`header-actions ${desktop ? '[-webkit-app-region:no-drag]' : ''} ${desktopPlatform && desktopPlatform !== 'darwin' ? 'pr-[138px]' : ''}`}>
         {page === 'chat' && <Segmented options={[gridLabel, focusLabel]} value={chatMode === 'grid' ? gridLabel : focusLabel} onChange={(value) => setChatMode(value === gridLabel ? 'grid' : 'focus')} compact />}
         {page === 'workflowCreate' ? (
           <>
