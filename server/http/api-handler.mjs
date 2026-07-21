@@ -1,4 +1,9 @@
 import { bodyJson, json, sseSend } from './response.mjs'
+import { redactSecretText } from '../security/secret-redaction.mjs'
+
+function publicError(error) {
+  return redactSecretText(error instanceof Error ? error.message : String(error))
+}
 
 export function createApiHandler(runtime) {
   return async function handleApi(req, res, url) {
@@ -461,14 +466,14 @@ export function createApiHandler(runtime) {
             send: (event, data) => { if (!res.destroyed && !res.writableEnded) sseSend(res, event, data) },
           })
         } catch (error) {
-          sseSend(res, 'error', { message: error instanceof Error ? error.message : String(error) })
+          sseSend(res, 'error', { message: publicError(error) })
         }
         res.end()
         return true
       }
       json(res, 404, { error: '接口不存在。' })
     } catch (error) {
-      json(res, 400, { error: error instanceof Error ? error.message : String(error) })
+      json(res, 400, { error: publicError(error) })
     }
     return true
   }

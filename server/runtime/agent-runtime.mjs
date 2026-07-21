@@ -30,7 +30,7 @@ import { forceNextToolCall, isVisualGenerationRequest } from '../services/visual
 import { createAppTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry.mjs'
 import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
 import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
-import { credentialRedactionExtension, redactPersistedSessionFiles } from '../security/secret-redaction.mjs'
+import { installSessionPersistenceRedaction, redactPersistedSessionFiles, redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
 
 const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'kimi-coding', 'zai-coding-cn']
 const PROVIDER_LABELS = {
@@ -72,7 +72,7 @@ function serializeMessage(message, index) {
   if (!message || !['user', 'assistant'].includes(message.role)) return null
   const rawText = textFromContent(message.content)
   if (message.role === 'user' && isGoalContinuationMessage(rawText)) return null
-  const text = message.role === 'user' ? rawText.split(ATTACHMENT_MARKER)[0] : rawText
+  const text = redactSecretText(message.role === 'user' ? rawText.split(ATTACHMENT_MARKER)[0] : rawText)
   if (!text) return null
   const attachments = Array.isArray(message.content)
     ? message.content.filter((part) => part?.type === 'image').map((part, attachmentIndex) => ({
@@ -249,7 +249,7 @@ export class AgentRuntimeService {
       agentDir: dataDir,
       cwd,
       getSettingsManager: () => this.settingsManager,
-      extensionFactories: [{ name: 'credential-redaction', factory: credentialRedactionExtension }],
+      extensionFactories: [],
     })
     this.channels = new ChannelService({
       path: join(dataDir, 'vesper-channels.json'),
@@ -814,26 +814,26 @@ export class AgentRuntimeService {
       const liveMessage = {
         id: `live-${id}`,
         role: 'agent',
-        text: live.text,
+        text: redactSecretText(live.text),
         streaming: true,
         attachments: live.assets,
       }
-      if (assistantIndex >= 0) messages[assistantIndex] = { ...messages[assistantIndex], ...liveMessage, text: live.text || messages[assistantIndex].text, attachments: live.assets.length ? live.assets : messages[assistantIndex].attachments }
+      if (assistantIndex >= 0) messages[assistantIndex] = { ...messages[assistantIndex], ...liveMessage, text: liveMessage.text || messages[assistantIndex].text, attachments: live.assets.length ? live.assets : messages[assistantIndex].attachments }
       else messages.push(liveMessage)
     }
     return {
       id,
       streaming,
       messages,
-      tools: live?.tools || [],
-      error: live?.error || '',
+      tools: redactSecretValue(live?.tools || []),
+      error: redactSecretText(live?.error || ''),
       startedAt: live?.startedAt || null,
       lastActivityAt: live?.lastActivityAt || null,
       model: active?.session.model ? `${active.session.model.provider}/${active.session.model.id}` : '',
       cwd: active?.cwd || this.sessionMeta[id]?.cwd || this.cwd,
       permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
       goal: live?.goal ?? this.goals.get(id),
-      approvals: this.permissions.getPending(id),
+      approvals: redactSecretValue(this.permissions.getPending(id)),
       pageInfo: page.pageInfo,
     }
   }
@@ -956,6 +956,7 @@ export class AgentRuntimeService {
   }
 
   async createSessionRuntime(sessionManager, name) {
+    installSessionPersistenceRedaction(sessionManager)
     const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only' })
     const effectiveCwd = await resolveDirectory(this.sessionMeta[sessionManager.getSessionId()]?.cwd, sessionManager.getCwd() || this.cwd)
     const enabledTools = toolsFromConfig(appConfig)
@@ -1058,6 +1059,7 @@ export class AgentRuntimeService {
   }
 
   async streamPrompt({ sessionId, message, attachments = [], goalMode = false, send }) {
+    const emit = (event, data) => send(event, redactSecretValue(data))
     const value = await this.getOrCreateSession(sessionId)
     const { session } = value
     const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
@@ -1078,7 +1080,7 @@ export class AgentRuntimeService {
     const startedAt = new Date().toISOString()
     const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, startedAt, lastActivityAt: startedAt }
     this.liveSessions.set(session.sessionId, live)
-    this.goalEmitters.set(session.sessionId, send)
+    this.goalEmitters.set(session.sessionId, emit)
 
     const firstTurn = !session.messages.some((item) => item.role === 'user')
     const sessionMeta = this.sessionMeta[session.sessionId]
@@ -1088,10 +1090,10 @@ export class AgentRuntimeService {
       session.setSessionName(temporaryTitle)
       value.name = temporaryTitle
       await this.markSessionTitle(session.sessionId, temporaryTitle, false)
-      send('session_title', { sessionId: session.sessionId, name: temporaryTitle, source: 'temporary' })
+      emit('session_title', { sessionId: session.sessionId, name: temporaryTitle, source: 'temporary' })
     }
 
-    send('meta', {
+    emit('meta', {
       sessionId: session.sessionId,
       model: `${session.model.provider}/${session.model.id}`,
       thinkingLevel: session.thinkingLevel,
@@ -1111,20 +1113,20 @@ export class AgentRuntimeService {
       live.lastActivityAt = new Date().toISOString()
       if (event.type === 'message_update') {
         const update = event.assistantMessageEvent
-        if (update.type === 'text_delta') { live.text += update.delta || ''; send('text_delta', { delta: update.delta }) }
-        if (update.type === 'thinking_delta') send('thinking_delta', { delta: update.delta })
+        if (update.type === 'text_delta') { live.text += update.delta || ''; emit('text_delta', { delta: update.delta }) }
+        if (update.type === 'thinking_delta') emit('thinking_delta', { delta: update.delta })
       } else if (event.type === 'tool_execution_start') {
         toolArgs.set(event.toolCallId, event.args)
         const toolStartedAt = live.lastActivityAt
         live.tools.push({ id: event.toolCallId, name: event.toolName, status: 'running', startedAt: toolStartedAt, updatedAt: toolStartedAt })
-        send('tool_start', { id: event.toolCallId, name: event.toolName, args: event.args, startedAt: toolStartedAt })
+        emit('tool_start', { id: event.toolCallId, name: event.toolName, args: event.args, startedAt: toolStartedAt })
       } else if (event.type === 'tool_execution_update') {
         const message = textFromContent(event.partialResult?.content).replace(/\s+/g, ' ').trim().slice(0, 180)
         const subagent = event.toolName === 'delegate_task' ? event.partialResult?.details : undefined
         live.tools = live.tools.map((item) => item.id === event.toolCallId
           ? { ...item, message: message || item.message || '', updatedAt: live.lastActivityAt, ...(subagent ? { subagent } : {}) }
           : item)
-        send('tool_update', { id: event.toolCallId, name: event.toolName, message, updatedAt: live.lastActivityAt, ...(subagent ? { subagent } : {}) })
+        emit('tool_update', { id: event.toolCallId, name: event.toolName, message, updatedAt: live.lastActivityAt, ...(subagent ? { subagent } : {}) })
       } else if (event.type === 'tool_execution_end') {
         if (!event.isError) void this.recordGeneratedAsset(session.sessionId, value, event.toolName, toolArgs.get(event.toolCallId))
         toolArgs.delete(event.toolCallId)
@@ -1134,14 +1136,14 @@ export class AgentRuntimeService {
           if (asset) {
             const attachment = assetMessageAttachment(asset)
             live.assets = [...live.assets.filter((item) => item.id !== attachment.id), attachment]
-            send('generated_asset', attachment)
+            emit('generated_asset', attachment)
           }
         }
         const resultMessage = event.isError ? textFromContent(event.result?.content) || '工具执行失败。' : ''
         const completedTool = live.tools.find((item) => item.id === event.toolCallId)
         const toolFinishedAt = live.lastActivityAt
         live.tools = live.tools.map((item) => item.id === event.toolCallId ? { ...item, status: event.isError ? 'error' : 'done', message: resultMessage || item.message || '', updatedAt: toolFinishedAt, finishedAt: toolFinishedAt } : item)
-        send('tool_end', {
+        emit('tool_end', {
           id: event.toolCallId,
           name: event.toolName,
           error: event.isError,
@@ -1178,11 +1180,11 @@ export class AgentRuntimeService {
         continuationQueued = true
         void session.followUp(goalContinuationPrompt(activeGoal)).catch(() => {}).finally(() => { continuationQueued = false })
       } else if (event.type === 'auto_retry_start') {
-        send('retry', { attempt: event.attempt, maxAttempts: event.maxAttempts, message: event.errorMessage })
+        emit('retry', { attempt: event.attempt, maxAttempts: event.maxAttempts, message: event.errorMessage })
       }
     })
 
-    this.permissions.attachEmitter(session.sessionId, send)
+    this.permissions.attachEmitter(session.sessionId, emit)
     try {
       const safeAttachments = Array.isArray(attachments) ? attachments.slice(0, 8) : []
       await this.archiveAttachments(session.sessionId, value.name, safeAttachments)
@@ -1231,10 +1233,10 @@ export class AgentRuntimeService {
           session.setSessionName(generatedTitle)
           value.name = generatedTitle
           await this.markSessionTitle(session.sessionId, generatedTitle, false)
-          send('session_title', { sessionId: session.sessionId, name: generatedTitle, source: 'generated' })
+          emit('session_title', { sessionId: session.sessionId, name: generatedTitle, source: 'generated' })
         }
       }
-      send('done', { sessionId: session.sessionId, goal: this.goals.get(session.sessionId) })
+      emit('done', { sessionId: session.sessionId, goal: this.goals.get(session.sessionId) })
       void this.captureConversationMemory({
         sessionId: session.sessionId,
         cwd: value.cwd,
@@ -1248,8 +1250,8 @@ export class AgentRuntimeService {
       throw error
     } finally {
       unsubscribe()
-      this.permissions.detachEmitter(session.sessionId, send)
-      if (this.goalEmitters.get(session.sessionId) === send) this.goalEmitters.delete(session.sessionId)
+      this.permissions.detachEmitter(session.sessionId, emit)
+      if (this.goalEmitters.get(session.sessionId) === emit) this.goalEmitters.delete(session.sessionId)
       live.streaming = false
       const timer = setTimeout(() => { if (this.liveSessions.get(session.sessionId) === live) this.liveSessions.delete(session.sessionId) }, 60_000)
       timer.unref?.()

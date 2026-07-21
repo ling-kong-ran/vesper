@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import {
-  credentialRedactionExtension,
+  installSessionPersistenceRedaction,
   REDACTED_SECRET,
   redactPersistedSessionFiles,
   redactSecretText,
@@ -23,34 +23,40 @@ test('credential redaction removes common secrets without hiding token usage fie
   const value = redactSecretValue({
     maxTokens: 128_000,
     totalTokens: 42,
+    token: 'completion-budget',
+    nextToken: 'page-2',
     accessToken: 'pencil-private-token',
     nested: { client_secret: 'client-private-secret' },
   })
   assert.equal(value.maxTokens, 128_000)
   assert.equal(value.totalTokens, 42)
+  assert.equal(value.token, 'completion-budget')
+  assert.equal(value.nextToken, 'page-2')
   assert.equal(value.accessToken, REDACTED_SECRET)
   assert.equal(value.nested.client_secret, REDACTED_SECRET)
+  assert.match(redactSecretText('token: completion-budget\nnextToken: page-2'), /token: completion-budget\nnextToken: page-2/)
+  assert.doesNotMatch(redactSecretText('token: secret-value-that-is-long-123456'), /secret-value-that-is-long/)
   assert.equal(redactSecretText(text), text)
 })
 
-test('Pi extension redacts tool results and finalized messages before persistence', async () => {
-  const handlers = new Map()
-  credentialRedactionExtension({ on: (name, handler) => handlers.set(name, handler) })
-
-  const toolResult = await handlers.get('tool_result')({
+test('session persistence redacts a copy without changing the Agent message', () => {
+  const persisted = []
+  const manager = {
+    appendMessage(message) {
+      persisted.push(message)
+      return 'message-1'
+    },
+  }
+  installSessionPersistenceRedaction(manager)
+  const message = {
+    role: 'toolResult',
     content: [{ type: 'text', text: '{"accessToken":"pencil-private-token"}' }],
     details: { Authorization: 'Bearer another-private-token' },
-    isError: false,
-  })
-  assert.doesNotMatch(JSON.stringify(toolResult), /pencil-private|another-private/)
+  }
 
-  const messageResult = await handlers.get('message_end')({
-    message: {
-      role: 'assistant',
-      content: [{ type: 'toolCall', name: 'bash', arguments: { command: '--token raw-private-token' } }],
-    },
-  })
-  assert.doesNotMatch(JSON.stringify(messageResult), /raw-private-token/)
+  assert.equal(manager.appendMessage(message), 'message-1')
+  assert.match(JSON.stringify(message), /pencil-private-token|another-private-token/)
+  assert.doesNotMatch(JSON.stringify(persisted[0]), /pencil-private-token|another-private-token/)
 })
 
 test('existing JSONL sessions are scrubbed while preserving ordinary usage data', async (t) => {

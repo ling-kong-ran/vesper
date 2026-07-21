@@ -3,7 +3,7 @@ import { join } from 'node:path'
 
 export const REDACTED_SECRET = '[REDACTED SECRET]'
 
-const SENSITIVE_KEYS = new Set([
+const ALWAYS_SENSITIVE_KEYS = new Set([
   'apikey',
   'appsecret',
   'authorization',
@@ -17,22 +17,37 @@ const SENSITIVE_KEYS = new Set([
   'refreshtoken',
   'secret',
   'setcookie',
-  'token',
   'accesstoken',
 ])
 
-const SENSITIVE_KEY_PATTERN = '(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|auth[_ -]?token|token|client[_ -]?secret|app[_ -]?secret|password|passwd|authorization|cookie|credential)'
-const QUOTED_SECRET = new RegExp(`((?:["'])?${SENSITIVE_KEY_PATTERN}(?:["'])?\\s*[:=]\\s*)(["'])([^\\r\\n]*?)\\2`, 'gi')
-const PLAIN_SECRET = new RegExp(`((?:^|[\\s,{;])(?:${SENSITIVE_KEY_PATTERN})\\s*[:=]\\s*)(?!["']|\\[REDACTED SECRET\\])[^\\s,;}\\]]+`, 'gim')
-const CLI_SECRET = new RegExp(`(--?(?:${SENSITIVE_KEY_PATTERN})(?:=|\\s+))(?!\\[REDACTED SECRET\\])([^\\s"']+)`, 'gi')
+const EXPLICIT_SENSITIVE_KEY_PATTERN = '(?:api[_ -]?key|access[_ -]?token|refresh[_ -]?token|auth[_ -]?token|client[_ -]?secret|app[_ -]?secret|password|passwd|authorization|cookie|credentials?)'
+const GENERIC_TOKEN_KEY_PATTERN = '(?<![a-z0-9_])token(?![a-z0-9_])'
+const QUOTED_SECRET = new RegExp(`((?:["'])?${EXPLICIT_SENSITIVE_KEY_PATTERN}(?:["'])?\\s*[:=]\\s*)(["'])([^\\r\\n]*?)\\2`, 'gi')
+const PLAIN_SECRET = new RegExp(`((?:^|[\\s,{;])(?:${EXPLICIT_SENSITIVE_KEY_PATTERN})\\s*[:=]\\s*)(?!["']|\\[REDACTED SECRET\\])[^\\s,;}\\]]+`, 'gim')
+const CLI_SECRET = new RegExp(`(--?(?:${EXPLICIT_SENSITIVE_KEY_PATTERN})(?:=|\\s+))(?!\\[REDACTED SECRET\\])([^\\s"']+)`, 'gi')
+const QUOTED_GENERIC_TOKEN = new RegExp(`((?:["'])?${GENERIC_TOKEN_KEY_PATTERN}(?:["'])?\\s*[:=]\\s*)(["'])([^\\r\\n]*?)\\2`, 'gi')
+const PLAIN_GENERIC_TOKEN = new RegExp(`((?:^|[\\s,{;])${GENERIC_TOKEN_KEY_PATTERN}\\s*[:=]\\s*)(?!["']|\\[REDACTED SECRET\\])([^\\s,;}\\]]+)`, 'gim')
+const CLI_GENERIC_TOKEN = new RegExp(`(--?token(?:=|\\s+))(?!\\[REDACTED SECRET\\])([^\\s"']+)`, 'gi')
+const PERSISTENCE_REDACTION = Symbol('vesperPersistenceRedaction')
 
 function normalizedKey(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
-function sensitiveKey(value) {
+function looksLikeSecret(value) {
+  if (typeof value !== 'string') return false
+  const text = value.trim()
+  if (!text || text === REDACTED_SECRET) return false
+  if (/^Bearer\s+/i.test(text)) return true
+  if (/^eyJ[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}$/i.test(text)) return true
+  if (/^(?:sk|rk|pk|pcl|ghp|github_pat|xox[baprs])[-_][a-z0-9_-]{12,}$/i.test(text)) return true
+  return text.length >= 20 && !/\s/.test(text) && /[a-z]/i.test(text) && /(?:\d|[^a-z0-9])/i.test(text)
+}
+
+function sensitiveKey(value, content) {
   const key = normalizedKey(value)
-  return SENSITIVE_KEYS.has(key) || /(?:apikey|secret|password|passwd|authorization|credential|accesstoken|refreshtoken|authtoken|auth)$/.test(key)
+  if (key === 'token') return looksLikeSecret(content)
+  return ALWAYS_SENSITIVE_KEYS.has(key) || /(?:apikey|secret|password|passwd|authorization|credential|accesstoken|refreshtoken|authtoken)$/.test(key)
 }
 
 export function redactSecretText(value) {
@@ -42,13 +57,16 @@ export function redactSecretText(value) {
     .replace(QUOTED_SECRET, (_match, prefix, quote) => `${prefix}${quote}${REDACTED_SECRET}${quote}`)
     .replace(PLAIN_SECRET, (_match, prefix) => `${prefix}${REDACTED_SECRET}`)
     .replace(CLI_SECRET, (_match, prefix) => `${prefix}${REDACTED_SECRET}`)
+    .replace(QUOTED_GENERIC_TOKEN, (match, prefix, quote, secret) => looksLikeSecret(secret) ? `${prefix}${quote}${REDACTED_SECRET}${quote}` : match)
+    .replace(PLAIN_GENERIC_TOKEN, (match, prefix, secret) => looksLikeSecret(secret) ? `${prefix}${REDACTED_SECRET}` : match)
+    .replace(CLI_GENERIC_TOKEN, (match, prefix, secret) => looksLikeSecret(secret) ? `${prefix}${REDACTED_SECRET}` : match)
     .replace(/([?&](?:(?:access|refresh|auth)[_-]?)?(?:token|key|secret|password|auth|credential)[^=&#\s]*=)(?!\[REDACTED SECRET\])[^&#\s]*/gi, `$1${REDACTED_SECRET}`)
     .replace(/\beyJ[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\.[a-z0-9_-]{8,}\b/gi, REDACTED_SECRET)
     .replace(/\b(?:sk|rk|pk|pcl|ghp|github_pat|xox[baprs])[-_][a-z0-9_-]{12,}\b/gi, REDACTED_SECRET)
 }
 
 export function redactSecretValue(value, key = '', seen = new WeakSet()) {
-  if (sensitiveKey(key)) return value == null ? value : REDACTED_SECRET
+  if (sensitiveKey(key, value)) return value == null ? value : REDACTED_SECRET
   if (typeof value === 'string') return redactSecretText(value)
   if (!value || typeof value !== 'object') return value
   if (seen.has(value)) return '[CIRCULAR]'
@@ -57,17 +75,37 @@ export function redactSecretValue(value, key = '', seen = new WeakSet()) {
   return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, redactSecretValue(child, childKey, seen)]))
 }
 
-function redactMessage(message) {
-  return redactSecretValue(message)
-}
+export function installSessionPersistenceRedaction(sessionManager) {
+  if (!sessionManager || sessionManager[PERSISTENCE_REDACTION]) return sessionManager
+  Object.defineProperty(sessionManager, PERSISTENCE_REDACTION, { value: true })
 
-export function credentialRedactionExtension(pi) {
-  pi.on('tool_result', (event) => ({
-    content: redactSecretValue(event.content),
-    details: redactSecretValue(event.details),
-    isError: event.isError,
-  }))
-  pi.on('message_end', (event) => ({ message: redactMessage(event.message) }))
+  const appendMessage = sessionManager.appendMessage?.bind(sessionManager)
+  if (appendMessage) sessionManager.appendMessage = (message) => appendMessage(redactSecretValue(message))
+
+  const appendCustomMessageEntry = sessionManager.appendCustomMessageEntry?.bind(sessionManager)
+  if (appendCustomMessageEntry) {
+    sessionManager.appendCustomMessageEntry = (customType, content, display, details) => appendCustomMessageEntry(
+      customType,
+      redactSecretValue(content),
+      display,
+      redactSecretValue(details),
+    )
+  }
+
+  const appendCustomEntry = sessionManager.appendCustomEntry?.bind(sessionManager)
+  if (appendCustomEntry) sessionManager.appendCustomEntry = (customType, data) => appendCustomEntry(customType, redactSecretValue(data))
+
+  const appendCompaction = sessionManager.appendCompaction?.bind(sessionManager)
+  if (appendCompaction) {
+    sessionManager.appendCompaction = (summary, firstKeptEntryId, tokensBefore, details, fromHook) => appendCompaction(
+      redactSecretText(summary),
+      firstKeptEntryId,
+      tokensBefore,
+      redactSecretValue(details),
+      fromHook,
+    )
+  }
+  return sessionManager
 }
 
 function redactJsonLine(line) {

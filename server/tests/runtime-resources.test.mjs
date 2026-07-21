@@ -35,8 +35,8 @@ test('main and child Agent runtimes receive filtered Pi skills while MCP definit
   assert.ok(value.session.getActiveToolNames().includes('mcp_fixture_echo_12345678'))
   assert.ok(value.session.getActiveToolNames().includes('mcp_list'))
   assert.ok(value.session.getActiveToolNames().includes('mcp_manage'))
-  assert.ok(value.session.hasExtensionHandlers('tool_result'))
-  assert.ok(value.session.hasExtensionHandlers('message_end'))
+  assert.equal(value.session.hasExtensionHandlers('tool_result'), false)
+  assert.equal(value.session.hasExtensionHandlers('message_end'), false)
 
   const childLoader = await runtime.subagents.createResourceLoader({ cwd: directory, rolePrompt: 'CHILD ROLE PROMPT' })
   assert.ok(childLoader.getSkills().skills.some((skill) => skill.name === 'runtime-skill'))
