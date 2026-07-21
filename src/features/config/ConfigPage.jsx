@@ -65,11 +65,11 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
   }, [])
 
   const importDiscoveredProvider = async (provider) => {
-    const source = provider.source === 'codex-cli' ? 'Codex CLI' : provider.source === 'claude-cli' ? 'Claude Code' : t('环境变量')
+    const source = provider.source === 'codex-config' ? 'Codex config.toml' : 'Claude settings.json'
     const approved = await requestConfirm({
-      title: t('加载本机 Provider'),
-      message: t('将把 {source} 的认证信息安全复制到 Vesper。不会覆盖已有认证；OAuth 刷新可能需要 CLI 重新登录。', { source }),
-      confirmLabel: t('加载'),
+      title: t('加载 Provider 配置'),
+      message: t('将把 {source} 中的 Provider、地址、模型和可用认证加载到 Vesper。不会覆盖 Vesper 已有配置或认证。', { source }),
+      confirmLabel: t('加载配置'),
     })
     if (!approved) return
     setImportingProvider(provider.id)
@@ -79,8 +79,8 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
       setConfig(result.config)
       setDiscovery(result.discovery)
       const imported = result.config.providers.find((item) => item.id === result.providerId) || result.config.providers[0]
-      setDraft((current) => ({ ...configDraft(result.config, imported), thinkingLevel: current?.thinkingLevel || result.config.thinkingLevel, toolMode: current?.toolMode || result.config.toolMode }))
-      notify(t('{name} 已加载到 Vesper', { name: imported.name }))
+      setDraft((current) => ({ ...configDraft(result.config, imported, result.selectedModel), thinkingLevel: current?.thinkingLevel || result.config.thinkingLevel, toolMode: current?.toolMode || result.config.toolMode }))
+      notify(t('{name} 配置已加载到 Vesper', { name: imported.name }))
     } catch (caught) {
       setError(caught.message)
     } finally {
@@ -186,38 +186,52 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
   )
 }
 
-function discoverySourceLabel(provider, t) {
-  if (provider.source === 'codex-cli') return 'Codex CLI'
-  if (provider.source === 'claude-cli') return 'Claude Code'
-  return t('环境变量')
+function discoverySourceLabel(provider) {
+  return provider.source === 'codex-config' ? 'Codex config.toml' : 'Claude settings.json'
+}
+
+function discoveryAuthLabel(provider, t) {
+  if (provider.authType === 'environment') return t('密钥变量：{name}', { name: provider.authVariable })
+  if (provider.authType === 'bearer' || provider.authType === 'api_key') return t('配置中包含认证')
+  if (provider.authType === 'external-login') return t('登录认证未导入')
+  return t('配置中未包含认证')
+}
+
+function discoveryWarningLabel(code, t) {
+  if (code === 'login_auth_not_imported') return t('配置引用的 CLI 登录认证不会导入')
+  if (code === 'multiple_auth_values') return t('检测到多个认证字段，将优先使用授权字段')
+  if (code === 'invalid_url') return t('Provider 地址无效')
+  if (code === 'unsupported_api') return t('配置中的 API 协议暂不支持')
+  if (code === 'invalid_env_name') return t('密钥环境变量名称无效')
+  return t('部分配置字段无法导入')
 }
 
 function DiscoveredProvidersPanel({ discovery, discovering, error, importing, onRefresh, onImport }) {
   const { t } = useI18n()
   const providers = discovery.providers || []
   const errors = discovery.errors || []
-  const errorLabel = (item) => t(item.code === 'invalid_json' ? '凭据文件格式无效' : item.code === 'unsupported_format' ? '未找到可用登录信息' : '无法读取凭据文件')
+  const errorLabel = (item) => t(['invalid_json', 'invalid_toml'].includes(item.code) ? '配置文件格式无效' : item.code === 'unsupported_config' ? '未找到可导入的 Provider 配置' : item.code === 'file_too_large' ? '配置文件过大' : '无法读取配置文件')
   return <Panel className="provider-discovery-panel">
     <div className="provider-discovery-head">
       <span className="language-settings-icon"><Server size={18} /></span>
-      <span><strong>{t('本机 Provider')}</strong><small>{t('自动识别 Codex CLI 与 Claude Code 登录，凭据仅在服务端读取。')}</small></span>
+      <span><strong>{t('本机 Provider 配置')}</strong><small>{t('读取 Codex config.toml 与 Claude settings.json 中的 Provider、地址、模型和认证字段。')}</small></span>
       <button type="button" className="button secondary tiny" disabled={discovering || Boolean(importing)} onClick={onRefresh}>{discovering ? <RefreshCw className="spin" size={13} /> : <RefreshCw size={13} />}{t('重新扫描')}</button>
     </div>
-    {discovering && !providers.length ? <div className="provider-discovery-empty"><RefreshCw className="spin" size={15} />{t('正在扫描本机 Provider…')}</div> : providers.length ? <div className="provider-discovery-list">
+    {discovering && !providers.length ? <div className="provider-discovery-empty"><RefreshCw className="spin" size={15} />{t('正在扫描 Provider 配置文件…')}</div> : providers.length ? <div className="provider-discovery-list">
       {providers.map((provider) => {
-        const source = discoverySourceLabel(provider, t)
-        const imported = provider.imported
-        const configured = provider.configured
+        const source = discoverySourceLabel(provider)
         const busy = importing === provider.id
-        return <div className={`provider-discovery-card ${configured ? 'configured' : ''}`} key={provider.id}>
-          <span className={`provider-discovery-icon source-${provider.source}`}><Bot size={17} /></span>
-          <span className="provider-discovery-copy"><strong>{source}</strong><small>{provider.providerName} · {t(provider.authType === 'oauth' ? 'OAuth' : 'API Key')} · {provider.location}</small></span>
-          <span className="provider-discovery-actions">{imported ? <Badge tone="green">{t('已加载')}</Badge> : configured ? <Badge tone="green">{t(provider.importable ? '已配置' : '环境认证')}</Badge> : provider.importable ? <button type="button" className="button primary tiny" disabled={busy || Boolean(importing)} onClick={() => onImport(provider)}>{busy ? <RefreshCw className="spin" size={12} /> : <Download size={12} />}{t(busy ? '加载中…' : '加载')}</button> : <Badge tone="blue">{t('环境认证')}</Badge>}</span>
+        const Icon = provider.source === 'claude-config' ? Brain : Bot
+        const modelSummary = provider.models?.length ? provider.models.map((model) => model.id).join(', ') : t('未指定模型')
+        return <div className={`provider-discovery-card ${provider.imported ? 'configured' : ''}`} key={provider.id}>
+          <span className={`provider-discovery-icon source-${provider.source}`}><Icon size={17} /></span>
+          <span className="provider-discovery-copy"><strong>{source} · {provider.providerName}</strong><small>{provider.api} · {modelSummary}</small><small>{provider.baseUrl || t('未指定 Base URL')} · {discoveryAuthLabel(provider, t)} · {provider.location}</small></span>
+          <span className="provider-discovery-actions">{provider.imported ? <Badge tone="green">{t('已加载')}</Badge> : provider.conflict ? <Badge tone="amber">{t('存在冲突')}</Badge> : provider.importable ? <button type="button" className="button primary tiny" disabled={busy || Boolean(importing)} onClick={() => onImport(provider)}>{busy ? <RefreshCw className="spin" size={12} /> : <Download size={12} />}{t(busy ? '加载中…' : '加载配置')}</button> : <Badge tone="gray">{t('不可加载')}</Badge>}</span>
         </div>
       })}
-    </div> : <div className="provider-discovery-empty"><Server size={15} />{t('未检测到 Codex CLI 或 Claude Code 登录。')}</div>}
-    {(error || errors.length > 0) && <div className="provider-discovery-errors" aria-live="polite">{error && <span><AlertTriangle size={13} />{error}</span>}{errors.map((item, index) => <span key={`${item.source}-${item.code}-${index}`}><AlertTriangle size={13} />{discoverySourceLabel(item, t)} · {errorLabel(item)}</span>)}</div>}
-    <small className="provider-discovery-security"><ShieldCheck size={12} />{t('认证内容不会发送到浏览器，也不会覆盖 Vesper 已有凭据。')}</small>
+    </div> : <div className="provider-discovery-empty"><Server size={15} />{t('未检测到可导入的 Codex 或 Claude Provider 配置。')}</div>}
+    {(error || errors.length > 0 || providers.some((provider) => provider.warnings?.length)) && <div className="provider-discovery-errors" aria-live="polite">{error && <span><AlertTriangle size={13} />{error}</span>}{errors.map((item, index) => <span key={`${item.source}-${item.code}-${index}`}><AlertTriangle size={13} />{discoverySourceLabel(item)} · {errorLabel(item)}</span>)}{providers.flatMap((provider) => (provider.warnings || []).map((warning, index) => <span key={`${provider.id}-${warning.code}-${index}`}><AlertTriangle size={13} />{discoverySourceLabel(provider)} · {discoveryWarningLabel(warning.code, t)}</span>))}</div>}
+    <small className="provider-discovery-security"><ShieldCheck size={12} />{t('配置内容仅由服务端读取；认证值不会发送到浏览器，也不会覆盖 Vesper 已有配置。')}</small>
   </Panel>
 }
 

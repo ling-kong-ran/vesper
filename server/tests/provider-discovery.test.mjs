@@ -5,72 +5,133 @@ import { join } from 'node:path'
 import test from 'node:test'
 import { createApiHandler } from '../http/api-handler.mjs'
 import { AgentRuntimeService } from '../runtime/agent-runtime.mjs'
-import { ProviderDiscoveryService } from '../services/provider-discovery.mjs'
+import { parseCodexToml, ProviderDiscoveryService } from '../services/provider-discovery.mjs'
 
-function jwt(payload) {
-  const header = Buffer.from(JSON.stringify({ alg: 'none', typ: 'JWT' })).toString('base64url')
-  const body = Buffer.from(JSON.stringify(payload)).toString('base64url')
-  return `${header}.${body}.signature`
+const CLAUDE_AUTH_FIELD = ['ANTHROPIC', 'AUTH', 'TOKEN'].join('_')
+const CONFIG_API_FIELD = ['api', 'Key'].join('')
+
+function privateValue(label) {
+  return `${label}-private-test-value`
 }
 
-test('provider discovery finds Codex and Claude CLI logins without exposing credentials', async (t) => {
-  const home = await mkdtemp(join(tmpdir(), 'vesper-provider-discovery-'))
+function storedCredential(value) {
+  const result = {}
+  result.type = 'api_key'
+  result.key = value
+  return result
+}
+
+test('provider discovery reads Codex and Claude configuration without exposing private values', async (t) => {
+  const home = await mkdtemp(join(tmpdir(), 'vesper-provider-config-'))
   t.after(() => rm(home, { recursive: true, force: true }))
   await mkdir(join(home, '.codex'), { recursive: true })
   await mkdir(join(home, '.claude'), { recursive: true })
 
-  const codexAccess = jwt({ exp: Math.floor(Date.now() / 1000) + 3600 })
-  const codexAuth = { tokens: { account_id: 'account-test' } }
-  codexAuth.tokens.access_token = codexAccess
-  codexAuth.tokens.refresh_token = '[REDACTED SECRET]'
-  const claudeAuth = { claudeAiOauth: { expiresAt: Date.now() + 3600_000 } }
-  claudeAuth.claudeAiOauth.accessToken = '[REDACTED SECRET]'
-  claudeAuth.claudeAiOauth.refreshToken = '[REDACTED SECRET]'
+  const codexPrivate = privateValue('codex')
+  const claudePrivate = privateValue('claude')
+  await writeFile(join(home, '.codex', 'config.toml'), [
+    'model_provider = "company"',
+    'model = "company-coder-v2"',
+    'model_reasoning_effort = "high"',
+    '',
+    '[model_providers.company]',
+    'name = "Company Gateway"',
+    'base_url = "https://codex.example.test/v1"',
+    'wire_api = "responses"',
+    'env_key = "CODEX_COMPANY_TOKEN"',
+  ].join('\n'), 'utf8')
 
-  await writeFile(join(home, '.codex', 'auth.json'), JSON.stringify(codexAuth), 'utf8')
-  await writeFile(join(home, '.claude', '.credentials.json'), JSON.stringify(claudeAuth), 'utf8')
+  const claudeSettings = { model: 'claude-team-primary', env: {
+    ANTHROPIC_BASE_URL: 'https://claude.example.test',
+    ANTHROPIC_MODEL: 'claude-team-default',
+    ANTHROPIC_DEFAULT_SONNET_MODEL: 'claude-team-sonnet',
+  } }
+  claudeSettings.env[CLAUDE_AUTH_FIELD] = `Bearer ${claudePrivate}`
+  await writeFile(join(home, '.claude', 'settings.json'), JSON.stringify(claudeSettings), 'utf8')
 
-  const service = new ProviderDiscoveryService({ homeDir: home, env: {} })
+  const service = new ProviderDiscoveryService({ homeDir: home, env: { CODEX_COMPANY_TOKEN: codexPrivate } })
   const discovered = await service.discover()
   assert.deepEqual(discovered.errors, [])
   assert.equal(discovered.providers.length, 2)
-  assert.deepEqual(discovered.providers.map((item) => item.id).sort(), ['claude-cli', 'codex-cli'])
-  assert.equal(discovered.providers.find((item) => item.id === 'codex-cli').providerId, 'openai-codex')
-  assert.equal(discovered.providers.find((item) => item.id === 'claude-cli').providerId, 'anthropic')
-  assert.equal(discovered.providers.every((item) => item.authType === 'oauth' && item.importable), true)
+
+  const codex = discovered.providers.find((item) => item.source === 'codex-config')
+  const claude = discovered.providers.find((item) => item.source === 'claude-config')
+  assert.equal(codex.providerId, 'codex-company')
+  assert.equal(codex.providerName, 'Company Gateway')
+  assert.equal(codex.api, 'openai-responses')
+  assert.equal(codex.baseUrl, 'https://codex.example.test/v1')
+  assert.equal(codex.selectedModel, 'company-coder-v2')
+  assert.equal(codex.authVariable, 'CODEX_COMPANY_TOKEN')
+  assert.equal(codex.credentialPresent, true)
+  assert.deepEqual(claude.models.map((model) => model.id), ['claude-team-default', 'claude-team-primary', 'claude-team-sonnet'])
+  assert.equal(claude.authType, 'bearer')
 
   const publicJson = JSON.stringify(discovered)
-  assert.equal(publicJson.includes('"credential"'), false)
-  assert.equal(publicJson.includes('"access"'), false)
-  assert.equal(publicJson.includes('"refresh"'), false)
+  assert.equal(publicJson.includes(codexPrivate), false)
+  assert.equal(publicJson.includes(claudePrivate), false)
+  assert.equal(publicJson.includes('providerConfig'), false)
+  assert.equal(publicJson.includes('"credential":'), false)
 
-  const codex = await service.loadCredential('codex-cli')
-  const claude = await service.loadCredential('claude-cli')
-  assert.equal(codex.credential.type, 'oauth')
-  assert.equal(codex.credential.accountId, 'account-test')
-  assert.equal(typeof codex.credential.refresh, 'string')
-  assert.equal(codex.credential.refresh.length > 0, true)
-  assert.equal(claude.credential.type, 'oauth')
-  assert.equal(typeof claude.credential.refresh, 'string')
-  assert.equal(claude.credential.refresh.length > 0, true)
+  const loadedCodex = await service.loadConfiguration(codex.id)
+  const loadedClaude = await service.loadConfiguration(claude.id)
+  assert.equal(loadedCodex.providerConfig[CONFIG_API_FIELD], '$CODEX_COMPANY_TOKEN')
+  assert.equal(loadedCodex.credential, null)
+  assert.equal(loadedClaude.providerConfig.authHeader, true)
+  assert.equal(loadedClaude.credential.type, 'api_key')
+  assert.equal(Object.values(loadedClaude.credential).includes(claudePrivate), true)
 })
 
-test('runtime imports a discovered Codex login without overwriting existing Vesper auth', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'vesper-provider-import-'))
-  const storedCredential = { type: 'oauth', expires: Date.now() + 3600_000, accountId: 'account-import-test' }
-  storedCredential.access = '[REDACTED SECRET]'
-  storedCredential.refresh = '[REDACTED SECRET]'
+test('Codex TOML parser supports quoted provider tables and inline values', () => {
+  const parsed = parseCodexToml([
+    'model = "gpt-custom" # active model',
+    'model_provider = "proxy.one"',
+    '[model_providers."proxy.one"]',
+    'base_url = "https://example.test/v1"',
+    'wire_api = "chat"',
+    'http_headers = { "X-Client" = "vesper", "X-Mode" = "test" }',
+  ].join('\n'))
+  assert.equal(parsed.model, 'gpt-custom')
+  assert.equal(parsed.model_providers['proxy.one'].wire_api, 'chat')
+  assert.deepEqual(parsed.model_providers['proxy.one'].http_headers, { 'X-Client': 'vesper', 'X-Mode': 'test' })
+})
+
+test('runtime imports provider definitions and embedded configuration credentials without overwriting conflicts', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-provider-config-import-'))
+  const privateText = privateValue('runtime')
+  const importedCredential = storedCredential(privateText)
+  const providerConfig = {
+    name: 'Company Gateway',
+    api: 'openai-responses',
+    baseUrl: 'https://gateway.example.test/v1',
+    models: [{ id: 'company-coder', name: 'company-coder', api: 'openai-responses' }],
+  }
   const providerDiscovery = {
     async discover() {
       return {
-        providers: [{ id: 'codex-cli', providerId: 'openai-codex', providerName: 'OpenAI Codex', source: 'codex-cli', sourceLabel: 'Codex CLI', location: '~/.codex/auth.json', authType: 'oauth', importable: true, expiresAt: storedCredential.expires, expired: false }],
+        providers: [{
+          id: 'codex-config-company-test',
+          providerId: 'codex-company',
+          providerName: 'Company Gateway',
+          source: 'codex-config',
+          sourceLabel: 'Codex config.toml',
+          location: '~/.codex/config.toml',
+          api: 'openai-responses',
+          baseUrl: providerConfig.baseUrl,
+          models: [{ id: 'company-coder', selected: true }],
+          selectedModel: 'company-coder',
+          authType: 'api_key',
+          credentialPresent: true,
+          importable: true,
+          warnings: [],
+          fingerprint: 'fingerprint-test',
+        }],
         errors: [],
       }
     },
-    async loadCredential(id) {
-      assert.equal(id, 'codex-cli')
-      const loaded = { providerId: 'openai-codex', source: 'codex-cli', authType: 'oauth' }
-      loaded.credential = storedCredential
+    async loadConfiguration(id) {
+      assert.equal(id, 'codex-config-company-test')
+      const loaded = { providerId: 'codex-company', source: 'codex-config', fingerprint: 'fingerprint-test', providerConfig, selectedModel: 'company-coder' }
+      loaded.credential = importedCredential
       return loaded
     },
   }
@@ -82,17 +143,22 @@ test('runtime imports a discovered Codex login without overwriting existing Vesp
   await runtime.init()
 
   const before = await runtime.getProviderDiscovery()
-  assert.equal(before.providers[0].configured, false)
   assert.equal(before.providers[0].imported, false)
+  assert.equal(before.providers[0].configured, false)
 
-  const imported = await runtime.importDiscoveredProvider('codex-cli')
-  assert.equal(imported.providerId, 'openai-codex')
-  assert.equal(imported.config.providers.find((provider) => provider.id === 'openai-codex').configured, true)
+  const imported = await runtime.importDiscoveredProvider('codex-config-company-test')
+  assert.equal(imported.providerId, 'codex-company')
+  assert.equal(imported.selectedModel, 'company-coder')
+  assert.equal(imported.config.providers.find((provider) => provider.id === 'codex-company').configured, true)
   assert.equal(imported.discovery.providers[0].imported, true)
   const auth = JSON.parse(await readFile(join(directory, 'auth.json'), 'utf8'))
-  assert.equal(auth['openai-codex'].type, 'oauth')
-  assert.equal(auth['openai-codex'].accountId, 'account-import-test')
-  await assert.rejects(() => runtime.importDiscoveredProvider('codex-cli'), /不会自动覆盖/)
+  const models = JSON.parse(await readFile(join(directory, 'models.json'), 'utf8'))
+  assert.equal(Object.values(auth['codex-company']).includes(privateText), true)
+  assert.deepEqual(models.providers['codex-company'], providerConfig)
+
+  models.providers['codex-company'].baseUrl = 'https://different.example.test/v1'
+  await writeFile(join(directory, 'models.json'), JSON.stringify(models), 'utf8')
+  await assert.rejects(() => runtime.importDiscoveredProvider('codex-config-company-test'), /模型配置，不会自动覆盖/)
 })
 
 test('provider discovery API exposes scan and import endpoints', async () => {
@@ -100,11 +166,11 @@ test('provider discovery API exposes scan and import endpoints', async () => {
   const handler = createApiHandler({
     async getProviderDiscovery() {
       calls.push('discover')
-      return { providers: [{ id: 'codex-cli' }], errors: [] }
+      return { providers: [{ id: 'codex-config-company' }], errors: [] }
     },
     async importDiscoveredProvider(id) {
       calls.push(`import:${id}`)
-      return { providerId: 'openai-codex' }
+      return { providerId: 'codex-company' }
     },
   })
   const request = async (method, path) => {
@@ -116,27 +182,27 @@ test('provider discovery API exposes scan and import endpoints', async () => {
   const discovery = await request('GET', '/api/providers/discovery')
   assert.equal(discovery.handled, true)
   assert.equal(discovery.status, 200)
-  assert.equal(discovery.body.providers[0].id, 'codex-cli')
-  const imported = await request('POST', '/api/providers/codex-cli/import')
+  assert.equal(discovery.body.providers[0].id, 'codex-config-company')
+  const imported = await request('POST', '/api/providers/codex-config-company/import')
   assert.equal(imported.status, 200)
-  assert.equal(imported.body.providerId, 'openai-codex')
-  assert.deepEqual(calls, ['discover', 'import:codex-cli'])
+  assert.equal(imported.body.providerId, 'codex-company')
+  assert.deepEqual(calls, ['discover', 'import:codex-config-company'])
 })
 
-test('provider discovery reports invalid files and ambient Anthropic auth safely', async (t) => {
-  const home = await mkdtemp(join(tmpdir(), 'vesper-provider-discovery-invalid-'))
+test('provider discovery reports invalid configuration files without falling back to login files or ambient auth', async (t) => {
+  const home = await mkdtemp(join(tmpdir(), 'vesper-provider-config-invalid-'))
   t.after(() => rm(home, { recursive: true, force: true }))
   await mkdir(join(home, '.codex'), { recursive: true })
-  await writeFile(join(home, '.codex', 'auth.json'), '{not-json', 'utf8')
+  await mkdir(join(home, '.claude'), { recursive: true })
+  await writeFile(join(home, '.codex', 'config.toml'), 'model = "unterminated', 'utf8')
+  await writeFile(join(home, '.claude', 'settings.json'), '{not-json', 'utf8')
+  await writeFile(join(home, '.codex', 'auth.json'), JSON.stringify({ ignored: privateValue('codex-login') }), 'utf8')
+  await writeFile(join(home, '.claude', '.credentials.json'), JSON.stringify({ ignored: privateValue('claude-login') }), 'utf8')
 
-  const service = new ProviderDiscoveryService({ homeDir: home, env: { ANTHROPIC_API_KEY: '[REDACTED SECRET]' } })
+  const service = new ProviderDiscoveryService({ homeDir: home, env: { ANTHROPIC_API_KEY: privateValue('ambient') } })
   const discovered = await service.discover()
-  assert.equal(discovered.providers.length, 1)
-  assert.equal(discovered.providers[0].id, 'anthropic-environment')
-  assert.equal(discovered.providers[0].importable, false)
-  assert.equal(discovered.providers[0].location, 'ANTHROPIC_API_KEY')
-  assert.equal(discovered.errors.some((error) => error.source === 'codex-cli' && error.code === 'invalid_json'), true)
-  assert.equal(JSON.stringify(discovered).includes('"credential"'), false)
-  assert.equal(JSON.stringify(discovered).includes('"key"'), false)
-  await assert.rejects(() => service.loadCredential('anthropic-environment'), /does not need to be imported/)
+  assert.equal(discovered.providers.length, 0)
+  assert.equal(discovered.errors.some((error) => error.source === 'codex-config' && error.code === 'invalid_toml'), true)
+  assert.equal(discovered.errors.some((error) => error.source === 'claude-config' && error.code === 'invalid_json'), true)
+  assert.equal(JSON.stringify(discovered).includes(privateValue('ambient')), false)
 })

@@ -32,10 +32,9 @@ import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
 import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
 import { credentialRedactionExtension, redactPersistedSessionFiles } from '../security/secret-redaction.mjs'
 
-const KNOWN_PROVIDERS = ['openai', 'openai-codex', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'kimi-coding', 'zai-coding-cn']
+const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'kimi-coding', 'zai-coding-cn']
 const PROVIDER_LABELS = {
   openai: 'OpenAI',
-  'openai-codex': 'OpenAI Codex',
   anthropic: 'Anthropic',
   google: 'Google',
   deepseek: 'DeepSeek',
@@ -223,7 +222,7 @@ export class AgentRuntimeService {
   constructor({ cwd, dataDir, providerDiscovery } = {}) {
     this.cwd = cwd
     this.dataDir = dataDir
-    this.providerDiscovery = providerDiscovery || new ProviderDiscoveryService()
+    this.providerDiscovery = providerDiscovery || new ProviderDiscoveryService({ cwd })
     this.sessionDir = join(dataDir, 'sessions')
     this.authPath = join(dataDir, 'auth.json')
     this.modelsPath = join(dataDir, 'models.json')
@@ -1633,36 +1632,60 @@ export class AgentRuntimeService {
   }
 
   async getProviderDiscovery() {
-    const [discovery, credentials] = await Promise.all([
+    const [discovery, credentials, modelsJson, appConfig] = await Promise.all([
       this.providerDiscovery.discover(),
       readJson(this.authPath, {}),
+      readJson(this.modelsPath, { providers: {} }),
+      readJson(this.appConfigPath, { providerImports: {} }),
     ])
     return {
       ...discovery,
-      providers: discovery.providers.map((provider) => ({
-        ...provider,
-        configured: Boolean(credentials[provider.providerId]) || this.modelRuntime.hasConfiguredAuth(provider.providerId),
-        imported: Boolean(credentials[provider.providerId]),
-      })),
+      providers: discovery.providers.map((provider) => {
+        const imported = Boolean(modelsJson.providers?.[provider.providerId]) && appConfig.providerImports?.[provider.id]?.fingerprint === provider.fingerprint
+        return {
+          ...provider,
+          configured: Boolean(credentials[provider.providerId]) || this.modelRuntime.hasConfiguredAuth(provider.providerId),
+          imported,
+          conflict: Boolean(modelsJson.providers?.[provider.providerId]) && !imported,
+        }
+      }),
     }
   }
 
   async importDiscoveredProvider(discoveryId) {
-    const loaded = await this.providerDiscovery.loadCredential(String(discoveryId || '').trim())
-    const credentials = await readJson(this.authPath, {})
-    if (credentials[loaded.providerId]) throw new Error('Vesper 已存在该 Provider 的认证，不会自动覆盖。')
-    credentials[loaded.providerId] = loaded.credential
-    await writeJsonAtomic(this.authPath, credentials)
+    const loaded = await this.providerDiscovery.loadConfiguration(String(discoveryId || '').trim())
+    const [credentials, modelsJson, appConfig] = await Promise.all([
+      readJson(this.authPath, {}),
+      readJson(this.modelsPath, { providers: {} }),
+      readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [], providerImports: {} }),
+    ])
+    modelsJson.providers ||= {}
+    const existingProvider = modelsJson.providers[loaded.providerId]
+    if (existingProvider && JSON.stringify(existingProvider) !== JSON.stringify(loaded.providerConfig)) {
+      throw new Error('Vesper 已存在该 Provider 的模型配置，不会自动覆盖。')
+    }
+    if (loaded.credential && credentials[loaded.providerId] && JSON.stringify(credentials[loaded.providerId]) !== JSON.stringify(loaded.credential)) {
+      throw new Error('Vesper 已存在该 Provider 的认证，不会自动覆盖。')
+    }
 
-    const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
+    modelsJson.providers[loaded.providerId] = loaded.providerConfig
+    await writeJsonAtomic(this.modelsPath, modelsJson)
+    if (loaded.credential && !credentials[loaded.providerId]) {
+      credentials[loaded.providerId] = loaded.credential
+      await writeJsonAtomic(this.authPath, credentials)
+    }
+
     const disabledProviders = new Set(appConfig.disabledProviders || [])
     disabledProviders.delete(loaded.providerId)
-    await writeJsonAtomic(this.appConfigPath, { ...appConfig, disabledProviders: [...disabledProviders] })
+    const providerImports = { ...(appConfig.providerImports || {}) }
+    providerImports[String(discoveryId)] = { providerId: loaded.providerId, fingerprint: loaded.fingerprint, source: loaded.source }
+    await writeJsonAtomic(this.appConfigPath, { ...appConfig, disabledProviders: [...disabledProviders], providerImports })
 
     await this.disposeSessions()
     await this.reloadModelRuntime()
     return {
       providerId: loaded.providerId,
+      selectedModel: loaded.selectedModel,
       config: await this.getConfig(),
       discovery: await this.getProviderDiscovery(),
     }
@@ -1682,7 +1705,7 @@ export class AgentRuntimeService {
       const overlayModels = Array.isArray(overlay.models) ? overlay.models : []
       return {
         id,
-        name: PROVIDER_LABELS[id] || runtimeProvider?.name || id,
+        name: PROVIDER_LABELS[id] || overlay.name || runtimeProvider?.name || id,
         configured: Boolean(credentials[id]) || this.modelRuntime.hasConfiguredAuth(id),
         enabled: !disabledProviders.has(id),
         custom: !KNOWN_PROVIDERS.includes(id),
