@@ -240,6 +240,11 @@ export function createApiHandler(runtime) {
         json(res, 200, await runtime.getPlugins())
         return true
       }
+      if (req.method === 'POST' && url.pathname === '/api/plugins/web-search/test') {
+        const result = await runtime.testWebSearch(await bodyJson(req))
+        json(res, 200, { count: result.results.length, provider: result.provider })
+        return true
+      }
       if (req.method === 'PUT' && url.pathname === '/api/plugins') {
         json(res, 200, await runtime.savePlugins(await bodyJson(req)))
         return true

@@ -18,6 +18,7 @@ import { WorkflowService } from '../services/workflow-service.mjs'
 import { SkillsService } from '../services/skills-service.mjs'
 import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, SessionPermissionService } from '../services/session-permission-service.mjs'
 import { ToolPluginService } from '../services/tool-plugin-service.mjs'
+import { WebSearchService } from '../services/web-search-service.mjs'
 import { extractConversationMemories } from '../services/memory/conversation-memory.mjs'
 import { LocalMemoryRuntime } from '../services/memory/local-memory-runtime.mjs'
 import { inferModelKind, VisualGenerationService } from '../services/visual-generation/index.mjs'
@@ -226,6 +227,7 @@ export class AgentRuntimeService {
     this.settingsPath = join(dataDir, 'settings.json')
     this.appConfigPath = join(dataDir, 'vesper.json')
     this.toolPlugins = new ToolPluginService(this.appConfigPath)
+    this.webSearch = new WebSearchService({ configPath: this.appConfigPath })
     this.visualGeneration = new VisualGenerationService({
       modelsPath: this.modelsPath,
       authPath: this.authPath,
@@ -322,6 +324,7 @@ export class AgentRuntimeService {
     await this.toolPlugins.ensureDefaultTools(['memory_search', 'memory_remember'], 'memoryToolsV1')
     await this.toolPlugins.ensureDefaultTools(['delegate_task'], 'subagentToolsV1')
     await this.toolPlugins.ensureDefaultTools(['mcp_list', 'mcp_manage'], 'mcpManagementToolsV1')
+    await this.toolPlugins.ensureDefaultTools(['web_search'], 'webSearchToolV1')
     await this.reloadModelRuntime()
     await this.memory.init()
     await this.goals.init({ pauseActive: true })
@@ -1005,6 +1008,7 @@ export class AgentRuntimeService {
         cwd: effectiveCwd,
         enabledTools,
         memoryRuntime: this.memory,
+        webSearchService: this.webSearch,
         visualGenerationService: this.visualGeneration,
         onGeneratedFile: ({ path }) => runtimeValue && runtimeSession
           ? this.recordGeneratedFile(runtimeSession.sessionId, runtimeValue, path)
@@ -1361,6 +1365,10 @@ export class AgentRuntimeService {
 
   async getPlugins() {
     return this.toolPlugins.getState()
+  }
+
+  testWebSearch(input) {
+    return this.webSearch.test(input)
   }
 
   async promptFromChannel({ sessionId, message, attachments = [], cwd, title, model, onSession }) {

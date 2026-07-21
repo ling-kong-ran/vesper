@@ -1,5 +1,6 @@
 import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
 import { presetFromTools, sanitizeEnabledTools, TOOL_CATALOG, toolsFromConfig } from '../tools/registry.mjs'
+import { normalizeWebSearchConfig } from './web-search-service.mjs'
 
 export class ToolPluginService {
   constructor(configPath) {
@@ -27,6 +28,7 @@ export class ToolPluginService {
       preset: presetFromTools(enabledTools),
       changes: Array.isArray(appConfig.pluginChanges) ? appConfig.pluginChanges.slice(0, 20) : [],
       updatedAt: appConfig.pluginsUpdatedAt || null,
+      webSearch: normalizeWebSearchConfig(appConfig.webSearch || {}),
     }
   }
 
@@ -35,6 +37,9 @@ export class ToolPluginService {
     const previous = new Set(toolsFromConfig(appConfig))
     const enabledTools = sanitizeEnabledTools(input.enabledTools)
     const now = new Date().toISOString()
+    const webSearch = Object.hasOwn(input, 'webSearch')
+      ? normalizeWebSearchConfig(input.webSearch)
+      : normalizeWebSearchConfig(appConfig.webSearch || {})
     const changes = TOOL_CATALOG.flatMap((tool) => {
       const wasEnabled = previous.has(tool.id)
       const isEnabled = enabledTools.includes(tool.id)
@@ -49,6 +54,7 @@ export class ToolPluginService {
       enabledTools,
       pluginChanges: [...changes, ...(appConfig.pluginChanges || [])].slice(0, 50),
       pluginsUpdatedAt: now,
+      webSearch,
     })
     return this.getState()
   }

@@ -9,7 +9,7 @@ export const BUILTIN_TOOL_CATALOG = [
 ]
 
 export const TOOL_PRESETS = {
-  'read-only': ['read', 'grep', 'find', 'ls', 'memory_search', 'memory_remember', 'delegate_task', 'mcp_list', 'mcp_manage'],
-  workspace: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'memory_search', 'memory_remember', 'delegate_task', 'mcp_list', 'mcp_manage'],
-  full: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'memory_search', 'memory_remember', 'delegate_task', 'mcp_list', 'mcp_manage'],
+  'read-only': ['read', 'grep', 'find', 'ls', 'web_search', 'memory_search', 'memory_remember', 'delegate_task', 'mcp_list', 'mcp_manage'],
+  workspace: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'web_search', 'memory_search', 'memory_remember', 'delegate_task', 'mcp_list', 'mcp_manage'],
+  full: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'web_search', 'memory_search', 'memory_remember', 'delegate_task', 'mcp_list', 'mcp_manage'],
 }
