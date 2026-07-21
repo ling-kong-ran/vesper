@@ -112,6 +112,8 @@ export class WeixinGateway {
   }
 
   sendToPeer(peerId, input, scope = {}) {
+    // Tencent iLink requires the most recently issued inbound context_token
+    // for both replies and proactive/cron delivery.
     if (input.path) return this.protocol.sendMedia(this.connection, { to: peerId, path: input.path, name: input.name, mimeType: input.mimeType, contextToken: scope.contextToken })
     return this.protocol.sendText(this.connection, { to: peerId, text: input.markdown || input.text || '', contextToken: scope.contextToken })
   }

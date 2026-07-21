@@ -331,7 +331,7 @@ export class ChannelService {
     const template = this.state.templates[event]
     if (!template?.enabled) return []
     const selected = platforms ? new Set(platforms) : PLATFORMS
-    const results = []
+    const deliveries = []
     for (const platform of PLATFORMS) {
       if (!selected.has(platform)) continue
       const connection = this.state.connections[platform]
@@ -339,9 +339,15 @@ export class ChannelService {
       const scope = this.latestScope(platform)
       if (!scope) continue
       const { content } = this.renderNotification(event, platform, data)
-      results.push(this.gateways[platform].sendToPeer(scope.peerId, platform === 'feishu' ? { markdown: content } : { text: content }, scope))
+      deliveries.push({
+        platform,
+        promise: this.gateways[platform].sendToPeer(scope.peerId, platform === 'feishu' ? { markdown: content } : { text: content }, scope),
+      })
     }
-    return Promise.allSettled(results)
+    const settled = await Promise.allSettled(deliveries.map((delivery) => delivery.promise))
+    return settled.map((result, index) => result.status === 'fulfilled'
+      ? { platform: deliveries[index].platform, status: 'fulfilled' }
+      : { platform: deliveries[index].platform, status: 'rejected', error: result.reason instanceof Error ? result.reason.message : String(result.reason) })
   }
 
   async testNotification(event, platform) {

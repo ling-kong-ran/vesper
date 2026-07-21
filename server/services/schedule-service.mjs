@@ -95,6 +95,7 @@ function normalizeStoredTask(task, cwd) {
     lastStatus: task.lastStatus || 'idle',
     lastSummary: String(task.lastSummary || '').slice(0, 1200),
     lastError: String(task.lastError || '').slice(0, 1200),
+    lastNotificationError: String(task.lastNotificationError || '').slice(0, 1200),
   }
   normalized.nextRunAt = normalized.enabled ? calculateNextRun(normalized, normalized.nextRunAt && new Date(normalized.nextRunAt) > new Date() ? new Date(Date.now() - 1000) : new Date()) : null
   return normalized
@@ -122,6 +123,7 @@ export class ScheduleService {
     this.writeQueue = Promise.resolve()
     this.timer = null
     this.running = new Set()
+    this.executions = new Set()
   }
 
   async init() {
@@ -181,6 +183,7 @@ export class ScheduleService {
     task.lastStatus = current.lastStatus
     task.lastSummary = current.lastSummary
     task.lastError = current.lastError
+    task.lastNotificationError = current.lastNotificationError
     this.state.tasks[index] = task
     await this.save()
     return task
@@ -221,7 +224,9 @@ export class ScheduleService {
     task.lastError = ''
     if (trigger === 'scheduled') task.nextRunAt = calculateNextRun(task, new Date())
     await this.save()
-    void this.execute(task, run)
+    const execution = this.execute(task, run)
+    this.executions.add(execution)
+    execution.finally(() => this.executions.delete(execution)).catch(() => {})
   }
 
   async execute(task, run) {
@@ -250,17 +255,26 @@ export class ScheduleService {
       run.finishedAt = new Date().toISOString()
       run.durationMs = Date.now() - started
       task.updatedAt = new Date().toISOString()
+      if (task.notifications.length && (event === 'schedule.failed' || task.notifyOn === 'always')) {
+        try {
+          await this.notifications.notify(event, data, { platforms: task.notifications })
+          run.notificationError = ''
+          task.lastNotificationError = ''
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          run.notificationError = message
+          task.lastNotificationError = message
+        }
+      }
       this.running.delete(task.id)
       await this.save()
-    }
-    if (task.notifications.length && (event === 'schedule.failed' || task.notifyOn === 'always')) {
-      await this.notifications.notify(event, data, { platforms: task.notifications }).catch(() => {})
     }
   }
 
   async dispose() {
     clearInterval(this.timer)
     this.timer = null
+    await Promise.allSettled([...this.executions])
     await this.writeQueue.catch(() => {})
   }
 }

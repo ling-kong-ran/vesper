@@ -159,7 +159,10 @@ export class WeixinProtocol {
         context_token: contextToken || undefined,
       },
     })
-    if (result.ret && result.ret !== 0) throw new Error(result.errmsg || `微信消息发送失败（${result.ret}）`)
+    if (result.ret && result.ret !== 0) {
+      if (result.ret === -2 && result.errmsg === 'prepare failed') throw new Error('微信会话上下文已失效，请先在微信中向机器人发送一条消息后重试。')
+      throw new Error(result.errmsg || `微信消息发送失败（${result.ret}）`)
+    }
     return { messageId: clientId }
   }
 
@@ -230,7 +233,10 @@ export class WeixinProtocol {
     const sent = await this.authPost(connection, 'ilink/bot/sendmessage', {
       msg: { from_user_id: '', to_user_id: to, client_id: clientId, message_type: 2, message_state: 2, item_list: [item], context_token: contextToken || undefined },
     })
-    if (sent.ret && sent.ret !== 0) throw new Error(sent.errmsg || `微信媒体发送失败（${sent.ret}）`)
+    if (sent.ret && sent.ret !== 0) {
+      if (sent.ret === -2 && sent.errmsg === 'prepare failed') throw new Error('微信会话上下文已失效，请先在微信中向机器人发送一条消息后重试。')
+      throw new Error(sent.errmsg || `微信媒体发送失败（${sent.ret}）`)
+    }
     return { messageId: clientId }
   }
 }

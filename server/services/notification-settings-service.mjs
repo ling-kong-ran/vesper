@@ -81,6 +81,11 @@ export class NotificationSettingsService {
       const rendered = this.channels.renderNotification(event, 'browser', data)
       await this.publishBrowser(rendered.title, rendered.content, event)
     }
+    const failures = results.filter((result) => result.status === 'rejected')
+    if (failures.length) {
+      const message = failures.map((failure) => `${failure.platform}: ${failure.error}`).join('; ')
+      throw new Error(`通知发送失败：${message}`)
+    }
     return results
   }
 }

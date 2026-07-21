@@ -225,6 +225,42 @@ test('WeChat gateway disconnect interrupts reconnect backoff immediately', async
   assert.equal(gateway.getStatus().state, 'idle')
 })
 
+test('WeChat proactive sends use the latest persisted context token', async () => {
+  const sent = []
+  const gateway = new WeixinGateway({
+    protocol: { sendText: async (_connection, input) => { sent.push(input); return { messageId: 'sent' } } },
+    onMessage: () => {},
+  })
+  gateway.connection = { token: 'token' }
+  await gateway.send({ peerId: 'wx-owner', contextToken: 'current-context' }, { text: 'reply' })
+  await gateway.sendToPeer('wx-owner', { text: 'scheduled notification' }, { contextToken: 'stale-context' })
+  assert.equal(sent[0].contextToken, 'current-context')
+  assert.equal(sent[1].contextToken, 'stale-context')
+})
+
+test('WeChat expired contexts return an actionable notification error', async () => {
+  const protocol = new WeixinProtocol({
+    fetchImpl: async () => new Response(JSON.stringify({ ret: -2, errmsg: 'prepare failed' }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  })
+  await assert.rejects(
+    protocol.sendText({ token: 'token' }, { to: 'wx-owner', text: 'scheduled notification', contextToken: 'expired' }),
+    /请先在微信中向机器人发送一条消息/,
+  )
+})
+
+test('channel notification results preserve platform delivery failures', async (t) => {
+  const { directory, service, gateways } = await fixture()
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await service.completeOnboarding('weixin', { accountId: 'wx-bot', token: 'token', ownerUserId: 'wx-owner', baseUrl: WEIXIN_API_BASE })
+  await service.handleMessage('weixin', { messageId: 'w1', peerId: 'wx-owner', chatType: 'p2p', senderId: 'wx-owner', content: 'hello', resources: [], contextToken: 'ctx' })
+  gateways.weixin.sendToPeer = async () => { throw new Error('prepare failed') }
+  const results = await service.notify('schedule.completed', { task: { name: 'daily', summary: 'done' } }, { platforms: ['weixin'] })
+  assert.deepEqual(results, [{ platform: 'weixin', status: 'rejected', error: 'prepare failed' }])
+})
+
 test('official registerApp flow requests only bidirectional bot capabilities', async () => {
   let options
   const service = new FeishuOnboardingService({

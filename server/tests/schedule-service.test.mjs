@@ -13,6 +13,26 @@ async function waitFor(predicate, timeoutMs = 1500) {
   }
 }
 
+test('scheduled task records notification delivery failures without changing the run result', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-schedule-notification-failure-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const service = new ScheduleService({
+    path: join(directory, 'schedules.json'), cwd: directory, tickMs: 60_000,
+    agent: { validateDirectory: async () => directory, prompt: async () => ({ text: 'done' }) },
+    notifications: { notify: async () => { throw new Error('通知发送失败：weixin: prepare failed') } },
+  })
+  await service.init()
+  t.after(() => service.dispose())
+  const task = await service.create({ name: 'daily', prompt: 'test', frequency: 'daily', time: '09:00', timezone: 'UTC', notifications: ['weixin'], notifyOn: 'always' })
+  await service.runNow(task.id)
+  await waitFor(() => Boolean(service.getState().runs[0]?.notificationError))
+  await waitFor(() => service.executions.size === 0)
+  const state = service.getState()
+  assert.equal(state.runs[0].status, 'completed')
+  assert.match(state.runs[0].notificationError, /weixin: prepare failed/)
+  assert.match(state.tasks[0].lastNotificationError, /weixin: prepare failed/)
+})
+
 test('next run calculation supports daily, weekly and monthly schedules', () => {
   const from = new Date('2026-07-18T10:00:00.000Z')
   assert.equal(calculateNextRun({ frequency: 'interval', intervalValue: 30, intervalUnit: 'minutes' }, from), '2026-07-18T10:30:00.000Z')
@@ -45,6 +65,7 @@ test('scheduled tasks persist, execute with the selected model and notify multip
   })
   await service.runNow(task.id)
   await waitFor(() => notifications.length === 1)
+  await waitFor(() => service.executions.size === 0)
   const state = service.getState()
   assert.equal(state.tasks[0].lastStatus, 'completed')
   assert.equal(state.runs[0].status, 'completed')
@@ -73,6 +94,7 @@ test('failure-only tasks suppress success notifications and send failure templat
   shouldFail = true
   await service.runNow(task.id)
   await waitFor(() => notifications.length === 1)
+  await waitFor(() => service.executions.size === 0)
   assert.equal(notifications[0][0], 'schedule.failed')
   assert.equal(notifications[0][1].task.error, '测试超时')
 })

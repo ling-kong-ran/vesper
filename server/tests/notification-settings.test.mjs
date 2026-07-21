@@ -60,3 +60,22 @@ test('browser notification events use the configured template queue', async (t) 
   assert.equal(first.events[0].body, '日报已完成')
   assert.equal((await service.getBrowserEvents(first.latestId)).events.length, 0)
 })
+
+test('channel notification failures are reported after other targets are attempted', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-notification-failure-'))
+  const path = join(directory, 'vesper.json')
+  const browserEventsPath = join(directory, 'browser-events.json')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await writeFile(path, JSON.stringify({ notifications: { browser: { enabled: true } } }))
+  const channels = {
+    getState: () => ({ templates: [{ id: 'schedule.completed', enabled: true }], connections: {}, scopes: [] }),
+    notify: async () => [{ platform: 'weixin', status: 'rejected', error: 'prepare failed' }],
+    renderNotification: () => ({ title: 'Schedule completed', content: 'Daily task completed' }),
+  }
+  const service = new NotificationSettingsService({ path, browserEventsPath, channels })
+  await assert.rejects(
+    service.notify('schedule.completed', { task: { name: 'daily' } }, { platforms: ['weixin', 'browser'] }),
+    /weixin: prepare failed/,
+  )
+  assert.equal((await service.getBrowserEvents('missing')).events.length, 1)
+})
