@@ -313,7 +313,7 @@ function App() {
   return (
     <div className="app-shell">
       <div className="app-body">
-        <Sidebar page={page} navigation={navigation} navigate={navigate} setChatMode={setChatMode} open={mobileNav} onClose={() => setMobileNav(false)} pluginStats={pluginStats} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebarCollapsed} />
+        <Sidebar page={page} navigation={navigation} navigate={navigate} setChatMode={setChatMode} open={mobileNav} onClose={() => setMobileNav(false)} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebarCollapsed} />
         <main className="main-surface">
           <PageHeader
             meta={activeMeta}
@@ -350,6 +350,7 @@ function App() {
           </div>
         </main>
       </div>
+      <StatusBar page={page} pluginStats={pluginStats} />
       {toast && <Toast message={toast.message} tone={toast.tone} />}
       <AppDialog dialog={appDialog.dialog} onClose={appDialog.close} onFinish={appDialog.finish} />
       {modal && <QuickCreate type={modal} close={() => setModal(null)} notify={notify} />}
@@ -357,28 +358,13 @@ function App() {
   )
 }
 
-function PageLoader() {
-  const { t } = useI18n()
-  return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在加载页面')}</h2><p>{t('按需加载功能模块…')}</p></Panel>
-}
-
-function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, pluginStats, collapsed, onToggleCollapse }) {
+function StatusBar({ page, pluginStats }) {
   const { t, language } = useI18n()
   const [usage, setUsage] = useState(null)
-  const [sessions, setSessions] = useState([])
-  const [historyExpanded, setHistoryExpanded] = useState(true)
-  const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
-  const active = page === 'workflowCreate' ? 'workflows' : page === 'chatHistory' ? 'chat' : page
+  const [modelLabel, setModelLabel] = useState('')
 
   const refreshUsage = useCallback(async () => {
     try { setUsage(await apiJson('/api/usage/today')) } catch {}
-  }, [])
-
-  const refreshSessions = useCallback(async () => {
-    try {
-      const data = await apiJson('/api/sessions')
-      setSessions([...(data.sessions || [])].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified)))
-    } catch {}
   }, [])
 
   useEffect(() => {
@@ -393,6 +379,52 @@ function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, plugi
       window.removeEventListener(USAGE_UPDATED_EVENT, refreshUsage)
     }
   }, [refreshUsage])
+
+  useEffect(() => {
+    let active = true
+    apiJson('/api/config')
+      .then((config) => { if (active) setModelLabel(config.model ? `${config.provider}/${config.model}` : '') })
+      .catch(() => {})
+    return () => { active = false }
+  }, [])
+
+  const usageTitle = usage
+    ? t('输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {cacheRead}', {
+        input: usage.input.toLocaleString(language),
+        output: usage.output.toLocaleString(language),
+        reasoning: usage.reasoning.toLocaleString(language),
+        cacheRead: usage.cacheRead.toLocaleString(language),
+      })
+    : t('正在统计今日 Token 消耗')
+
+  return <footer className="status-bar">
+    <span className="status-model"><Bot size={12} />{modelLabel || t('未配置模型')}</span>
+    <span className="status-usage">{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page)
+      ? <>{t('原生运行时')} <em>{t('已接入')}</em></>
+      : page === 'plugins'
+        ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' })
+        : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</span>
+  </footer>
+}
+
+function PageLoader() {
+  const { t } = useI18n()
+  return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在加载页面')}</h2><p>{t('按需加载功能模块…')}</p></Panel>
+}
+
+function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, collapsed, onToggleCollapse }) {
+  const { t, language } = useI18n()
+  const [sessions, setSessions] = useState([])
+  const [historyExpanded, setHistoryExpanded] = useState(true)
+  const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
+  const active = page === 'workflowCreate' ? 'workflows' : page === 'chatHistory' ? 'chat' : page
+
+  const refreshSessions = useCallback(async () => {
+    try {
+      const data = await apiJson('/api/sessions')
+      setSessions([...(data.sessions || [])].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified)))
+    } catch {}
+  }, [])
 
   useEffect(() => {
     refreshSessions()
@@ -419,15 +451,6 @@ function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, plugi
     navigate('chat')
   }
 
-  const usageTitle = usage
-    ? t('输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {cacheRead}', {
-        input: usage.input.toLocaleString(language),
-        output: usage.output.toLocaleString(language),
-        reasoning: usage.reasoning.toLocaleString(language),
-        cacheRead: usage.cacheRead.toLocaleString(language),
-      })
-    : t('正在统计今日 Token 消耗')
-
   return (
     <>
       {open && <button className="nav-scrim" aria-label={t('关闭导航')} onClick={onClose} />}
@@ -452,10 +475,6 @@ function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, plugi
               {!sessions.length && <span className="nav-history-empty">{t('暂无历史会话')}</span>}
             </div>}
           </section>
-        </div>
-        <div className="sidebar-status">
-          <span>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? t('功能状态') : page === 'plugins' ? t('插件状态') : t('运行状态')}</span>
-          <b>{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page) ? <>{t('原生运行时')} <em>{t('已接入')}</em></> : page === 'plugins' ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' }) : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</b>
         </div>
         <button className="sidebar-collapse" title={t(collapsed ? '展开侧栏' : '收起侧栏')} aria-label={t(collapsed ? '展开侧栏' : '收起侧栏')} onClick={onToggleCollapse}>{collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}<span>{t(collapsed ? '展开侧栏' : '收起侧栏')}</span></button>
       </aside>

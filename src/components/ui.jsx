@@ -68,7 +68,7 @@ export function SelectField({ value, onChange, options }) {
 export function Toast({ message, tone = 'success' }) {
   const config = TOAST_TONES[tone] || TOAST_TONES.success
   const Icon = config.Icon
-  return <div role={tone === 'error' ? 'alert' : 'status'} aria-live="polite" className={`fixed right-5 bottom-5 z-80 flex min-h-11 max-w-[min(420px,calc(100vw-40px))] items-center gap-2 rounded-[9px] border px-3.5 py-2.5 text-[13px] leading-5 font-semibold shadow-[0_18px_36px_-18px_var(--shadow-strong)] [animation:toast-in_.22s_ease-out] ${config.classes}`}><Icon size={18} className="shrink-0" />{message}</div>
+  return <div role={tone === 'error' ? 'alert' : 'status'} aria-live="polite" className={`fixed right-5 bottom-10 z-80 flex min-h-11 max-w-[min(420px,calc(100vw-40px))] items-center gap-2 rounded-[9px] border px-3.5 py-2.5 text-[13px] leading-5 font-semibold shadow-[0_18px_36px_-18px_var(--shadow-strong)] [animation:toast-in_.22s_ease-out] ${config.classes}`}><Icon size={18} className="shrink-0" />{message}</div>
 }
 
 export function PreviewNotice({ children }) {
