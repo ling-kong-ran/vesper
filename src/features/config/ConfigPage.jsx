@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, Bot, Brain, Check, ChevronDown, Code2, FoldVertical, KeyRound, Languages, Network, Plus, RefreshCw, Save, Server, ShieldCheck, Sparkles, Trash2, UnfoldVertical, X, Zap } from 'lucide-react'
+import { AlertTriangle, Bot, Brain, Check, ChevronDown, Code2, Download, FoldVertical, KeyRound, Languages, Network, Plus, RefreshCw, Save, Server, ShieldCheck, Sparkles, Trash2, UnfoldVertical, X, Zap } from 'lucide-react'
 import { APP_NAME } from '../../app/brand.js'
 import { STORAGE_KEYS } from '../../app/storage.js'
 import { LANGUAGE_OPTIONS, translateText, useI18n } from '../../app/use-i18n.js'
@@ -32,17 +32,61 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
   const [error, setError] = useState('')
   const [providerModal, setProviderModal] = useState(false)
   const [modelModal, setModelModal] = useState(false)
+  const [discovery, setDiscovery] = useState({ providers: [], errors: [] })
+  const [discovering, setDiscovering] = useState(true)
+  const [discoveryError, setDiscoveryError] = useState('')
+  const [importingProvider, setImportingProvider] = useState('')
   usePagePrimaryAction(registerPrimaryAction, () => setProviderModal(true))
 
+  const refreshDiscovery = async () => {
+    setDiscovering(true)
+    setDiscoveryError('')
+    try {
+      setDiscovery(await apiJson('/api/providers/discovery'))
+    } catch (caught) {
+      setDiscoveryError(caught.message)
+    } finally {
+      setDiscovering(false)
+    }
+  }
+
   useEffect(() => {
+    let active = true
     apiJson('/api/config')
       .then((data) => {
+        if (!active) return
         setConfig(data)
         const provider = data.providers.find((item) => item.id === data.provider) || data.providers[0]
         setDraft(configDraft(data, provider, data.model))
       })
-      .catch((caught) => setError(caught.message))
+      .catch((caught) => active && setError(caught.message))
+    void refreshDiscovery()
+    return () => { active = false }
   }, [])
+
+  const importDiscoveredProvider = async (provider) => {
+    const source = provider.source === 'codex-cli' ? 'Codex CLI' : provider.source === 'claude-cli' ? 'Claude Code' : t('环境变量')
+    const approved = await requestConfirm({
+      title: t('加载本机 Provider'),
+      message: t('将把 {source} 的认证信息安全复制到 Vesper。不会覆盖已有认证；OAuth 刷新可能需要 CLI 重新登录。', { source }),
+      confirmLabel: t('加载'),
+    })
+    if (!approved) return
+    setImportingProvider(provider.id)
+    setError('')
+    try {
+      const result = await apiJson(`/api/providers/${encodeURIComponent(provider.id)}/import`, { method: 'POST', body: '{}' })
+      setConfig(result.config)
+      setDiscovery(result.discovery)
+      const imported = result.config.providers.find((item) => item.id === result.providerId) || result.config.providers[0]
+      setDraft((current) => ({ ...configDraft(result.config, imported), thinkingLevel: current?.thinkingLevel || result.config.thinkingLevel, toolMode: current?.toolMode || result.config.toolMode }))
+      notify(t('{name} 已加载到 Vesper', { name: imported.name }))
+    } catch (caught) {
+      setError(caught.message)
+    } finally {
+      setImportingProvider('')
+    }
+  }
 
   const selectProvider = (provider) => {
     setDraft((current) => ({ ...configDraft(config, provider), thinkingLevel: current.thinkingLevel, toolMode: current.toolMode }))
@@ -106,28 +150,32 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
   const selectedModel = selectedProvider.models.find((item) => item.id === draft.model)
   const chatModels = selectedProvider.models.filter((item) => item.kind === 'chat')
   const visualModels = selectedProvider.models.filter((item) => item.kind !== 'chat')
-  const providerIcons = { openai: Bot, anthropic: Brain, google: Sparkles, deepseek: Code2, xai: Zap, openrouter: Network, 'kimi-coding': Sparkles, 'zai-coding-cn': Brain }
+  const providerIcons = { openai: Bot, 'openai-codex': Bot, anthropic: Brain, google: Sparkles, deepseek: Code2, xai: Zap, openrouter: Network, 'kimi-coding': Sparkles, 'zai-coding-cn': Brain }
+  const codexOAuth = selectedProvider.id === 'openai-codex'
   return (
     <>
     {subnav}
     {section === 'notifications' ? <NotificationSettings notify={notify} onBrowserNotificationChange={onBrowserNotificationChange} /> : <>
+    <DiscoveredProvidersPanel discovery={discovery} discovering={discovering} error={discoveryError} importing={importingProvider} onRefresh={refreshDiscovery} onImport={importDiscoveredProvider} />
     <div className="split-list-detail config-layout">
       <Panel className="selection-list"><div className="provider-list-heading"><SectionTitle title={t('Provider 连接')} /><button className="icon-button" title={t('添加 Provider')} onClick={() => setProviderModal(true)}><Plus size={15} /></button></div>{config.providers.map((provider) => { const Icon = providerIcons[provider.id] || Server; return <div className={`provider-list-item ${draft.provider === provider.id ? 'active' : ''} ${provider.enabled ? '' : 'disabled-provider'}`} key={provider.id}><button className="provider-select-main" onClick={() => selectProvider(provider)}><span className="list-icon"><Icon size={16} /></span><span><strong>{provider.name}</strong><small>{provider.id} · {t('{count} 个模型', { count: provider.models.length })}</small></span></button><div className="provider-list-control"><Badge tone={!provider.enabled ? 'gray' : provider.configured ? 'green' : 'amber'}>{t(!provider.enabled ? '已停用' : provider.configured ? '已配置' : '未认证')}</Badge><Toggle value={provider.enabled} disabled={!provider.configured || toggling === provider.id} onChange={(enabled) => toggleProvider(provider, enabled)} /></div></div> })}</Panel>
       <div className="detail-stack">
         <Panel>
-          <div className="card-head"><div><h2>{selectedProvider.name}</h2><p>{selectedProvider.id} · {selectedProvider.api} · {t('每个连接独立保存认证与地址')}</p></div><div className="provider-header-status"><Badge tone={!selectedProvider.enabled ? 'gray' : selectedProvider.configured ? 'green' : 'amber'}>{t(!selectedProvider.enabled ? '已停用' : selectedProvider.configured ? '认证可用' : '需要 API Key')}</Badge><Toggle value={selectedProvider.enabled} disabled={!selectedProvider.configured || toggling === selectedProvider.id} onChange={(enabled) => toggleProvider(selectedProvider, enabled)} />{selectedProvider.custom && <button className="icon-button danger" title={t('删除 Provider')} onClick={() => deleteProvider(selectedProvider)}><Trash2 size={14} /></button>}</div></div>
+          <div className="card-head"><div><h2>{selectedProvider.name}</h2><p>{selectedProvider.id} · {selectedProvider.api} · {t('每个连接独立保存认证与地址')}</p></div><div className="provider-header-status"><Badge tone={!selectedProvider.enabled ? 'gray' : selectedProvider.configured ? 'green' : 'amber'}>{t(!selectedProvider.enabled ? '已停用' : selectedProvider.configured ? '认证可用' : codexOAuth ? '需要 Codex CLI 登录' : '需要 API Key')}</Badge><Toggle value={selectedProvider.enabled} disabled={!selectedProvider.configured || toggling === selectedProvider.id} onChange={(enabled) => toggleProvider(selectedProvider, enabled)} />{selectedProvider.custom && <button className="icon-button danger" title={t('删除 Provider')} onClick={() => deleteProvider(selectedProvider)}><Trash2 size={14} /></button>}</div></div>
+          {codexOAuth ? <div className="oauth-provider-note"><ShieldCheck size={17} /><span><strong>{t(selectedProvider.configured ? 'ChatGPT OAuth 已接入' : '需要 Codex CLI 登录')}</strong><small>{t(selectedProvider.configured ? 'OpenAI Codex 使用 ChatGPT Plus/Pro OAuth，不支持普通 API Key。' : '请先登录 Codex CLI，再从上方的本机 Provider 区域加载。')}</small></span></div> : <>
           <label className="field-label">API Key<span className="input-wrap"><input type="password" value={draft.apiKey} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} placeholder={t(selectedProvider.configured ? '已配置；留空将保持现有密钥' : '输入 Provider API Key')} /><KeyRound size={14} /></span></label>
           <label className="field-label">Provider Base URL<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder={t('此连接下模型默认使用的地址')} /></label>
           <label className="field-label">Organization<input value={draft.organization} onChange={(event) => setDraft({ ...draft, organization: event.target.value })} placeholder={t('可选，仅 OpenAI Organization 使用')} /></label>
-          <div className="model-config-heading"><SectionTitle title={t('模型配置')} /><button className="button secondary tiny" onClick={() => setModelModal(true)}><Plus size={13} />{t('添加模型')}</button></div>
+          </>}
+          <div className="model-config-heading"><SectionTitle title={t('模型配置')} />{!codexOAuth && <button className="button secondary tiny" onClick={() => setModelModal(true)}><Plus size={13} />{t('添加模型')}</button>}</div>
           <label className="field-label">{t('默认对话模型')}<span className="select-wrap"><select value={draft.model} onChange={(event) => selectModel(event.target.value)}>{chatModels.map((model) => <option key={model.id} value={model.id}>{model.name}</option>)}</select><ChevronDown size={13} /></span></label>
-          <label className="field-label">{t('模型 Base URL')}<input value={draft.modelBaseUrl} onChange={(event) => setDraft({ ...draft, modelBaseUrl: event.target.value })} placeholder={t('可选；为当前模型覆盖 Provider Base URL')} /></label>
+          {!codexOAuth && <label className="field-label">{t('模型 Base URL')}<input value={draft.modelBaseUrl} onChange={(event) => setDraft({ ...draft, modelBaseUrl: event.target.value })} placeholder={t('可选；为当前模型覆盖 Provider Base URL')} /></label>}
           <div className="tag-field"><Badge>{draft.provider}</Badge><Badge>{t(selectedModel?.reasoning ? '支持推理' : '标准模型')}</Badge><Badge tone="gray">{selectedModel?.contextWindow ? `${Math.round(selectedModel.contextWindow / 1000)}K context` : t('自动上下文')}</Badge>{selectedModel?.baseUrlOverride && <Badge tone="amber">{t('独立 Base URL')}</Badge>}</div>
           {visualModels.length > 0 && <div className="visual-model-list"><span>{t('视觉模型')}</span>{visualModels.map((model) => <Badge tone={model.kind === 'video' ? 'violet' : 'blue'} key={model.id}>{model.name} · {t(model.kind === 'video' ? '视频' : '图像')}</Badge>)}</div>}
         </Panel>
         <div className="config-bottom">
           <Panel><SectionTitle title={t('Agent 运行策略')} /><label className="field-label">{t('思考强度')}<span className="select-wrap"><select value={draft.thinkingLevel} onChange={(event) => setDraft({ ...draft, thinkingLevel: event.target.value })}>{['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].map((level) => <option key={level}>{level}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">{t('工具权限')}<span className="select-wrap"><select value={draft.toolMode} onChange={(event) => setDraft({ ...draft, toolMode: event.target.value })}><option value="read-only">{t('只读：read / grep / find / ls')}</option><option value="workspace">{t('工作区：允许 edit / write')}</option><option value="full">{t('完整：允许 bash')}</option><option value="custom">{t('自定义：在插件页逐项管理')}</option></select><ChevronDown size={13} /></span></label><div className="permission-note"><ShieldCheck size={16} /><span><strong>{t('权限在服务端生效')}</strong><small>{t('切换配置后，现有运行时会释放，新会话按最新策略创建。')}</small></span></div></Panel>
-          <Panel className="usage-card"><SectionTitle title={t('运行时状态')} /><div className="usage-number"><span>Engine</span><strong>{APP_NAME} Runtime</strong></div><div className="usage-number"><span>Provider</span><strong>{selectedProvider.name}</strong></div><div className="usage-number"><span>Models</span><strong>{selectedProvider.models.length}</strong></div><div className="usage-number"><span>{t('状态')}</span><strong>{t(selectedProvider.enabled ? '启用' : '停用')}</strong></div>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}<button className="button primary wide" disabled={saving || !draft.model || !selectedProvider.enabled} onClick={save}>{saving ? <RefreshCw className="spin" size={14} /> : <Save size={14} />}{t(saving ? '保存中…' : selectedProvider.enabled ? '保存并设为默认' : '启用后可保存')}</button></Panel>
+          <Panel className="usage-card"><SectionTitle title={t('运行时状态')} /><div className="usage-number"><span>Engine</span><strong>{APP_NAME} Runtime</strong></div><div className="usage-number"><span>Provider</span><strong>{selectedProvider.name}</strong></div><div className="usage-number"><span>Models</span><strong>{selectedProvider.models.length}</strong></div><div className="usage-number"><span>{t('状态')}</span><strong>{t(selectedProvider.enabled ? '启用' : '停用')}</strong></div>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}<button className="button primary wide" disabled={saving || !draft.model || !selectedProvider.enabled || (codexOAuth && !selectedProvider.configured)} onClick={save}>{saving ? <RefreshCw className="spin" size={14} /> : <Save size={14} />}{t(saving ? '保存中…' : codexOAuth && !selectedProvider.configured ? '加载认证后可保存' : selectedProvider.enabled ? '保存并设为默认' : '启用后可保存')}</button></Panel>
         </div>
       </div>
     </div>
@@ -136,6 +184,41 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
     </>}
     </>
   )
+}
+
+function discoverySourceLabel(provider, t) {
+  if (provider.source === 'codex-cli') return 'Codex CLI'
+  if (provider.source === 'claude-cli') return 'Claude Code'
+  return t('环境变量')
+}
+
+function DiscoveredProvidersPanel({ discovery, discovering, error, importing, onRefresh, onImport }) {
+  const { t } = useI18n()
+  const providers = discovery.providers || []
+  const errors = discovery.errors || []
+  const errorLabel = (item) => t(item.code === 'invalid_json' ? '凭据文件格式无效' : item.code === 'unsupported_format' ? '未找到可用登录信息' : '无法读取凭据文件')
+  return <Panel className="provider-discovery-panel">
+    <div className="provider-discovery-head">
+      <span className="language-settings-icon"><Server size={18} /></span>
+      <span><strong>{t('本机 Provider')}</strong><small>{t('自动识别 Codex CLI 与 Claude Code 登录，凭据仅在服务端读取。')}</small></span>
+      <button type="button" className="button secondary tiny" disabled={discovering || Boolean(importing)} onClick={onRefresh}>{discovering ? <RefreshCw className="spin" size={13} /> : <RefreshCw size={13} />}{t('重新扫描')}</button>
+    </div>
+    {discovering && !providers.length ? <div className="provider-discovery-empty"><RefreshCw className="spin" size={15} />{t('正在扫描本机 Provider…')}</div> : providers.length ? <div className="provider-discovery-list">
+      {providers.map((provider) => {
+        const source = discoverySourceLabel(provider, t)
+        const imported = provider.imported
+        const configured = provider.configured
+        const busy = importing === provider.id
+        return <div className={`provider-discovery-card ${configured ? 'configured' : ''}`} key={provider.id}>
+          <span className={`provider-discovery-icon source-${provider.source}`}><Bot size={17} /></span>
+          <span className="provider-discovery-copy"><strong>{source}</strong><small>{provider.providerName} · {t(provider.authType === 'oauth' ? 'OAuth' : 'API Key')} · {provider.location}</small></span>
+          <span className="provider-discovery-actions">{imported ? <Badge tone="green">{t('已加载')}</Badge> : configured ? <Badge tone="green">{t(provider.importable ? '已配置' : '环境认证')}</Badge> : provider.importable ? <button type="button" className="button primary tiny" disabled={busy || Boolean(importing)} onClick={() => onImport(provider)}>{busy ? <RefreshCw className="spin" size={12} /> : <Download size={12} />}{t(busy ? '加载中…' : '加载')}</button> : <Badge tone="blue">{t('环境认证')}</Badge>}</span>
+        </div>
+      })}
+    </div> : <div className="provider-discovery-empty"><Server size={15} />{t('未检测到 Codex CLI 或 Claude Code 登录。')}</div>}
+    {(error || errors.length > 0) && <div className="provider-discovery-errors" aria-live="polite">{error && <span><AlertTriangle size={13} />{error}</span>}{errors.map((item, index) => <span key={`${item.source}-${item.code}-${index}`}><AlertTriangle size={13} />{discoverySourceLabel(item, t)} · {errorLabel(item)}</span>)}</div>}
+    <small className="provider-discovery-security"><ShieldCheck size={12} />{t('认证内容不会发送到浏览器，也不会覆盖 Vesper 已有凭据。')}</small>
+  </Panel>
 }
 
 function LanguageSettings({ notify }) {
