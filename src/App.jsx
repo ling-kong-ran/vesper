@@ -13,6 +13,7 @@ import {
   Grid2X2,
   Link2,
   Menu,
+  MessageSquare,
   Monitor,
   Moon,
   MoreHorizontal,
@@ -130,6 +131,7 @@ function App() {
   const [chatMode, setChatModeState] = useState(() => localStorage.getItem(STORAGE_KEYS.chatMode) || 'focus')
   const [query, setQuery] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => localStorage.getItem(STORAGE_KEYS.sidebarCollapsed) === '1')
   const [toast, setToast] = useState(null)
   const [modal, setModal] = useState(null)
@@ -148,6 +150,10 @@ function App() {
     const stored = localStorage.getItem(STORAGE_KEYS.theme)
     return THEME_SEQUENCE.includes(stored) ? stored : 'system'
   })
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.density = localStorage.getItem(STORAGE_KEYS.density) === 'compact' ? 'compact' : 'comfortable'
+  }, [])
 
   useEffect(() => {
     const apply = () => { document.documentElement.dataset.theme = resolveDark(theme) ? 'dark' : 'light' }
@@ -245,9 +251,9 @@ function App() {
     }
     const onKeyDown = (event) => {
       const modifier = event.metaKey || event.ctrlKey
-      if (modifier && event.key.toLowerCase() === 'k') {
+      if (modifier && event.key.toLowerCase() === 'k' && !appDialog.dialog && !modal) {
         event.preventDefault()
-        focusSearch()
+        setPaletteOpen(true)
       } else if (modifier && event.key.toLowerCase() === 'n' && !isEditableTarget(event.target)) {
         event.preventDefault()
         handlePrimary()
@@ -255,13 +261,14 @@ function App() {
         event.preventDefault()
         focusSearch()
       } else if (event.key === 'Escape' && !appDialog.dialog) {
-        if (modal) setModal(null)
+        if (paletteOpen) setPaletteOpen(false)
+        else if (modal) setModal(null)
         else if (mobileNav) setMobileNav(false)
       }
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [appDialog.dialog, chatMode, handlePrimary, modal, mobileNav, navigate, page])
+  }, [appDialog.dialog, chatMode, handlePrimary, modal, mobileNav, navigate, page, paletteOpen])
 
   useEffect(() => {
     let active = true
@@ -353,6 +360,7 @@ function App() {
       <StatusBar page={page} pluginStats={pluginStats} />
       {toast && <Toast message={toast.message} tone={toast.tone} />}
       <AppDialog dialog={appDialog.dialog} onClose={appDialog.close} onFinish={appDialog.finish} />
+      {paletteOpen && <CommandPalette navigation={navigation} onClose={() => setPaletteOpen(false)} onNavigate={navigate} onOpenSession={(id) => { setChatMode('focus'); requestSessionSelection(id); navigate('chat') }} onNewChat={() => { setChatMode('focus'); navigate('chat'); requestAnimationFrame(() => requestAnimationFrame(invokePrimaryAction)) }} />}
       {modal && <QuickCreate type={modal} close={() => setModal(null)} notify={notify} />}
     </div>
   )
@@ -506,7 +514,7 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
             <button className="button dark" disabled={!workflowActions || workflowActions.busy} onClick={() => workflowActions?.run()}>{workflowActions?.running ? <Square size={15} /> : <Play size={15} />}{t(workflowActions?.running ? '停止' : '试运行')}</button>
           </>
         ) : page === 'chat' && chatMode === 'focus' ? null : (
-          <label className="search-box" title={t('搜索（Ctrl/⌘ K 或 /）')}><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? t('搜索平铺会话') : page === 'mcp' ? t('搜索服务或工具') : page === 'memory' ? t('搜索星辰或文件') : t('搜索{page}', { page: meta[0] })} /></label>
+          <label className="search-box" title={t('搜索（/）')}><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? t('搜索平铺会话') : page === 'mcp' ? t('搜索服务或工具') : page === 'memory' ? t('搜索星辰或文件') : t('搜索{page}', { page: meta[0] })} /></label>
         )}
         {primary && <button className="button primary" title={t('{action}（Ctrl/⌘ N）', { action: primary[0] })} onClick={onPrimary}><PrimaryIcon size={15} />{primary[0]}</button>}
         <button className="icon-button theme-toggle" title={t('主题：{theme}（点击切换）', { theme: themeLabel })} aria-label={t('主题：{theme}，点击切换主题', { theme: themeLabel })} onClick={onCycleTheme}><ThemeIcon size={16} /></button>
@@ -1403,6 +1411,73 @@ function SessionActionsMenu({ session, tiled, streaming, switchingCwd, onToggleT
   }
 
   return <div ref={rootRef} className="session-actions-menu-root"><button type="button" className="icon-button" title={t('会话操作')} aria-label={t('打开会话操作菜单')} aria-haspopup="menu" aria-expanded={open} disabled={!session} onClick={() => setOpen((visible) => !visible)}><MoreHorizontal size={17} /></button>{open && <div className="permission-mode-menu session-actions-menu" role="menu"><button type="button" role="menuitem" onClick={() => run(onToggleTiled)}><Grid2X2 size={15} /><span><strong>{t(tiled ? '移出平铺' : '加入平铺')}</strong><small>{t(tiled ? '保留历史记录，仅从平铺视图移除' : '在平铺模式中并行关注此会话')}</small></span>{tiled && <Check size={13} />}</button><button type="button" role="menuitem" disabled={streaming || switchingCwd} onClick={() => run(onWorkspace)}><FolderOpen size={15} /><span><strong>{t('设置工作目录')}</strong><small>{streaming ? t('Agent 运行期间不能切换') : workspaceName(session?.cwd, language)}</small></span></button><button type="button" role="menuitem" onClick={() => run(onRename)}><Pencil size={15} /><span><strong>{t('重命名会话')}</strong><small>{session?.name || t('新会话')}</small></span></button></div>}</div>
+}
+
+function CommandPalette({ navigation, onClose, onNavigate, onOpenSession, onNewChat }) {
+  const { t, language } = useI18n()
+  const [query, setQuery] = useState('')
+  const [sessions, setSessions] = useState([])
+  const [activeIndex, setActiveIndex] = useState(0)
+
+  useEffect(() => {
+    let active = true
+    apiJson('/api/sessions')
+      .then((data) => { if (active) setSessions(data.sessions || []) })
+      .catch(() => {})
+    return () => { active = false }
+  }, [])
+
+  const entries = useMemo(() => {
+    const keyword = query.trim().toLocaleLowerCase(language)
+    const matches = (...values) => !keyword || values.some((value) => String(value || '').toLocaleLowerCase(language).includes(keyword))
+    const result = []
+    const newChatLabel = t('新会话')
+    if (matches(newChatLabel, t('操作'))) result.push({ id: 'action:new-chat', Icon: Plus, label: newChatLabel, hint: t('操作'), run: onNewChat })
+    for (const [group, items] of navigation) {
+      for (const [id, label, Icon] of items) {
+        if (matches(label, group, id)) result.push({ id: `page:${id}`, Icon, label, hint: group, run: () => onNavigate(id) })
+      }
+    }
+    for (const session of [...sessions].sort((a, b) => Date.parse(b.modified) - Date.parse(a.modified))) {
+      if (!matches(session.name, session.firstMessage)) continue
+      result.push({ id: `session:${session.id}`, Icon: MessageSquare, label: session.name || t('未命名会话'), hint: relativeTime(session.modified, language), run: () => onOpenSession(session.id) })
+      if (result.filter((entry) => entry.id.startsWith('session:')).length >= 8) break
+    }
+    return result
+  }, [language, navigation, onNavigate, onNewChat, onOpenSession, query, sessions, t])
+
+  useEffect(() => { setActiveIndex(0) }, [query])
+  const selectedIndex = Math.min(activeIndex, Math.max(0, entries.length - 1))
+  const runEntry = (entry) => {
+    if (!entry) return
+    onClose()
+    entry.run()
+  }
+  const onKeyDown = (event) => {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      setActiveIndex((current) => entries.length ? (current + 1) % entries.length : 0)
+    } else if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      setActiveIndex((current) => entries.length ? (current - 1 + entries.length) % entries.length : 0)
+    } else if (event.key === 'Enter') {
+      event.preventDefault()
+      runEntry(entries[selectedIndex])
+    } else if (event.key === 'Escape') {
+      event.preventDefault()
+      onClose()
+    }
+  }
+
+  return <div className="modal-backdrop palette-backdrop" role="presentation" onMouseDown={(event) => event.target === event.currentTarget && onClose()}>
+    <section className="command-palette" role="dialog" aria-modal="true" aria-label={t('命令面板')}>
+      <label className="palette-input"><Search size={16} /><input autoFocus value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={onKeyDown} placeholder={t('搜索页面、会话或操作')} /><kbd>Esc</kbd></label>
+      <div className="palette-list" role="listbox" aria-label={t('命令面板')}>
+        {entries.map((entry, index) => <button type="button" className={`palette-item ${index === selectedIndex ? 'active' : ''}`} role="option" aria-selected={index === selectedIndex} onMouseEnter={() => setActiveIndex(index)} onClick={() => runEntry(entry)} key={entry.id}><entry.Icon size={15} /><span className="palette-item-label">{entry.label}</span><span className="palette-item-hint">{entry.hint}</span></button>)}
+        {!entries.length && <div className="palette-empty">{t('无匹配结果')}</div>}
+      </div>
+    </section>
+  </div>
 }
 
 function QuickCreate({ type, close, notify }) {

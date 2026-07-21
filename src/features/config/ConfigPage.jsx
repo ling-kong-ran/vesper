@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import { AlertTriangle, Bot, Brain, Check, ChevronDown, Code2, KeyRound, Languages, Network, Plus, RefreshCw, Save, Server, ShieldCheck, Sparkles, Trash2, X, Zap } from 'lucide-react'
+import { AlertTriangle, Bot, Brain, Check, ChevronDown, Code2, FoldVertical, KeyRound, Languages, Network, Plus, RefreshCw, Save, Server, ShieldCheck, Sparkles, Trash2, UnfoldVertical, X, Zap } from 'lucide-react'
 import { APP_NAME } from '../../app/brand.js'
+import { STORAGE_KEYS } from '../../app/storage.js'
 import { LANGUAGE_OPTIONS, translateText, useI18n } from '../../app/use-i18n.js'
 import { Badge, Panel, SectionTitle, Toggle } from '../../components/ui.jsx'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
@@ -139,11 +140,24 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
 
 function LanguageSettings({ notify }) {
   const { language, setLanguage, t } = useI18n()
+  const [density, setDensity] = useState(() => localStorage.getItem(STORAGE_KEYS.density) === 'compact' ? 'compact' : 'comfortable')
   const selectLanguage = (nextLanguage) => {
     if (nextLanguage === language) return
     setLanguage(nextLanguage)
     notify(translateText(nextLanguage === 'en-US' ? '界面语言已切换为英文' : '界面语言已切换为简体中文', nextLanguage))
   }
+  const selectDensity = (nextDensity) => {
+    if (nextDensity === density) return
+    setDensity(nextDensity)
+    document.documentElement.dataset.density = nextDensity
+    if (nextDensity === 'compact') localStorage.setItem(STORAGE_KEYS.density, nextDensity)
+    else localStorage.removeItem(STORAGE_KEYS.density)
+    notify(t('界面密度已切换为{density}', { density: t(nextDensity === 'compact' ? '紧凑' : '舒适') }))
+  }
+  const densityOptions = [
+    ['comfortable', t('舒适'), t('默认间距与尺寸'), UnfoldVertical],
+    ['compact', t('紧凑'), t('同屏显示更多内容'), FoldVertical],
+  ]
 
   return <div className="language-settings">
     <Panel className="language-settings-card">
@@ -163,6 +177,23 @@ function LanguageSettings({ notify }) {
       </div>
       <div className="permission-note language-settings-note"><Languages size={16} /><span><strong>{t('当前语言')} · {t(LANGUAGE_OPTIONS.find((option) => option.value === language)?.name || '简体中文')}</strong><small>{t('该设置仅影响界面文案，不会改变 Agent 的回复语言。')}</small></span></div>
       <small className="language-settings-storage">{t('语言偏好保存在当前浏览器')}</small>
+    </Panel>
+    <Panel className="language-settings-card density-settings-card">
+      <div className="language-settings-heading">
+        <span className="language-settings-icon"><FoldVertical size={19} /></span>
+        <div><h2>{t('界面密度')}</h2><p>{t('调整界面元素间距与尺寸。紧凑模式可在同屏显示更多内容。')}</p></div>
+      </div>
+      <div className="language-choice-grid" role="radiogroup" aria-label={t('界面密度')}>
+        {densityOptions.map(([value, label, description, Icon]) => {
+          const selected = value === density
+          return <button type="button" className={`language-choice ${selected ? 'selected' : ''}`} role="radio" aria-checked={selected} onClick={() => selectDensity(value)} key={value}>
+            <span className="language-choice-mark"><Icon size={16} /></span>
+            <span className="language-choice-copy"><strong>{label}</strong><small>{description}</small></span>
+            {selected && <span className="language-choice-check"><Check size={15} /></span>}
+          </button>
+        })}
+      </div>
+      <div className="permission-note language-settings-note"><FoldVertical size={16} /><span><strong>{t('当前密度')} · {t(density === 'compact' ? '紧凑' : '舒适')}</strong><small>{t('该设置仅影响当前浏览器的界面显示。')}</small></span></div>
     </Panel>
   </div>
 }

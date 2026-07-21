@@ -6,4 +6,5 @@ export const STORAGE_KEYS = Object.freeze({
   language: 'vesper-language',
   sidebarCollapsed: 'vesper-sidebar-collapsed',
   sessionRail: 'vesper-session-rail',
+  density: 'vesper-density',
 })
