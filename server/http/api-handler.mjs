@@ -318,6 +318,15 @@ export function createApiHandler(runtime) {
         else json(res, 200, { deleted: true })
         return true
       }
+      if (req.method === 'GET' && url.pathname === '/api/providers/discovery') {
+        json(res, 200, await runtime.getProviderDiscovery())
+        return true
+      }
+      const providerImportMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/import$/)
+      if (req.method === 'POST' && providerImportMatch) {
+        json(res, 200, await runtime.importDiscoveredProvider(decodeURIComponent(providerImportMatch[1])))
+        return true
+      }
       if (req.method === 'POST' && url.pathname === '/api/providers') {
         json(res, 201, await runtime.createProvider(await bodyJson(req)))
         return true

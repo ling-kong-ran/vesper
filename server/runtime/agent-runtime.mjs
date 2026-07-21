@@ -13,6 +13,7 @@ import { ChannelService } from '../services/channels/channel-service.mjs'
 import { NotificationSettingsService } from '../services/notification-settings-service.mjs'
 import { McpService } from '../services/mcp-service.mjs'
 import { migrateKimiCodeProvider } from '../services/provider-migrations.mjs'
+import { ProviderDiscoveryService } from '../services/provider-discovery.mjs'
 import { ScheduleService } from '../services/schedule-service.mjs'
 import { WorkflowService } from '../services/workflow-service.mjs'
 import { SkillsService } from '../services/skills-service.mjs'
@@ -31,9 +32,10 @@ import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
 import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
 import { credentialRedactionExtension, redactPersistedSessionFiles } from '../security/secret-redaction.mjs'
 
-const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'kimi-coding', 'zai-coding-cn']
+const KNOWN_PROVIDERS = ['openai', 'openai-codex', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'kimi-coding', 'zai-coding-cn']
 const PROVIDER_LABELS = {
   openai: 'OpenAI',
+  'openai-codex': 'OpenAI Codex',
   anthropic: 'Anthropic',
   google: 'Google',
   deepseek: 'DeepSeek',
@@ -188,7 +190,7 @@ async function extractDocumentText(attachment) {
 
 function modelRank(provider, model) {
   const id = model.id.toLowerCase()
-  if (provider === 'openai' && id.startsWith('gpt-5')) return 100
+  if ((provider === 'openai' || provider === 'openai-codex') && id.startsWith('gpt-5')) return 100
   if (provider === 'anthropic' && /claude-(opus|sonnet)-4/.test(id)) return 100
   if (provider === 'google' && /gemini-(3|2\.5)/.test(id)) return 100
   if (provider === 'deepseek' && /reasoner|chat/.test(id)) return 90
@@ -218,9 +220,10 @@ function providerProfileId(value) {
 }
 
 export class AgentRuntimeService {
-  constructor({ cwd, dataDir }) {
+  constructor({ cwd, dataDir, providerDiscovery } = {}) {
     this.cwd = cwd
     this.dataDir = dataDir
+    this.providerDiscovery = providerDiscovery || new ProviderDiscoveryService()
     this.sessionDir = join(dataDir, 'sessions')
     this.authPath = join(dataDir, 'auth.json')
     this.modelsPath = join(dataDir, 'models.json')
@@ -1627,6 +1630,42 @@ export class AgentRuntimeService {
   async reloadSkills() {
     this.invalidateSessionRuntimes()
     return this.skills.dashboard({ cwd: this.cwd })
+  }
+
+  async getProviderDiscovery() {
+    const [discovery, credentials] = await Promise.all([
+      this.providerDiscovery.discover(),
+      readJson(this.authPath, {}),
+    ])
+    return {
+      ...discovery,
+      providers: discovery.providers.map((provider) => ({
+        ...provider,
+        configured: Boolean(credentials[provider.providerId]) || this.modelRuntime.hasConfiguredAuth(provider.providerId),
+        imported: Boolean(credentials[provider.providerId]),
+      })),
+    }
+  }
+
+  async importDiscoveredProvider(discoveryId) {
+    const loaded = await this.providerDiscovery.loadCredential(String(discoveryId || '').trim())
+    const credentials = await readJson(this.authPath, {})
+    if (credentials[loaded.providerId]) throw new Error('Vesper 已存在该 Provider 的认证，不会自动覆盖。')
+    credentials[loaded.providerId] = loaded.credential
+    await writeJsonAtomic(this.authPath, credentials)
+
+    const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
+    const disabledProviders = new Set(appConfig.disabledProviders || [])
+    disabledProviders.delete(loaded.providerId)
+    await writeJsonAtomic(this.appConfigPath, { ...appConfig, disabledProviders: [...disabledProviders] })
+
+    await this.disposeSessions()
+    await this.reloadModelRuntime()
+    return {
+      providerId: loaded.providerId,
+      config: await this.getConfig(),
+      discovery: await this.getProviderDiscovery(),
+    }
   }
 
   async getConfig() {
