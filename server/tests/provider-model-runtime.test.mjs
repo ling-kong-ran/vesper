@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
+import { createApiHandler } from '../http/api-handler.mjs'
 import { AgentRuntimeService } from '../runtime/agent-runtime.mjs'
 
 test('provider model discovery uses the configured relay Base URL and stored credential', async (t) => {
@@ -42,31 +43,76 @@ test('provider model discovery uses the configured relay Base URL and stored cre
   assert.equal(calls.length, 1)
   assert.equal(calls[0].baseUrl, 'https://relay.example.test/v1')
   assert.equal(calls[0].apiKey, 'relay-private-key')
-  assert.equal(discovered.models.every((model) => model.added === false), true)
-
-  const updated = await runtime.addProviderModels('company-relay', discovered.models)
-  assert.deepEqual(updated.addedModelIds, ['relay-chat-v2', 'relay-image-v1'])
-  const provider = updated.providers.find((item) => item.id === 'company-relay')
+  assert.equal(discovered.synchronized, true)
+  assert.equal(discovered.models.every((model) => model.added === true), true)
+  assert.deepEqual(discovered.addedModelIds, ['relay-chat-v2', 'relay-image-v1'])
+  assert.deepEqual(discovered.removedModelIds, ['relay-chat-v1'])
+  assert.equal(runtime.modelRuntime.getModel('company-relay', 'relay-chat-v1'), undefined)
+  const provider = discovered.config.providers.find((item) => item.id === 'company-relay')
   assert.ok(provider.models.some((model) => model.id === 'relay-chat-v2' && model.kind === 'chat'))
   assert.ok(provider.models.some((model) => model.id === 'relay-image-v1' && model.kind === 'image'))
 })
 
-test('provider model discovery does not infer an official URL when Base URL is missing', async (t) => {
-  const directory = await mkdtemp(join(tmpdir(), 'vesper-provider-model-no-base-url-'))
-  let called = false
+test('built-in official providers use their visible default Base URL', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-provider-model-official-url-'))
+  let request
   const runtime = new AgentRuntimeService({
     cwd: directory,
     dataDir: directory,
-    providerModelDiscovery: { async discover() { called = true; return { count: 0, models: [] } } },
+    providerModelDiscovery: { async discover(input) { request = input; return { count: 1, models: [{ id: 'official-chat', name: 'Official Chat', kind: 'chat' }] } } },
   })
   t.after(async () => {
     await runtime.dispose()
     await rm(directory, { recursive: true, force: true })
   })
   await runtime.init()
-  await assert.rejects(
-    () => runtime.discoverProviderModels('openai', { apiKey: 'private-key' }),
-    /Base URL/,
-  )
-  assert.equal(called, false)
+  const result = await runtime.discoverProviderModels('openai', { apiKey: 'private-key' })
+  assert.equal(request.baseUrl, 'https://api.openai.com/v1')
+  assert.equal(result.synchronized, true)
+  assert.equal(runtime.modelRuntime.getModel('openai', 'official-chat').baseUrl, 'https://api.openai.com/v1')
+})
+
+test('startup refresh runs asynchronously and atomically replaces stale provider models', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-provider-model-startup-refresh-'))
+  await writeFile(join(directory, 'models.json'), JSON.stringify({ providers: { relay: {
+    name: 'Relay',
+    api: 'openai-responses',
+    baseUrl: 'https://relay.example.test/v1',
+    models: [{ id: 'stale-model', name: 'Stale Model', api: 'openai-responses' }],
+  } } }))
+  await writeFile(join(directory, 'auth.json'), JSON.stringify({ relay: { type: 'api_key', key: 'relay-key' } }))
+  let release
+  let startedResolve
+  const started = new Promise((resolve) => { startedResolve = resolve })
+  const runtime = new AgentRuntimeService({
+    cwd: directory,
+    dataDir: directory,
+    providerModelDiscovery: { async discover() {
+      startedResolve()
+      await new Promise((resolve) => { release = resolve })
+      return { count: 1, models: [{ id: 'current-model', name: 'Current Model', kind: 'chat' }] }
+    } },
+  })
+  t.after(async () => {
+    await runtime.dispose()
+    await rm(directory, { recursive: true, force: true })
+  })
+
+  await runtime.init()
+  await started
+  assert.ok(runtime.modelRuntime.getModel('relay', 'stale-model'))
+  release()
+  const refreshed = await runtime.refreshProviderModels()
+  assert.equal(refreshed.results.find((item) => item.provider === 'relay').ok, true)
+  assert.equal(runtime.modelRuntime.getModel('relay', 'stale-model'), undefined)
+  assert.ok(runtime.modelRuntime.getModel('relay', 'current-model'))
+})
+
+test('provider refresh API returns the asynchronously refreshed configuration', async () => {
+  const handler = createApiHandler({ async refreshProviderModels() { return { results: [{ provider: 'relay', ok: true }], config: { provider: 'relay', model: 'current-model' } } } })
+  const response = { status: 0, body: '', writeHead(status) { this.status = status }, end(body) { this.body = body } }
+  const handled = await handler({ method: 'POST' }, response, new URL('http://localhost/api/providers/models/refresh'))
+  assert.equal(handled, true)
+  assert.equal(response.status, 200)
+  assert.equal(JSON.parse(response.body).config.model, 'current-model')
 })

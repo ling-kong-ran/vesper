@@ -14,6 +14,7 @@ import { NotificationSettingsService } from '../services/notification-settings-s
 import { McpService } from '../services/mcp-service.mjs'
 import { migrateKimiCodeProvider } from '../services/provider-migrations.mjs'
 import { ProviderDiscoveryService } from '../services/provider-discovery.mjs'
+import { ProviderModelCatalogService } from '../services/provider-model-catalog-service.mjs'
 import { ProviderModelDiscoveryService } from '../services/provider-model-discovery-service.mjs'
 import { ScheduleService } from '../services/schedule-service.mjs'
 import { WorkflowService } from '../services/workflow-service.mjs'
@@ -243,6 +244,10 @@ function configuredProviderSecret(credential, providerConfig) {
   return reference
 }
 
+function sameBaseUrl(left, right) {
+  return String(left || '').trim().replace(/\/+$/, '').toLowerCase() === String(right || '').trim().replace(/\/+$/, '').toLowerCase()
+}
+
 export class AgentRuntimeService {
   constructor({ cwd, dataDir, providerDiscovery, providerModelDiscovery, browserAutomationDriver } = {}) {
     this.cwd = cwd
@@ -252,6 +257,8 @@ export class AgentRuntimeService {
     this.sessionDir = join(dataDir, 'sessions')
     this.authPath = join(dataDir, 'auth.json')
     this.modelsPath = join(dataDir, 'models.json')
+    this.providerModelCatalogPath = join(dataDir, 'vesper-provider-models.json')
+    this.providerModelCatalog = new ProviderModelCatalogService({ path: this.providerModelCatalogPath })
     this.settingsPath = join(dataDir, 'settings.json')
     this.appConfigPath = join(dataDir, 'vesper.json')
     this.toolPlugins = new ToolPluginService(this.appConfigPath)
@@ -332,6 +339,7 @@ export class AgentRuntimeService {
     this.usageWrite = Promise.resolve()
     this.assetIndex = { assets: [] }
     this.assetWrite = Promise.resolve()
+    this.providerModelRefreshPromise = null
   }
 
   async init() {
@@ -349,6 +357,7 @@ export class AgentRuntimeService {
       settingsPath: this.settingsPath,
       appConfigPath: this.appConfigPath,
     })
+    await this.providerModelCatalog.init()
     this.settingsManager = SettingsManager.create(this.cwd, this.dataDir)
     await this.skills.init()
     await this.mcp.init()
@@ -364,6 +373,7 @@ export class AgentRuntimeService {
     await this.channels.init()
     await this.schedules.init()
     await this.workflows.init()
+    void this.refreshProviderModels().catch(() => {})
   }
 
   async reloadModelRuntime() {
@@ -372,6 +382,13 @@ export class AgentRuntimeService {
       modelsPath: this.modelsPath,
       allowModelNetwork: false,
     })
+    const modelsJson = await readJson(this.modelsPath, { providers: {} })
+    const configuredBaseUrls = {}
+    for (const provider of this.modelRuntime.getProviders()) {
+      const overlay = modelsJson.providers?.[provider.id] || {}
+      configuredBaseUrls[provider.id] = overlay.baseUrl || PROVIDER_DEFAULT_BASE_URLS[provider.id] || this.modelRuntime.getModels(provider.id)[0]?.baseUrl || ''
+    }
+    this.providerModelCatalog.decorateRuntime(this.modelRuntime, configuredBaseUrls)
   }
 
   emitGoalUpdate(sessionId, goal, send = this.goalEmitters.get(sessionId)) {
@@ -1607,6 +1624,8 @@ export class AgentRuntimeService {
   }
 
   async dispose() {
+    this.providerModelDiscovery.abort?.()
+    await this.providerModelRefreshPromise?.catch(() => {})
     await this.workflows.dispose()
     await this.schedules.dispose()
     await this.channels.dispose()
@@ -1770,7 +1789,7 @@ export class AgentRuntimeService {
           return {
             id: model.id,
             name: model.name || model.id,
-            kind: inferModelKind(model.id, definition?.kind),
+            kind: inferModelKind(model.id, definition?.kind || model.vesperKind),
             reasoning: Boolean(model.reasoning),
             contextWindow: model.contextWindow || null,
             baseUrl: model.baseUrl || '',
@@ -1955,6 +1974,54 @@ export class AgentRuntimeService {
     return this.addProviderModels(providerId, [input], { skipExisting: false })
   }
 
+  async reconcileDefaultModel() {
+    const settings = this.settingsManager.getGlobalSettings()
+    const config = await this.getConfig()
+    if (config.provider && config.model && (settings.defaultProvider !== config.provider || settings.defaultModel !== config.model)) {
+      this.settingsManager.setDefaultModelAndProvider(config.provider, config.model)
+      await this.settingsManager.flush()
+    }
+    return config
+  }
+
+  async refreshProviderModels() {
+    if (this.providerModelRefreshPromise) return this.providerModelRefreshPromise
+    const refresh = async () => {
+      const [modelsJson, credentials, appConfig] = await Promise.all([
+        readJson(this.modelsPath, { providers: {} }),
+        readJson(this.authPath, {}),
+        readJson(this.appConfigPath, { disabledProviders: [] }),
+      ])
+      const disabled = new Set(appConfig.disabledProviders || [])
+      const providerIds = new Set([...KNOWN_PROVIDERS, ...Object.keys(modelsJson.providers || {})])
+      const jobs = []
+      for (const provider of providerIds) {
+        if (disabled.has(provider) || provider === 'openai-codex') continue
+        const overlay = modelsJson.providers?.[provider] || {}
+        const baseUrl = String(overlay.baseUrl || PROVIDER_DEFAULT_BASE_URLS[provider] || '').trim()
+        if (!baseUrl) continue
+        const hasAuthentication = Boolean(configuredProviderSecret(credentials[provider], overlay)) || this.modelRuntime.hasConfiguredAuth(provider)
+        const isExplicitConnection = Boolean(overlay.baseUrl)
+        if (!hasAuthentication && !isExplicitConnection) continue
+        jobs.push((async () => {
+          try {
+            const result = await this.discoverProviderModels(provider, { reconcile: false, includeConfig: false })
+            return { provider, ok: true, count: result.count, added: result.addedModelIds.length, removed: result.removedModelIds.length }
+          } catch (error) {
+            return { provider, ok: false, error: redactSecretText(error instanceof Error ? error.message : String(error)) }
+          }
+        })())
+      }
+      const results = await Promise.all(jobs)
+      return { results, config: await this.reconcileDefaultModel() }
+    }
+    const pending = refresh().finally(() => {
+      if (this.providerModelRefreshPromise === pending) this.providerModelRefreshPromise = null
+    })
+    this.providerModelRefreshPromise = pending
+    return pending
+  }
+
   async discoverProviderModels(providerId, input = {}) {
     const provider = String(providerId || '').trim()
     if (!this.modelRuntime.getProviders().some((item) => item.id === provider) && !KNOWN_PROVIDERS.includes(provider)) throw new Error('Provider 不存在。')
@@ -1965,7 +2032,8 @@ export class AgentRuntimeService {
     const overlay = modelsJson.providers?.[provider] || {}
     const runtimeModel = this.modelRuntime.getModels(provider)[0]
     const api = String(input.api || overlay.api || runtimeModel?.api || 'openai-responses').trim()
-    const baseUrl = String(input.baseUrl || overlay.baseUrl || '').trim()
+    const configuredBaseUrl = String(overlay.baseUrl || PROVIDER_DEFAULT_BASE_URLS[provider] || '').trim()
+    const baseUrl = String(input.baseUrl || configuredBaseUrl || '').trim()
     if (!baseUrl) throw new Error('请先配置 Provider Base URL。')
     const apiKey = String(input.apiKey || '').trim() || configuredProviderSecret(credentials[provider], overlay)
     const result = await this.providerModelDiscovery.discover({
@@ -1975,10 +2043,26 @@ export class AgentRuntimeService {
       organization: String(input.organization || overlay.headers?.['OpenAI-Organization'] || '').trim(),
       headers: overlay.headers,
     })
+    const previousModelIds = new Set(this.modelRuntime.getModels(provider).map((model) => model.id))
+    let sync = { addedModelIds: [], removedModelIds: [] }
+    const synchronized = sameBaseUrl(baseUrl, configuredBaseUrl)
+    if (synchronized) {
+      await this.providerModelCatalog.sync(provider, { baseUrl, api, models: result.models })
+      const nextModelIds = new Set(result.models.map((model) => model.id))
+      sync = {
+        addedModelIds: [...nextModelIds].filter((id) => !previousModelIds.has(id)),
+        removedModelIds: [...previousModelIds].filter((id) => !nextModelIds.has(id)),
+      }
+      if (input.reconcile !== false) await this.reconcileDefaultModel()
+    }
     const existing = new Set(this.modelRuntime.getModels(provider).map((model) => model.id))
     return {
       ...result,
       models: result.models.map((model) => ({ ...model, added: existing.has(model.id) })),
+      synchronized,
+      addedModelIds: sync.addedModelIds,
+      removedModelIds: sync.removedModelIds,
+      config: synchronized && input.includeConfig !== false ? await this.getConfig() : null,
     }
   }
 
@@ -2019,6 +2103,12 @@ export class AgentRuntimeService {
     if (!addedModelIds.length) throw new Error('所选模型均已添加。')
     modelsJson.providers[provider] = overlay
     await writeJsonAtomic(this.modelsPath, modelsJson)
+    const catalog = this.providerModelCatalog.get(provider)
+    const providerBaseUrl = overlay.baseUrl || PROVIDER_DEFAULT_BASE_URLS[provider] || ''
+    if (catalog && sameBaseUrl(catalog.baseUrl, providerBaseUrl)) {
+      const added = models.filter((model) => addedModelIds.includes(String(model.id)))
+      await this.providerModelCatalog.sync(provider, { baseUrl: catalog.baseUrl, api: catalog.api, models: [...catalog.models, ...added] })
+    }
     await this.disposeSessions()
     await this.reloadModelRuntime()
     return { ...(await this.getConfig()), addedModelIds }
@@ -2037,6 +2127,7 @@ export class AgentRuntimeService {
     const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
     appConfig.disabledProviders = (appConfig.disabledProviders || []).filter((item) => item !== provider)
     await writeJsonAtomic(this.appConfigPath, appConfig)
+    await this.providerModelCatalog.remove(provider)
     const settings = this.settingsManager.getGlobalSettings()
     if (settings.defaultProvider === provider) {
       const alternative = this.modelRuntime.getProviders().find((item) => item.id !== provider && credentials[item.id] && this.modelRuntime.getModels(item.id).length)

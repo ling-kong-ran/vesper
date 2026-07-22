@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Bot, Brain, Check, ChevronDown, Code2, Download, FoldVertical, KeyRound, Languages, Network, Plus, RefreshCw, Save, Server, ShieldCheck, Sparkles, Trash2, UnfoldVertical, X, Zap } from 'lucide-react'
 import { APP_NAME } from '../../app/brand.js'
 import { STORAGE_KEYS } from '../../app/storage.js'
@@ -22,6 +22,17 @@ function configDraft(data, provider, preferredModel) {
     thinkingLevel: data.thinkingLevel || 'medium',
     toolMode: data.toolMode || 'read-only',
   }
+}
+
+function refreshedConfigDraft(data, current) {
+  if (!current) {
+    const provider = data.providers.find((item) => item.id === data.provider) || data.providers[0]
+    return configDraft(data, provider, data.model)
+  }
+  const provider = data.providers.find((item) => item.id === current.provider) || data.providers.find((item) => item.id === data.provider) || data.providers[0]
+  const chatModels = provider?.models.filter((model) => model.kind === 'chat') || []
+  const model = chatModels.find((item) => item.id === current.model) || chatModels[0]
+  return { ...current, provider: provider?.id || current.provider, model: model?.id || '', modelBaseUrl: model?.baseUrlOverride || '' }
 }
 
 export function ConfigPage({ notify, registerPrimaryAction, section, setSection, onBrowserNotificationChange, requestConfirm, update }) {
@@ -59,6 +70,12 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
         setConfig(data)
         const provider = data.providers.find((item) => item.id === data.provider) || data.providers[0]
         setDraft(configDraft(data, provider, data.model))
+        return apiJson('/api/providers/models/refresh', { method: 'POST', body: '{}' })
+      })
+      .then((result) => {
+        if (!active || !result?.config) return
+        setConfig(result.config)
+        setDraft((current) => refreshedConfigDraft(result.config, current))
       })
       .catch((caught) => active && setError(caught.message))
     void refreshDiscovery()
@@ -182,7 +199,7 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
       </div>
     </div>
     {providerModal && <ProviderConfigModal onClose={() => setProviderModal(false)} onCreated={(data) => { const provider = data.providers.find((item) => item.id === data.createdProviderId); setConfig(data); setDraft(configDraft(data, provider)); setProviderModal(false); notify(t('Provider 连接已创建')) }} />}
-    {modelModal && <ProviderModelModal provider={selectedProvider} connectionDraft={{ api: selectedProvider.api, baseUrl: draft.baseUrl, apiKey: draft.apiKey, organization: draft.organization }} autoDiscover={modelModal === 'discover'} onClose={() => setModelModal('')} onCreated={(data, modelId) => { const provider = data.providers.find((item) => item.id === selectedProvider.id); setConfig(data); setDraft((current) => ({ ...configDraft(data, provider, modelId), thinkingLevel: current.thinkingLevel, toolMode: current.toolMode })); setModelModal(''); notify(t('{count} 个模型已添加', { count: data.addedModelIds?.length || 1 })) }} />}
+    {modelModal && <ProviderModelModal provider={selectedProvider} connectionDraft={{ api: selectedProvider.api, baseUrl: draft.baseUrl, apiKey: draft.apiKey, organization: draft.organization }} autoDiscover={modelModal === 'discover'} onClose={() => setModelModal('')} onSynchronized={(data) => { setConfig(data); setDraft((current) => refreshedConfigDraft(data, current)) }} onCreated={(data, modelId) => { const provider = data.providers.find((item) => item.id === selectedProvider.id); setConfig(data); setDraft((current) => ({ ...configDraft(data, provider, modelId), thinkingLevel: current.thinkingLevel, toolMode: current.toolMode })); setModelModal(''); notify(t('{count} 个模型已添加', { count: data.addedModelIds?.length || 1 })) }} />}
     </>}
     </>
   )
@@ -320,7 +337,7 @@ function ProviderConfigModal({ onClose, onCreated }) {
   return <div className="modal-backdrop" onMouseDown={(event) => event.target === event.currentTarget && onClose()}><form className="modal provider-config-modal" onSubmit={submit}><div className="card-head"><div><h2>{t('添加 Provider 连接')}</h2><p>{t('同一种协议可创建多个连接，每个连接独立使用 Key 和 Base URL。')}</p></div><button type="button" className="icon-button" aria-label={t('关闭对话框')} onClick={onClose}><X size={17} /></button></div><div className="form-grid"><label className="field-label">{t('显示名称')}<input value={draft.name} onChange={(event) => updateName(event.target.value)} placeholder={t('例如 OpenAI 官方')} /></label><label className="field-label">Provider ID<input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} placeholder="openai-official" /></label></div><label className="field-label">{t('API 协议')}<span className="select-wrap"><select value={draft.api} onChange={(event) => setDraft({ ...draft, api: event.target.value })}>{PROVIDER_APIS.map(([value, label]) => <option value={value} key={value}>{label}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">Base URL<input value={draft.baseUrl} onChange={(event) => setDraft({ ...draft, baseUrl: event.target.value })} placeholder="https://api.openai.com/v1" /></label><label className="field-label">API Key<input type="password" value={draft.apiKey} onChange={(event) => setDraft({ ...draft, apiKey: event.target.value })} placeholder={t('输入此连接使用的 API Key')} /></label><div className="form-grid"><label className="field-label">{t('初始模型 ID')}<input value={draft.model} onChange={(event) => setDraft({ ...draft, model: event.target.value })} placeholder="gpt-5.4 or gpt-image-1" /></label><label className="field-label">{t('模型名称')}<input value={draft.modelName} onChange={(event) => setDraft({ ...draft, modelName: event.target.value })} placeholder={t('留空使用模型 ID')} /></label></div><label className="field-label">{t('模型用途')}<span className="select-wrap"><select value={draft.modelKind} onChange={(event) => setDraft({ ...draft, modelKind: event.target.value })}><option value="auto">{t('自动识别')}</option><option value="chat">{t('对话')}</option><option value="image">{t('图像生成')}</option><option value="video">{t('视频生成')}</option></select><ChevronDown size={13} /></span></label><div className="modal-toggle-row"><span><strong>{t('创建后启用')}</strong><small>{t('视觉模型由视觉生成工具自动选择，不会进入对话模型列表')}</small></span><Toggle value={draft.enabled} onChange={(enabled) => setDraft({ ...draft, enabled })} /></div>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}<div className="modal-actions"><button type="button" className="button secondary" onClick={onClose}>{t('取消')}</button><button className="button primary" disabled={saving}>{saving ? <RefreshCw className="spin" size={14} /> : <Plus size={14} />}{t(saving ? '创建中…' : '创建连接')}</button></div></form></div>
 }
 
-function ProviderModelModal({ provider, connectionDraft, autoDiscover, onClose, onCreated }) {
+function ProviderModelModal({ provider, connectionDraft, autoDiscover, onClose, onSynchronized, onCreated }) {
   const { t } = useI18n()
   const [draft, setDraft] = useState({ id: '', name: '', api: provider.api || 'openai-responses', baseUrl: '', kind: 'auto', reasoning: true })
   const [saving, setSaving] = useState(false)
@@ -329,14 +346,21 @@ function ProviderModelModal({ provider, connectionDraft, autoDiscover, onClose, 
   const [selectedIds, setSelectedIds] = useState([])
   const [search, setSearch] = useState('')
   const [error, setError] = useState('')
+  const onSynchronizedRef = useRef(onSynchronized)
+  useEffect(() => { onSynchronizedRef.current = onSynchronized }, [onSynchronized])
+  const connectionApi = connectionDraft.api
+  const connectionBaseUrl = connectionDraft.baseUrl
+  const connectionApiKey = connectionDraft.apiKey
+  const connectionOrganization = connectionDraft.organization
   const discover = useCallback(async () => {
     setDiscovering(true); setError('')
     try {
-      const result = await apiJson(`/api/providers/${encodeURIComponent(provider.id)}/models/discover`, { method: 'POST', body: JSON.stringify(connectionDraft) })
+      const result = await apiJson(`/api/providers/${encodeURIComponent(provider.id)}/models/discover`, { method: 'POST', body: JSON.stringify({ api: connectionApi, baseUrl: connectionBaseUrl, apiKey: connectionApiKey, organization: connectionOrganization }) })
       setCatalog(result.models || [])
       setSelectedIds([])
+      if (result.config) onSynchronizedRef.current(result.config)
     } catch (caught) { setError(caught.message) } finally { setDiscovering(false) }
-  }, [connectionDraft, provider.id])
+  }, [connectionApi, connectionApiKey, connectionBaseUrl, connectionOrganization, provider.id])
   useEffect(() => {
     if (autoDiscover) void discover()
   }, [autoDiscover, discover])

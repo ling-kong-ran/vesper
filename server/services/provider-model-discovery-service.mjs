@@ -46,7 +46,7 @@ async function readJsonLimited(response, maxBytes) {
   if (!response.body?.getReader) {
     const text = await response.text()
     if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new Error('Provider 返回的模型列表过大。')
-    return text ? JSON.parse(text) : {}
+    return { payload: text ? JSON.parse(text) : {}, bytes: Buffer.byteLength(text, 'utf8') }
   }
 
   const reader = response.body.getReader()
@@ -64,7 +64,7 @@ async function readJsonLimited(response, maxBytes) {
     text += decoder.decode(value, { stream: true })
   }
   text += decoder.decode()
-  return text ? JSON.parse(text) : {}
+  return { payload: text ? JSON.parse(text) : {}, bytes: size }
 }
 
 function errorMessage(payload, status) {
@@ -97,11 +97,29 @@ function responseItems(payload, api) {
   return Array.isArray(payload) ? payload : []
 }
 
+function nextPageUrl(payload, api, currentUrl) {
+  const next = new URL(currentUrl)
+  if (api === 'google-generative-ai' && payload?.nextPageToken) {
+    next.searchParams.set('pageToken', String(payload.nextPageToken))
+    return next
+  }
+  if (payload?.has_more && payload?.last_id) {
+    next.searchParams.set('after_id', String(payload.last_id))
+    return next
+  }
+  return null
+}
+
 export class ProviderModelDiscoveryService {
   constructor({ fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS, maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES } = {}) {
     this.fetch = fetchImpl
     this.timeoutMs = timeoutMs
     this.maxResponseBytes = maxResponseBytes
+    this.controllers = new Set()
+  }
+
+  abort() {
+    for (const controller of this.controllers) controller.abort()
   }
 
   async discover({ api, baseUrl, apiKey, organization, headers } = {}) {
@@ -111,27 +129,39 @@ export class ProviderModelDiscoveryService {
     }
     const url = modelsUrl(baseUrl)
     const controller = new AbortController()
+    this.controllers.add(controller)
     const timer = setTimeout(() => controller.abort(), this.timeoutMs)
     try {
-      const response = await this.fetch(url, {
-        method: 'GET',
-        headers: requestHeaders(protocol, String(apiKey || '').trim(), organization, headers),
-        signal: controller.signal,
-      })
-      let payload
-      try {
-        payload = await readJsonLimited(response, this.maxResponseBytes)
-      } catch (error) {
-        if (!response.ok) throw new Error(`获取模型失败 (${response.status})。`)
-        if (error instanceof SyntaxError) throw new Error('Provider 返回了无效的模型列表。')
-        throw error
-      }
-      if (!response.ok) throw new Error(errorMessage(payload, response.status))
-
       const unique = new Map()
-      for (const item of responseItems(payload, protocol)) {
-        const candidate = candidateFrom(item, protocol)
-        if (candidate && !unique.has(candidate.id)) unique.set(candidate.id, candidate)
+      const seenPages = new Set()
+      let pageUrl = url
+      let totalBytes = 0
+      for (let page = 0; page < 50 && pageUrl; page += 1) {
+        const pageKey = String(pageUrl)
+        if (seenPages.has(pageKey)) throw new Error('Provider 返回了重复的模型分页游标。')
+        seenPages.add(pageKey)
+        const response = await this.fetch(pageUrl, {
+          method: 'GET',
+          headers: requestHeaders(protocol, String(apiKey || '').trim(), organization, headers),
+          signal: controller.signal,
+        })
+        let pageResult
+        try {
+          pageResult = await readJsonLimited(response, this.maxResponseBytes - totalBytes)
+        } catch (error) {
+          if (!response.ok) throw new Error(`获取模型失败 (${response.status})。`)
+          if (error instanceof SyntaxError) throw new Error('Provider 返回了无效的模型列表。')
+          throw error
+        }
+        const { payload, bytes } = pageResult
+        totalBytes += bytes
+        if (!response.ok) throw new Error(errorMessage(payload, response.status))
+        for (const item of responseItems(payload, protocol)) {
+          const candidate = candidateFrom(item, protocol)
+          if (candidate && !unique.has(candidate.id)) unique.set(candidate.id, candidate)
+        }
+        pageUrl = nextPageUrl(payload, protocol, pageUrl)
+        if (page === 49 && pageUrl) throw new Error('Provider 返回的模型分页过多。')
       }
       const models = [...unique.values()].sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: 'base' }))
       if (!models.length) throw new Error('Provider 没有返回可用的模型 ID。')
@@ -141,6 +171,7 @@ export class ProviderModelDiscoveryService {
       throw error
     } finally {
       clearTimeout(timer)
+      this.controllers.delete(controller)
     }
   }
 }

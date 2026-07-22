@@ -341,6 +341,10 @@ export function createApiHandler(runtime, { updates } = {}) {
         json(res, 201, await runtime.createProvider(await bodyJson(req)))
         return true
       }
+      if (req.method === 'POST' && url.pathname === '/api/providers/models/refresh') {
+        json(res, 200, await runtime.refreshProviderModels())
+        return true
+      }
       const providerEnabledMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/enabled$/)
       if (req.method === 'PUT' && providerEnabledMatch) {
         const body = await bodyJson(req)

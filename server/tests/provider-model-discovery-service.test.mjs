@@ -45,6 +45,18 @@ test('discovers Gemini models and removes the models prefix', async () => {
   assert.equal(request.url.includes('google-secret'), false)
 })
 
+test('loads every paginated model page before publishing a catalog', async () => {
+  const urls = []
+  const service = new ProviderModelDiscoveryService({ fetchImpl: async (url) => {
+    urls.push(String(url))
+    if (urls.length === 1) return jsonResponse({ data: [{ id: 'claude-first' }], has_more: true, last_id: 'claude-first' })
+    return jsonResponse({ data: [{ id: 'claude-second' }], has_more: false, last_id: 'claude-second' })
+  } })
+  const result = await service.discover({ api: 'anthropic-messages', baseUrl: 'https://relay.example.test/v1', apiKey: 'secret' })
+  assert.deepEqual(result.models.map((model) => model.id), ['claude-first', 'claude-second'])
+  assert.equal(new URL(urls[1]).searchParams.get('after_id'), 'claude-first')
+})
+
 test('normalizes provider errors without exposing credentials and rejects unsafe URLs', async () => {
   const secret = 'sk-private-model-discovery-value'
   const service = new ProviderModelDiscoveryService({ fetchImpl: async () => jsonResponse({ error: { message: `invalid api_key=${secret}` } }, { status: 401 }) })
