@@ -11,7 +11,9 @@ import { UpdateSettings } from './UpdateSettings.jsx'
 
 function configDraft(data, provider, preferredModel) {
   const chatModels = provider?.models.filter((item) => item.kind === 'chat') || []
-  const model = chatModels.find((item) => item.id === preferredModel) || chatModels[0]
+  const model = chatModels.find((item) => item.id === preferredModel)
+    || chatModels.find((item) => item.id === provider?.defaultModel)
+    || chatModels[0]
   return {
     provider: provider?.id || 'openai',
     providerType: provider?.type || 'chat',
@@ -205,7 +207,7 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
         </Panel>
         <div className="config-bottom">
           <Panel><SectionTitle title={t('Agent 运行策略')} /><label className="field-label">{t('思考强度')}<span className="select-wrap"><select value={draft.thinkingLevel} onChange={(event) => setDraft({ ...draft, thinkingLevel: event.target.value })}>{['off', 'minimal', 'low', 'medium', 'high', 'xhigh'].map((level) => <option key={level}>{level}</option>)}</select><ChevronDown size={13} /></span></label><label className="field-label">{t('工具权限')}<span className="select-wrap"><select value={draft.toolMode} onChange={(event) => setDraft({ ...draft, toolMode: event.target.value })}><option value="read-only">{t('只读：read / grep / find / ls')}</option><option value="workspace">{t('工作区：允许 edit / write')}</option><option value="full">{t('完整：允许 bash')}</option><option value="custom">{t('自定义：在插件页逐项管理')}</option></select><ChevronDown size={13} /></span></label><div className="permission-note"><ShieldCheck size={16} /><span><strong>{t('权限在服务端生效')}</strong><small>{t('切换配置后，现有运行时会释放，新会话按最新策略创建。')}</small></span></div></Panel>
-          <Panel className="usage-card"><SectionTitle title={t('运行时状态')} /><div className="usage-number"><span>Engine</span><strong>{APP_NAME} Runtime</strong></div><div className="usage-number"><span>Provider</span><strong>{selectedProvider.name}</strong></div><div className="usage-number"><span>Models</span><strong>{selectedProvider.models.length}</strong></div><div className="usage-number"><span>{t('状态')}</span><strong>{t(selectedProvider.enabled ? '启用' : '停用')}</strong></div>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}<button className="button primary wide" disabled={saving || !selectedProvider.enabled || (codexOAuth && !selectedProvider.configured)} onClick={save}>{saving ? <RefreshCw className="spin" size={14} /> : <Save size={14} />}{t(saving ? '保存中…' : codexOAuth && !selectedProvider.configured ? '加载认证后可保存' : selectedProvider.enabled ? visualOnly ? '保存视觉模型配置' : draft.model ? '保存并设为默认' : '保存 Provider 配置' : '启用后可保存')}</button></Panel>
+          <Panel className="usage-card"><SectionTitle title={t('运行时状态')} /><div className="usage-number"><span>Engine</span><strong>{APP_NAME} Runtime</strong></div><div className="usage-number"><span>Provider</span><strong>{selectedProvider.name}</strong></div><div className="usage-number"><span>Models</span><strong>{selectedProvider.models.length}</strong></div><div className="usage-number"><span>{t('状态')}</span><strong>{t(selectedProvider.enabled ? '启用' : '停用')}</strong></div>{error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}<button className="button primary wide" disabled={saving || !selectedProvider.enabled || (codexOAuth && !selectedProvider.configured)} onClick={save}>{saving ? <RefreshCw className="spin" size={14} /> : <Save size={14} />}{t(saving ? '保存中…' : codexOAuth && !selectedProvider.configured ? '加载认证后可保存' : selectedProvider.enabled ? visualOnly ? '保存视觉模型配置' : draft.model ? '保存并设为默认 Provider' : '保存 Provider 配置' : '启用后可保存')}</button></Panel>
         </div>
       </div>
     </div>

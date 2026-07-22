@@ -389,7 +389,7 @@ const EN_MESSAGES = Object.freeze({
   '启用': 'Enabled',
   '停用': 'Disabled',
   '保存中…': 'Saving…',
-  '保存并设为默认': 'Save and set as default',
+  '保存并设为默认 Provider': 'Save and set as default provider',
   '启用后可保存': 'Enable to save',
   '删除 Provider 连接': 'Delete Provider connection',
   '确定删除「{name}」吗？对应的模型配置和认证信息也会删除。': 'Delete “{name}”? Its model settings and authentication details will also be removed.',

@@ -74,3 +74,53 @@ test('visual-only providers save connection settings without replacing the defau
   assert.equal(visual.models.some((model) => model.kind === 'chat'), false)
   assert.ok(visual.models.some((model) => model.kind === 'image'))
 })
+
+test('each chat provider keeps its saved default model independently', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-provider-default-models-'))
+  const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  t.after(async () => {
+    await runtime.dispose()
+    await rm(directory, { recursive: true, force: true })
+  })
+  await runtime.init()
+  await runtime.createProvider({
+    id: 'relay-one',
+    name: 'Relay One',
+    api: 'openai-responses',
+    baseUrl: 'https://relay-one.example.test/v1',
+    apiKey: 'relay-one-key',
+    model: 'relay-one-first',
+  })
+  await runtime.addProviderModel('relay-one', { id: 'relay-one-second', name: 'Relay One Second', kind: 'chat' })
+  await runtime.createProvider({
+    id: 'relay-two',
+    name: 'Relay Two',
+    api: 'openai-responses',
+    baseUrl: 'https://relay-two.example.test/v1',
+    apiKey: 'relay-two-key',
+    model: 'relay-two-first',
+  })
+
+  await runtime.saveConfig({
+    provider: 'relay-one',
+    providerType: 'chat',
+    model: 'relay-one-second',
+    baseUrl: 'https://relay-one.example.test/v1',
+    thinkingLevel: 'medium',
+    toolMode: 'read-only',
+  })
+  await runtime.saveConfig({
+    provider: 'relay-two',
+    providerType: 'chat',
+    model: 'relay-two-first',
+    baseUrl: 'https://relay-two.example.test/v1',
+    thinkingLevel: 'medium',
+    toolMode: 'read-only',
+  })
+
+  const config = await runtime.getConfig()
+  assert.equal(config.provider, 'relay-two')
+  assert.equal(config.model, 'relay-two-first')
+  assert.equal(config.providers.find((provider) => provider.id === 'relay-one').defaultModel, 'relay-one-second')
+  assert.equal(config.providers.find((provider) => provider.id === 'relay-two').defaultModel, 'relay-two-first')
+})

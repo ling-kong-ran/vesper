@@ -1801,6 +1801,12 @@ export class AgentRuntimeService {
         }
       }).filter((model) => type !== 'visual' || model.kind !== 'chat')
         .sort((a, b) => modelRank(id, b) - modelRank(id, a) || a.name.localeCompare(b.name))
+      const chatModels = models.filter((model) => model.kind === 'chat')
+      const preferredModel = appConfig.providerDefaultModels?.[id]
+        || (settings.defaultProvider === id ? settings.defaultModel : '')
+      const defaultModel = chatModels.some((model) => model.id === preferredModel)
+        ? preferredModel
+        : (chatModels[0]?.id || '')
       return {
         id,
         name: PROVIDER_LABELS[id] || overlay.name || runtimeProvider?.name || id,
@@ -1811,6 +1817,7 @@ export class AgentRuntimeService {
         api: overlay.api || this.modelRuntime.getModels(id)[0]?.api || 'openai-responses',
         baseUrl: overlay.baseUrl || PROVIDER_DEFAULT_BASE_URLS[id] || '',
         organization: overlay.headers?.['OpenAI-Organization'] || '',
+        defaultModel,
         models,
       }
     }).filter((provider) => provider.models.length > 0 || KNOWN_PROVIDERS.includes(provider.id))
@@ -1821,8 +1828,7 @@ export class AgentRuntimeService {
       || providers.find((item) => item.enabled && hasChatModel(item))
       || providers[0]
     const selectedProvider = selectedProviderEntry?.id || 'openai'
-    const selectedModels = (providers.find((item) => item.id === selectedProvider)?.models || []).filter((model) => model.kind === 'chat')
-    const selectedModel = selectedModels.some((item) => item.id === settings.defaultModel) ? settings.defaultModel : (selectedModels[0]?.id || '')
+    const selectedModel = selectedProviderEntry?.defaultModel || ''
     return {
       provider: selectedProvider,
       model: selectedModel,
@@ -1919,6 +1925,9 @@ export class AgentRuntimeService {
       enabledTools: requestedToolMode === 'custom' ? toolsFromConfig(currentAppConfig) : TOOL_PRESETS[requestedToolMode],
       disabledProviders: [...new Set(currentAppConfig.disabledProviders || [])],
       providerTypes: { ...(currentAppConfig.providerTypes || {}), [provider]: providerType },
+      providerDefaultModels: providerType === 'visual' || !model
+        ? { ...(currentAppConfig.providerDefaultModels || {}) }
+        : { ...(currentAppConfig.providerDefaultModels || {}), [provider]: model },
     })
     await this.disposeSessions()
     await this.reloadModelRuntime()
@@ -2004,6 +2013,9 @@ export class AgentRuntimeService {
       ...appConfig,
       disabledProviders: [...disabled],
       providerTypes: { ...(appConfig.providerTypes || {}), [id]: providerType },
+      providerDefaultModels: providerType === 'visual'
+        ? { ...(appConfig.providerDefaultModels || {}) }
+        : { ...(appConfig.providerDefaultModels || {}), [id]: modelId },
     })
     await this.disposeSessions()
     await this.reloadModelRuntime()
@@ -2180,6 +2192,7 @@ export class AgentRuntimeService {
     const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
     appConfig.disabledProviders = (appConfig.disabledProviders || []).filter((item) => item !== provider)
     if (appConfig.providerTypes) delete appConfig.providerTypes[provider]
+    if (appConfig.providerDefaultModels) delete appConfig.providerDefaultModels[provider]
     await writeJsonAtomic(this.appConfigPath, appConfig)
     await this.providerModelCatalog.remove(provider)
     const settings = this.settingsManager.getGlobalSettings()
