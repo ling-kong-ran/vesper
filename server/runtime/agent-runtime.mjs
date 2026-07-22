@@ -14,6 +14,7 @@ import { NotificationSettingsService } from '../services/notification-settings-s
 import { McpService } from '../services/mcp-service.mjs'
 import { migrateKimiCodeProvider } from '../services/provider-migrations.mjs'
 import { ProviderDiscoveryService } from '../services/provider-discovery.mjs'
+import { ProviderModelDiscoveryService } from '../services/provider-model-discovery-service.mjs'
 import { ScheduleService } from '../services/schedule-service.mjs'
 import { WorkflowService } from '../services/workflow-service.mjs'
 import { SkillsService } from '../services/skills-service.mjs'
@@ -48,6 +49,12 @@ const PROVIDER_LABELS = {
   'zai-coding-cn': 'GLM',
 }
 const PROVIDER_DEFAULT_BASE_URLS = {
+  openai: 'https://api.openai.com/v1',
+  anthropic: 'https://api.anthropic.com/v1',
+  google: 'https://generativelanguage.googleapis.com/v1beta',
+  deepseek: 'https://api.deepseek.com',
+  xai: 'https://api.x.ai/v1',
+  openrouter: 'https://openrouter.ai/api/v1',
   'kimi-coding': 'https://api.kimi.com/coding/',
   'zai-coding-cn': 'https://open.bigmodel.cn/api/paas/v4',
 }
@@ -222,11 +229,26 @@ function providerProfileId(value) {
     .slice(0, 60)
 }
 
+function credentialSecret(credential) {
+  if (typeof credential === 'string') return credential.trim()
+  if (!credential || typeof credential !== 'object') return ''
+  return String(credential.key || credential.apiKey || credential.token || credential.accessToken || '').trim()
+}
+
+function configuredProviderSecret(credential, providerConfig) {
+  const stored = credentialSecret(credential)
+  if (stored) return stored
+  const reference = String(providerConfig?.apiKey || '').trim()
+  if (reference.startsWith('$')) return String(process.env[reference.slice(1)] || '').trim()
+  return reference
+}
+
 export class AgentRuntimeService {
-  constructor({ cwd, dataDir, providerDiscovery, browserAutomationDriver } = {}) {
+  constructor({ cwd, dataDir, providerDiscovery, providerModelDiscovery, browserAutomationDriver } = {}) {
     this.cwd = cwd
     this.dataDir = dataDir
     this.providerDiscovery = providerDiscovery || new ProviderDiscoveryService({ cwd })
+    this.providerModelDiscovery = providerModelDiscovery || new ProviderModelDiscoveryService()
     this.sessionDir = join(dataDir, 'sessions')
     this.authPath = join(dataDir, 'auth.json')
     this.modelsPath = join(dataDir, 'models.json')
@@ -1930,31 +1952,76 @@ export class AgentRuntimeService {
   }
 
   async addProviderModel(providerId, input) {
+    return this.addProviderModels(providerId, [input], { skipExisting: false })
+  }
+
+  async discoverProviderModels(providerId, input = {}) {
     const provider = String(providerId || '').trim()
-    const modelId = String(input.id || '').trim()
-    if (!provider || !modelId) throw new Error('Provider 和模型 ID 不能为空。')
     if (!this.modelRuntime.getProviders().some((item) => item.id === provider) && !KNOWN_PROVIDERS.includes(provider)) throw new Error('Provider 不存在。')
+    const [modelsJson, credentials] = await Promise.all([
+      readJson(this.modelsPath, { providers: {} }),
+      readJson(this.authPath, {}),
+    ])
+    const overlay = modelsJson.providers?.[provider] || {}
+    const runtimeModel = this.modelRuntime.getModels(provider)[0]
+    const api = String(input.api || overlay.api || runtimeModel?.api || 'openai-responses').trim()
+    const baseUrl = String(input.baseUrl || overlay.baseUrl || '').trim()
+    if (!baseUrl) throw new Error('请先配置 Provider Base URL。')
+    const apiKey = String(input.apiKey || '').trim() || configuredProviderSecret(credentials[provider], overlay)
+    const result = await this.providerModelDiscovery.discover({
+      api,
+      baseUrl,
+      apiKey,
+      organization: String(input.organization || overlay.headers?.['OpenAI-Organization'] || '').trim(),
+      headers: overlay.headers,
+    })
+    const existing = new Set(this.modelRuntime.getModels(provider).map((model) => model.id))
+    return {
+      ...result,
+      models: result.models.map((model) => ({ ...model, added: existing.has(model.id) })),
+    }
+  }
+
+  async addProviderModels(providerId, inputs, { skipExisting = true } = {}) {
+    const provider = String(providerId || '').trim()
+    if (!this.modelRuntime.getProviders().some((item) => item.id === provider) && !KNOWN_PROVIDERS.includes(provider)) throw new Error('Provider 不存在。')
+    const models = Array.isArray(inputs) ? inputs : []
+    if (!models.length) throw new Error('请至少选择一个模型。')
+    if (models.length > 250) throw new Error('单次最多添加 250 个模型。')
     const modelsJson = await readJson(this.modelsPath, { providers: {} })
     modelsJson.providers ||= {}
     const overlay = { ...(modelsJson.providers[provider] || {}) }
     overlay.models = Array.isArray(overlay.models) ? [...overlay.models] : []
-    if (overlay.models.some((item) => item.id === modelId) || this.modelRuntime.getModel(provider, modelId)) throw new Error('该模型已经存在。')
-    overlay.models.push({
-      id: modelId,
-      name: String(input.name || modelId).trim() || modelId,
-      api: String(input.api || overlay.api || 'openai-responses'),
-      kind: inferModelKind(modelId, input.kind),
-      ...(String(input.baseUrl || '').trim() ? { baseUrl: String(input.baseUrl).trim() } : {}),
-      reasoning: input.reasoning !== false,
-      input: ['text', 'image'],
-      contextWindow: Number(input.contextWindow) || 200_000,
-      maxTokens: Number(input.maxTokens) || 128_000,
-    })
+    const existing = new Set([...overlay.models.map((item) => item.id), ...this.modelRuntime.getModels(provider).map((item) => item.id)])
+    const addedModelIds = []
+    for (const input of models) {
+      const modelId = String(input?.id || '').trim()
+      if (!modelId) throw new Error('模型 ID 不能为空。')
+      if (modelId.length > 240) throw new Error('模型 ID 过长。')
+      if (existing.has(modelId)) {
+        if (!skipExisting) throw new Error('该模型已经存在。')
+        continue
+      }
+      overlay.models.push({
+        id: modelId,
+        name: String(input.name || modelId).trim() || modelId,
+        api: String(input.api || overlay.api || 'openai-responses'),
+        kind: inferModelKind(modelId, input.kind),
+        ...(String(input.baseUrl || '').trim() ? { baseUrl: String(input.baseUrl).trim() } : {}),
+        reasoning: input.reasoning !== false,
+        input: ['text', 'image'],
+        contextWindow: Number(input.contextWindow) || 200_000,
+        maxTokens: Number(input.maxTokens) || 128_000,
+      })
+      existing.add(modelId)
+      addedModelIds.push(modelId)
+    }
+    if (!addedModelIds.length) throw new Error('所选模型均已添加。')
     modelsJson.providers[provider] = overlay
     await writeJsonAtomic(this.modelsPath, modelsJson)
     await this.disposeSessions()
     await this.reloadModelRuntime()
-    return this.getConfig()
+    return { ...(await this.getConfig()), addedModelIds }
   }
 
   async deleteProvider(id) {

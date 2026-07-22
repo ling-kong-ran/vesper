@@ -14,9 +14,11 @@ test('model configuration exposes built-in Kimi and GLM providers', async (t) =>
   })
   await runtime.init()
   const config = await runtime.getConfig()
+  const openai = config.providers.find((provider) => provider.id === 'openai')
   const kimi = config.providers.find((provider) => provider.id === 'kimi-coding')
   const glm = config.providers.find((provider) => provider.id === 'zai-coding-cn')
 
+  assert.equal(openai.baseUrl, 'https://api.openai.com/v1')
   assert.equal(kimi.name, 'Kimi Code')
   assert.equal(kimi.api, 'anthropic-messages')
   assert.equal(kimi.baseUrl, 'https://api.kimi.com/coding/')

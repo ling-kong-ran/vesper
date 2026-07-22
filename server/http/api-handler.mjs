@@ -352,6 +352,17 @@ export function createApiHandler(runtime, { updates } = {}) {
         json(res, 201, await runtime.addProviderModel(decodeURIComponent(providerModelsMatch[1]), await bodyJson(req)))
         return true
       }
+      const providerModelDiscoveryMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/models\/discover$/)
+      if (req.method === 'POST' && providerModelDiscoveryMatch) {
+        json(res, 200, await runtime.discoverProviderModels(decodeURIComponent(providerModelDiscoveryMatch[1]), await bodyJson(req)))
+        return true
+      }
+      const providerModelsBatchMatch = url.pathname.match(/^\/api\/providers\/([^/]+)\/models\/batch$/)
+      if (req.method === 'POST' && providerModelsBatchMatch) {
+        const body = await bodyJson(req)
+        json(res, 201, await runtime.addProviderModels(decodeURIComponent(providerModelsBatchMatch[1]), body.models))
+        return true
+      }
       const providerMatch = url.pathname.match(/^\/api\/providers\/([^/]+)$/)
       if (req.method === 'DELETE' && providerMatch) {
         const deleted = await runtime.deleteProvider(decodeURIComponent(providerMatch[1]))

@@ -1,0 +1,146 @@
+import { redactSecretText } from '../security/secret-redaction.mjs'
+import { inferModelKind } from './visual-generation/index.mjs'
+
+const DEFAULT_TIMEOUT_MS = 12_000
+const DEFAULT_MAX_RESPONSE_BYTES = 2 * 1024 * 1024
+
+function modelsUrl(baseUrl) {
+  let url
+  try {
+    url = new URL(String(baseUrl || '').trim())
+  } catch {
+    throw new Error('Provider Base URL 无效。')
+  }
+  if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Provider Base URL 仅支持 HTTP 或 HTTPS。')
+  url.search = ''
+  url.hash = ''
+  const path = url.pathname.replace(/\/+$/, '')
+  url.pathname = /\/models$/i.test(path) ? path : `${path}/models`
+  return url
+}
+
+function apiKeyValue(value) {
+  return String(value || '').trim().replace(/^Bearer\s+/i, '')
+}
+
+function requestHeaders(api, apiKey, organization, extraHeaders) {
+  const headers = { Accept: 'application/json' }
+  for (const [name, value] of Object.entries(extraHeaders || {})) {
+    if (!/^(?:host|content-length)$/i.test(name) && typeof value === 'string' && value.trim()) headers[name] = value.trim()
+  }
+  if (api === 'anthropic-messages') {
+    if (apiKey) headers['x-api-key'] = apiKeyValue(apiKey)
+    headers['anthropic-version'] = '2023-06-01'
+  } else if (api === 'google-generative-ai') {
+    if (apiKey) headers['x-goog-api-key'] = apiKeyValue(apiKey)
+  } else {
+    if (apiKey) headers.Authorization = /^Bearer\s+/i.test(apiKey) ? apiKey : `Bearer ${apiKey}`
+    if (organization) headers['OpenAI-Organization'] = String(organization).trim()
+  }
+  return headers
+}
+
+async function readJsonLimited(response, maxBytes) {
+  const declaredSize = Number(response.headers?.get?.('content-length') || 0)
+  if (declaredSize > maxBytes) throw new Error('Provider 返回的模型列表过大。')
+  if (!response.body?.getReader) {
+    const text = await response.text()
+    if (Buffer.byteLength(text, 'utf8') > maxBytes) throw new Error('Provider 返回的模型列表过大。')
+    return text ? JSON.parse(text) : {}
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let size = 0
+  let text = ''
+  while (true) {
+    const { value, done } = await reader.read()
+    if (done) break
+    size += value.byteLength
+    if (size > maxBytes) {
+      await reader.cancel().catch(() => {})
+      throw new Error('Provider 返回的模型列表过大。')
+    }
+    text += decoder.decode(value, { stream: true })
+  }
+  text += decoder.decode()
+  return text ? JSON.parse(text) : {}
+}
+
+function errorMessage(payload, status) {
+  const raw = payload?.error?.message || payload?.error || payload?.message || payload?.detail || ''
+  const detail = typeof raw === 'string' ? redactSecretText(raw).slice(0, 240) : ''
+  return detail ? `获取模型失败 (${status})：${detail}` : `获取模型失败 (${status})。`
+}
+
+function candidateFrom(item, api) {
+  if (typeof item === 'string') return { id: item, name: item }
+  if (!item || typeof item !== 'object') return null
+  const rawId = item.id || item.model_id || item.model || item.slug || item.name
+  if (!rawId) return null
+  const normalizeName = (value) => api === 'google-generative-ai' ? String(value).replace(/^models\//, '') : String(value)
+  const id = normalizeName(rawId).trim()
+  if (!id) return null
+  const name = normalizeName(item.display_name || item.displayName || item.name || id).trim() || id
+  return {
+    id,
+    name,
+    kind: inferModelKind(id, 'auto'),
+    ...(Array.isArray(item.supportedGenerationMethods) ? { supportedGenerationMethods: item.supportedGenerationMethods.map(String) } : {}),
+  }
+}
+
+function responseItems(payload, api) {
+  if (api === 'google-generative-ai') return Array.isArray(payload?.models) ? payload.models : []
+  if (Array.isArray(payload?.data)) return payload.data
+  if (Array.isArray(payload?.models)) return payload.models
+  return Array.isArray(payload) ? payload : []
+}
+
+export class ProviderModelDiscoveryService {
+  constructor({ fetchImpl = globalThis.fetch, timeoutMs = DEFAULT_TIMEOUT_MS, maxResponseBytes = DEFAULT_MAX_RESPONSE_BYTES } = {}) {
+    this.fetch = fetchImpl
+    this.timeoutMs = timeoutMs
+    this.maxResponseBytes = maxResponseBytes
+  }
+
+  async discover({ api, baseUrl, apiKey, organization, headers } = {}) {
+    const protocol = String(api || 'openai-responses').trim()
+    if (!['openai-responses', 'openai-completions', 'anthropic-messages', 'google-generative-ai'].includes(protocol)) {
+      throw new Error('当前 API 协议不支持自动获取模型。')
+    }
+    const url = modelsUrl(baseUrl)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), this.timeoutMs)
+    try {
+      const response = await this.fetch(url, {
+        method: 'GET',
+        headers: requestHeaders(protocol, String(apiKey || '').trim(), organization, headers),
+        signal: controller.signal,
+      })
+      let payload
+      try {
+        payload = await readJsonLimited(response, this.maxResponseBytes)
+      } catch (error) {
+        if (!response.ok) throw new Error(`获取模型失败 (${response.status})。`)
+        if (error instanceof SyntaxError) throw new Error('Provider 返回了无效的模型列表。')
+        throw error
+      }
+      if (!response.ok) throw new Error(errorMessage(payload, response.status))
+
+      const unique = new Map()
+      for (const item of responseItems(payload, protocol)) {
+        const candidate = candidateFrom(item, protocol)
+        if (candidate && !unique.has(candidate.id)) unique.set(candidate.id, candidate)
+      }
+      const models = [...unique.values()].sort((left, right) => left.id.localeCompare(right.id, undefined, { numeric: true, sensitivity: 'base' }))
+      if (!models.length) throw new Error('Provider 没有返回可用的模型 ID。')
+      return { models, count: models.length }
+    } catch (error) {
+      if (error?.name === 'AbortError') throw new Error('获取模型超时，请检查 Provider 地址或网络。')
+      throw error
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+}
