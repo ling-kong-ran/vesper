@@ -25,10 +25,13 @@ import { LocalMemoryRuntime } from '../services/memory/local-memory-runtime.mjs'
 import { inferModelKind, VisualGenerationService } from '../services/visual-generation/index.mjs'
 import { SubagentService } from '../services/subagent-service.mjs'
 import { GoalService, goalBudgetPrompt, goalContinuationPrompt, isGoalContinuationMessage } from '../services/goal-service.mjs'
+import { TaskListService } from '../services/task-list-service.mjs'
+import { BrowserAutomationService } from '../services/browser-automation-service.mjs'
 import { assetMessageAttachment, attachGeneratedAssets } from '../services/session-assets.mjs'
 import { forceNextToolCall, isVisualGenerationRequest } from '../services/visual-tool-routing.mjs'
 import { createAppTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry.mjs'
 import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
+import { createTaskListTools, TASK_LIST_TOOL_NAMES } from '../tools/app/task-list.mjs'
 import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
 import { installSessionPersistenceRedaction, redactPersistedSessionFiles, redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
 import { applyVesperSystemPrompt, vesperPromptExtension } from '../prompts/vesper-system-prompt.mjs'
@@ -220,7 +223,7 @@ function providerProfileId(value) {
 }
 
 export class AgentRuntimeService {
-  constructor({ cwd, dataDir, providerDiscovery } = {}) {
+  constructor({ cwd, dataDir, providerDiscovery, browserAutomationDriver } = {}) {
     this.cwd = cwd
     this.dataDir = dataDir
     this.providerDiscovery = providerDiscovery || new ProviderDiscoveryService({ cwd })
@@ -243,6 +246,8 @@ export class AgentRuntimeService {
     this.assetIndexPath = join(dataDir, 'vesper-assets.json')
     this.memory = new LocalMemoryRuntime({ path: join(dataDir, 'vesper-memory.sqlite'), cwd })
     this.goals = new GoalService({ path: join(dataDir, 'vesper-goals.json') })
+    this.taskLists = new TaskListService({ path: join(dataDir, 'vesper-task-lists.json') })
+    this.browserAutomation = new BrowserAutomationService({ driver: browserAutomationDriver })
     this.goalEmitters = new Map()
     this.mcp = new McpService({ path: join(dataDir, 'vesper-mcp.json'), cwd })
     this.skills = new SkillsService({
@@ -284,6 +289,7 @@ export class AgentRuntimeService {
     this.sessions = new Map()
     this.sessionRuntimeVersion = 0
     this.liveSessions = new Map()
+    this.taskListEmitters = new Map()
     this.sessionHistoryCache = new Map()
     this.sessionHistoryPaths = new Map()
     this.modelRuntime = null
@@ -328,9 +334,11 @@ export class AgentRuntimeService {
     await this.toolPlugins.ensureDefaultTools(['delegate_task'], 'subagentToolsV1')
     await this.toolPlugins.ensureDefaultTools(['mcp_list', 'mcp_manage'], 'mcpManagementToolsV1')
     await this.toolPlugins.ensureDefaultTools(['web_search'], 'webSearchToolV1')
+    await this.toolPlugins.ensureDefaultTools(['browser_automation'], 'browserAutomationToolV1')
     await this.reloadModelRuntime()
     await this.memory.init()
     await this.goals.init({ pauseActive: true })
+    await this.taskLists.init()
     await this.channels.init()
     await this.schedules.init()
     await this.workflows.init()
@@ -350,10 +358,17 @@ export class AgentRuntimeService {
     try { send?.('goal_update', { sessionId, goal: goal || null }) } catch {}
   }
 
+  emitTaskListUpdate(sessionId, taskList, send = this.taskListEmitters.get(sessionId)) {
+    const live = this.liveSessions.get(sessionId)
+    if (live) live.taskList = taskList || this.taskLists.get(sessionId)
+    try { send?.('task_list_update', { sessionId, taskList: taskList || this.taskLists.get(sessionId) }) } catch {}
+  }
+
   syncGoalTools(value, goal) {
     if (!value?.session) return
     const names = [...new Set([
       ...(value.baseToolNames || []),
+      ...TASK_LIST_TOOL_NAMES,
       ...(goal?.status === 'active' ? GOAL_TOOL_NAMES : []),
     ])]
     value.session.setActiveToolsByName(names)
@@ -535,12 +550,6 @@ export class AgentRuntimeService {
     }
   }
 
-  async recordGeneratedAsset(sessionId, value, toolName, args) {
-    if (!['write', 'edit'].includes(toolName) || !args?.path) return
-    const filePath = resolve(value.cwd, String(args.path))
-    await this.recordGeneratedFile(sessionId, value, filePath)
-  }
-
   async recordGeneratedFile(sessionId, value, filePath) {
     const fileInfo = await stat(filePath).catch(() => null)
     if (!fileInfo?.isFile()) return
@@ -645,6 +654,7 @@ export class AgentRuntimeService {
         streaming: Boolean(active?.session.isStreaming),
         permissionMode: this.sessionMeta[session.id]?.permissionMode || DEFAULT_PERMISSION_MODE,
         goal: this.goals.get(session.id),
+        taskList: this.taskLists.get(session.id),
       }
     })
     const persistedIds = new Set(result.map((session) => session.id))
@@ -662,6 +672,7 @@ export class AgentRuntimeService {
         streaming: Boolean(value.session.isStreaming),
         permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
         goal: this.goals.get(id),
+        taskList: this.taskLists.get(id),
       })
     }
     return result
@@ -683,6 +694,7 @@ export class AgentRuntimeService {
       modified: new Date().toISOString(),
       permissionMode: this.sessionMeta[value.session.sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
       goal: null,
+      taskList: this.taskLists.get(value.session.sessionId),
     }
   }
 
@@ -834,6 +846,7 @@ export class AgentRuntimeService {
       cwd: active?.cwd || this.sessionMeta[id]?.cwd || this.cwd,
       permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
       goal: live?.goal ?? this.goals.get(id),
+      taskList: live?.taskList ?? this.taskLists.get(id),
       approvals: redactSecretValue(this.permissions.getPending(id)),
       pageInfo: page.pageInfo,
     }
@@ -979,6 +992,14 @@ export class AgentRuntimeService {
         return goal
       },
     })
+    const taskListTools = createTaskListTools({
+      getTaskList: () => this.taskLists.get(runtimeSessionId),
+      updateTaskList: async (items) => {
+        const taskList = await this.taskLists.replace(runtimeSessionId, items)
+        this.emitTaskListUpdate(runtimeSessionId, taskList)
+        return taskList
+      },
+    })
     const installSubagentPermissions = (subagentSession) => this.permissions.install(subagentSession, {
       sessionId: runtimeSession.sessionId,
       cwd: effectiveCwd,
@@ -1014,6 +1035,8 @@ export class AgentRuntimeService {
         enabledTools,
         memoryRuntime: this.memory,
         webSearchService: this.webSearch,
+        browserAutomationService: this.browserAutomation,
+        browserSessionId: runtimeSessionId,
         visualGenerationService: this.visualGeneration,
         onGeneratedFile: ({ path }) => runtimeValue && runtimeSession
           ? this.recordGeneratedFile(runtimeSession.sessionId, runtimeValue, path)
@@ -1038,8 +1061,8 @@ export class AgentRuntimeService {
       settingsManager: this.settingsManager,
       resourceLoader,
       sessionManager,
-      tools: [...baseToolNames, ...GOAL_TOOL_NAMES],
-      customTools: [...createInheritedCustomTools(), ...goalTools],
+      tools: [...baseToolNames, ...GOAL_TOOL_NAMES, ...TASK_LIST_TOOL_NAMES],
+      customTools: [...createInheritedCustomTools(), ...goalTools, ...taskListTools],
     })
     const now = new Date().toISOString()
     const value = {
@@ -1081,9 +1104,10 @@ export class AgentRuntimeService {
     }
     this.syncGoalTools(value, goal)
     const startedAt = new Date().toISOString()
-    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, startedAt, lastActivityAt: startedAt }
+    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, taskList: this.taskLists.get(session.sessionId), startedAt, lastActivityAt: startedAt }
     this.liveSessions.set(session.sessionId, live)
     this.goalEmitters.set(session.sessionId, emit)
+    this.taskListEmitters.set(session.sessionId, emit)
 
     const firstTurn = !session.messages.some((item) => item.role === 'user')
     const sessionMeta = this.sessionMeta[session.sessionId]
@@ -1103,11 +1127,11 @@ export class AgentRuntimeService {
       cwd: value.cwd,
       permissionMode: this.sessionMeta[session.sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
       goal,
+      taskList: live.taskList,
       startedAt: live.startedAt,
       lastActivityAt: live.lastActivityAt,
     })
 
-    const toolArgs = new Map()
     let goalTurnId = ''
     let goalTurnStartedAt = 0
     let continuationQueued = false
@@ -1119,7 +1143,6 @@ export class AgentRuntimeService {
         if (update.type === 'text_delta') { live.text += update.delta || ''; emit('text_delta', { delta: update.delta }) }
         if (update.type === 'thinking_delta') emit('thinking_delta', { delta: update.delta })
       } else if (event.type === 'tool_execution_start') {
-        toolArgs.set(event.toolCallId, event.args)
         const toolStartedAt = live.lastActivityAt
         live.tools.push({ id: event.toolCallId, name: event.toolName, status: 'running', startedAt: toolStartedAt, updatedAt: toolStartedAt })
         emit('tool_start', { id: event.toolCallId, name: event.toolName, args: event.args, startedAt: toolStartedAt })
@@ -1131,9 +1154,7 @@ export class AgentRuntimeService {
           : item)
         emit('tool_update', { id: event.toolCallId, name: event.toolName, message, updatedAt: live.lastActivityAt, ...(subagent ? { subagent } : {}) })
       } else if (event.type === 'tool_execution_end') {
-        if (!event.isError) void this.recordGeneratedAsset(session.sessionId, value, event.toolName, toolArgs.get(event.toolCallId))
-        toolArgs.delete(event.toolCallId)
-        if (!event.isError && event.toolName === 'generate_visual' && event.result?.details?.path) {
+        if (!event.isError && ['generate_visual', 'browser_automation'].includes(event.toolName) && event.result?.details?.path) {
           const generatedPath = resolve(event.result.details.path)
           const asset = this.assetIndex.assets.find((item) => item.filePath && resolve(item.filePath) === generatedPath)
           if (asset) {
@@ -1240,7 +1261,7 @@ export class AgentRuntimeService {
           emit('session_title', { sessionId: session.sessionId, name: generatedTitle, source: 'generated' })
         }
       }
-      emit('done', { sessionId: session.sessionId, goal: this.goals.get(session.sessionId) })
+      emit('done', { sessionId: session.sessionId, goal: this.goals.get(session.sessionId), taskList: this.taskLists.get(session.sessionId) })
       void this.captureConversationMemory({
         sessionId: session.sessionId,
         cwd: value.cwd,
@@ -1256,6 +1277,7 @@ export class AgentRuntimeService {
       unsubscribe()
       this.permissions.detachEmitter(session.sessionId, emit)
       if (this.goalEmitters.get(session.sessionId) === emit) this.goalEmitters.delete(session.sessionId)
+      if (this.taskListEmitters.get(session.sessionId) === emit) this.taskListEmitters.delete(session.sessionId)
       live.streaming = false
       const timer = setTimeout(() => { if (this.liveSessions.get(session.sessionId) === live) this.liveSessions.delete(session.sessionId) }, 60_000)
       timer.unref?.()
@@ -1337,6 +1359,8 @@ export class AgentRuntimeService {
 
   async deleteSession(id) {
     await this.goals.remove(id)
+    await this.taskLists.remove(id)
+    await this.browserAutomation.closeSession(id)
     this.subagents.abortParent(id)
     this.permissions.resolveSession(id, false, '会话已删除，工具未执行。')
     const active = this.sessions.get(id)
@@ -1566,6 +1590,7 @@ export class AgentRuntimeService {
     await this.channels.dispose()
     await this.goals.pauseAllActive()
     await this.subagents.dispose()
+    await this.browserAutomation.dispose()
     this.permissions.dispose()
     await this.disposeSessions()
     await this.mcp.dispose()

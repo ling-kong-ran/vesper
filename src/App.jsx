@@ -5,6 +5,7 @@ import {
   ArrowDown,
   Bot,
   Check,
+  Circle,
   ChevronRight,
   Clock3,
   Download,
@@ -12,6 +13,7 @@ import {
   FolderOpen,
   Grid2X2,
   Link2,
+  ListChecks,
   Menu,
   MessageSquare,
   Monitor,
@@ -552,7 +554,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   const updateSessionState = useCallback((id, update) => {
     if (!id) return
     const current = sessionStatesRef.current
-    const previous = current[id] || { messages: [], tools: [], approvals: [], streaming: false, error: '', loaded: false, messageStart: null, hasOlder: false, olderCursor: null }
+    const previous = current[id] || { messages: [], tools: [], approvals: [], taskList: null, streaming: false, error: '', loaded: false, messageStart: null, hasOlder: false, olderCursor: null }
     const next = typeof update === 'function' ? update(previous) : { ...previous, ...update }
     const states = { ...current, [id]: next }
     sessionStatesRef.current = states
@@ -580,9 +582,10 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         cwd: data.cwd || current.cwd,
         permissionMode: data.permissionMode || current.permissionMode,
         goal: data.goal ?? current.goal ?? null,
+        taskList: data.taskList ?? current.taskList ?? null,
         approvals: data.approvals || [],
       }))
-      setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null } : session))
+      setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
     } catch (caught) {
       updateSessionState(id, { recovering: false, loading: false, error: caught.message })
     }
@@ -667,7 +670,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: t('新会话') }) })
         setActiveId(created.id)
         setRemoteSessions((current) => mergeSessionLists(current, [created]))
-        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', goal: created.goal || null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
+        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', goal: created.goal || null, taskList: created.taskList || null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
         setTiledSessionIds((current) => current.includes(created.id) ? current : [...current, created.id])
         setMode('focus')
         try {
@@ -781,8 +784,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         const eventAt = new Date().toISOString()
         if (event === 'meta') {
           setModel(data.model)
-          updateSessionState(sessionId, (current) => ({ ...current, model: data.model, cwd: data.cwd, permissionMode: data.permissionMode, goal: data.goal ?? null, runStartedAt: data.startedAt || current.runStartedAt, lastActivityAt: data.lastActivityAt || eventAt }))
-          if (data.cwd || data.permissionMode || data.goal !== undefined) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null } : session))
+          updateSessionState(sessionId, (current) => ({ ...current, model: data.model, cwd: data.cwd, permissionMode: data.permissionMode, goal: data.goal ?? null, taskList: data.taskList ?? current.taskList ?? null, runStartedAt: data.startedAt || current.runStartedAt, lastActivityAt: data.lastActivityAt || eventAt }))
+          if (data.cwd || data.permissionMode || data.goal !== undefined || data.taskList !== undefined) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
         } else if (event === 'text_delta') {
           responseText += data.delta || ''
           updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, runNotice: '', messages: current.messages.map((item) => item.id === agentId ? { ...item, text: item.text + data.delta } : item) }))
@@ -819,6 +822,9 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         } else if (event === 'goal_update') {
           updateSessionState(sessionId, { goal: data.goal ?? null })
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, goal: data.goal ?? null } : session))
+        } else if (event === 'task_list_update') {
+          updateSessionState(sessionId, { taskList: data.taskList ?? null })
+          setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, taskList: data.taskList ?? null } : session))
         } else if (event === 'session_title') {
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, name: data.name } : session))
         } else if (event === 'retry') {
@@ -955,7 +961,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     })
   }, [notify, t])
   const activeSession = remoteSessions.find((session) => session.id === activeId)
-  const activeState = sessionStates[activeId] || { messages: [], tools: [], approvals: [], streaming: false, error: '', loading: false, switchingModel: false, switchingCwd: false, switchingPermission: false, messageStart: null, hasOlder: false, olderCursor: null }
+  const activeState = sessionStates[activeId] || { messages: [], tools: [], approvals: [], taskList: null, streaming: false, error: '', loading: false, switchingModel: false, switchingCwd: false, switchingPermission: false, messageStart: null, hasOlder: false, olderCursor: null }
 
   useEffect(() => {
     document.title = activeSession?.name ? `${activeSession.name} · ${APP_NAME}` : APP_NAME
@@ -971,7 +977,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         </div>
       ) : (<>
         {railOpen && <SessionRail sessions={remoteSessions} states={sessionStates} activeId={activeId} onSelect={setActiveId} onCreate={createSession} onClose={() => setRailOpen(false)} />}
-        <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} runStartedAt={activeState.runStartedAt} lastActivityAt={activeState.lastActivityAt} runFinishedAt={activeState.runFinishedAt} runStopped={activeState.runStopped} runNotice={activeState.runNotice} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} onOpenRail={railOpen ? null : () => setRailOpen(true)} /></>)}
+        <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} taskList={activeState.taskList ?? activeSession?.taskList ?? null} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} runStartedAt={activeState.runStartedAt} lastActivityAt={activeState.lastActivityAt} runFinishedAt={activeState.runFinishedAt} runStopped={activeState.runStopped} runNotice={activeState.runNotice} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} onOpenRail={railOpen ? null : () => setRailOpen(true)} /></>)}
     </div>
     {workspaceSession && <WorkspacePicker session={workspaceSession} onClose={() => setWorkspaceSession(null)} onSelect={(cwd) => switchSessionCwd(workspaceSession, cwd)} />}
     </>
@@ -1009,15 +1015,49 @@ function SessionRail({ sessions, states, activeId, onSelect, onCreate, onClose }
   )
 }
 
+function TaskListPanel({ taskList, compact = false }) {
+  const { t } = useI18n()
+  const [expanded, setExpanded] = useState(!compact)
+  const items = taskList?.items || EMPTY_LIST
+  if (!items.length) return null
+  const visibleItems = compact ? items.slice(0, 3) : items
+  const completed = taskList?.counts?.completed ?? items.filter((item) => item.status === 'completed').length
+  const statusMeta = {
+    pending: { label: t('待处理'), icon: <Circle size={compact ? 11 : 13} />, tone: 'text-[var(--muted)]' },
+    in_progress: { label: t('进行中'), icon: <RefreshCw className="spin" size={compact ? 11 : 13} />, tone: 'text-[var(--accent-strong)]' },
+    completed: { label: t('已完成'), icon: <Check size={compact ? 11 : 13} />, tone: 'text-[var(--success)]' },
+    blocked: { label: t('已阻塞'), icon: <AlertTriangle size={compact ? 11 : 13} />, tone: 'text-[var(--danger)]' },
+  }
+  return <section className={`${compact ? 'mx-2 my-2' : 'mx-4 mt-3'} overflow-hidden rounded-[var(--r-sm)] border border-[var(--stroke)] bg-[var(--surface-subtle)]`}>
+    <button type="button" className="flex min-h-8 w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-[var(--text)] hover:bg-[var(--surface-hover)]" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+      <ListChecks size={14} className="shrink-0 text-[var(--muted)]" />
+      <strong className="min-w-0 flex-1 truncate">{t('任务清单')}</strong>
+      <small className="text-[11px] text-[var(--muted)]">{t('{completed}/{total} 已完成', { completed, total: items.length })}</small>
+      <ChevronRight size={13} className={`text-[var(--muted)] transition-transform ${expanded ? 'rotate-90' : ''}`} />
+    </button>
+    {expanded && <div className={`${compact ? 'max-h-28' : 'max-h-52'} overflow-y-auto border-t border-[var(--stroke)] px-3 py-2`}>
+      {visibleItems.map((item) => {
+        const meta = statusMeta[item.status] || statusMeta.pending
+        return <div className="flex min-h-7 items-start gap-2 py-1 text-[12px]" key={item.id}>
+          <span className={`mt-0.5 shrink-0 ${meta.tone}`} title={meta.label}>{meta.icon}</span>
+          <span className={`min-w-0 flex-1 leading-5 ${item.status === 'completed' ? 'text-[var(--muted)] line-through' : 'text-[var(--text)]'}`} title={item.note || item.title}>{item.title}</span>
+        </div>
+      })}
+      {compact && items.length > visibleItems.length && <small className="block py-1 text-[11px] text-[var(--muted)]">{t('还有 {count} 项', { count: items.length - visibleItems.length })}</small>}
+    </div>}
+  </section>
+}
+
 function SessionCard({ session, state, model, permissionMode, availableModels, onModelChange, onPermissionChange, onApproval, onWorkspace, onOpen, onRename, onRemoveFromTiled, onSend, onAbort }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const selection = useAttachmentSelection()
   const messages = (state?.messages || EMPTY_LIST).slice(-GRID_MESSAGE_PAGE_SIZE)
   const tools = state?.tools || EMPTY_LIST
+  const taskList = state?.taskList ?? session.taskList ?? null
   const streaming = Boolean(state?.streaming)
   const lastMessage = messages[messages.length - 1]
-  const liveVersion = `${session.id}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}:${tool.message?.length || 0}`).join('|')}:${state?.lastActivityAt || ''}:${state?.error || ''}`
+  const liveVersion = `${session.id}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}:${tool.message?.length || 0}`).join('|')}:${taskList?.updatedAt || ''}:${state?.lastActivityAt || ''}:${state?.error || ''}`
   const { scrollRef: liveRef, onScroll: onLiveScroll, scrollToBottom } = useAutoScroll(liveVersion)
   const submit = (event) => {
     event.preventDefault()
@@ -1031,6 +1071,7 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
     <Panel className="session-card">
       <div className="card-head"><button className="session-title-button" onClick={onOpen}><h3 title={session.name}>{session.name}</h3><span className={streaming ? 'success' : ''}>{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || messages.length })} · {relativeTime(session.modified, language)}</span><small className="workspace-summary" title={state?.cwd || session.cwd}><FolderOpen size={10} />{workspaceName(state?.cwd || session.cwd, language)}</small></button><div className="card-head-actions"><button className="icon-button" title={t('设置工作目录')} onClick={onWorkspace} disabled={streaming || state?.switchingCwd}><FolderOpen size={14} /></button><button className="icon-button" title={t('重命名会话')} onClick={onRename}><Pencil size={14} /></button><button className="icon-button" title={t('移出平铺')} aria-label={t('将 {name} 移出平铺', { name: session.name })} onClick={onRemoveFromTiled}><X size={14} /></button>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={11} />{t('停止')}</button> : <button className="icon-button" onClick={onOpen}><MoreHorizontal size={17} /></button>}</div></div>
       <div className="session-live-body" ref={liveRef} onScroll={onLiveScroll}>
+        <TaskListPanel taskList={taskList} compact />
         {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />{t('加载消息…')}</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />{t('开始一个新的编码任务')}</button> : messages.map((message) => <div className={`mini-message ${message.role}`} key={message.id}><span>{message.role === 'agent' ? 'Vesper' : 'You'}</span><div className="mini-message-content">{(message.text || !message.streaming) && <MarkdownMessage>{message.text}</MarkdownMessage>}{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} compact />}</div></div>)}
         {(streaming || state?.runStartedAt) && <AgentRunActivity compact streaming={streaming} text={lastMessage?.role === 'agent' ? lastMessage.text : ''} tools={tools} error={state?.error} stopped={state?.runStopped} notice={state?.runNotice} startedAt={state?.runStartedAt} lastActivityAt={state?.lastActivityAt} finishedAt={state?.runFinishedAt} />}
         {state?.error && <div className="mini-session-error"><AlertTriangle size={11} />{state.error}</div>}
@@ -1178,6 +1219,9 @@ const TOOL_ACTIVITY_LABELS = {
   memory_search: '搜索记忆',
   memory_remember: '保存记忆',
   delegate_task: '子 Agent',
+  get_task_list: '读取任务清单',
+  update_task_list: '更新任务清单',
+  browser_automation: '浏览器自动化',
   generate_visual: '生成视觉内容',
 }
 
@@ -1271,7 +1315,7 @@ function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, error, stopped,
   </section>
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort, onOpenRail }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, taskList, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort, onOpenRail }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const [goalArmed, setGoalArmed] = useState(false)
@@ -1280,7 +1324,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   const promptRef = useRef(null)
   const prependSnapshot = useRef(null)
   const lastMessage = messages[messages.length - 1]
-  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}:${tool.message?.length || 0}`).join('|')}:${lastActivityAt || ''}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${error || ''}`
+  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}:${tool.message?.length || 0}`).join('|')}:${taskList?.updatedAt || ''}:${lastActivityAt || ''}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${error || ''}`
   const { scrollRef: transcriptRef, onScroll: onTranscriptScroll, hasUnread, scrollToBottom } = useAutoScroll(transcriptVersion)
   const loadOlder = useCallback(async () => {
     const node = transcriptRef.current
@@ -1332,6 +1376,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
     <Panel className="focus-session">
       <div className="card-head"><div className="session-runtime-meta">{onOpenRail && <button className="icon-button session-rail-open-btn" title={t('展开会话列表')} aria-label={t('展开会话列表')} onClick={onOpenRail}><PanelLeftOpen size={15} /></button>}<span className={streaming ? 'success' : ''}>{t(streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} tiled={tiled} streaming={streaming} switchingCwd={switchingCwd} onToggleTiled={onToggleTiled} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
+        <TaskListPanel taskList={taskList} />
         {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />{t('重试加载更早消息')}</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />{t('正在加载更早消息…')}</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />{t('加载更早消息')}</button>}</div>}
         {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>{t('准备好开始编码')}</h2><p>{t('Agent 可以读取当前工作区、搜索代码并持续处理任务。默认使用只读工具权限。')}</p><div className="welcome-chips">{welcomeChips(t).map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
         {messages.map((message, index) => {

@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, Menu, nativeTheme, net, shell } from 'electron'
 import updater from 'electron-updater'
 import { createVesperServer } from '../server/app-server.mjs'
+import { createElectronBrowserAutomationDriver } from './browser-automation.mjs'
 import { releaseNotesMarkdown } from '../shared/release-notes.mjs'
 
 const { autoUpdater } = updater
@@ -190,6 +191,7 @@ async function createWindow() {
       production: true,
       port: 0,
       host: '127.0.0.1',
+      browserAutomationDriver: createElectronBrowserAutomationDriver(),
     })
   }
   mainWindow = new BrowserWindow({

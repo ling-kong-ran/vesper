@@ -75,8 +75,8 @@ test('read-focused subagents receive only read tools and return structured findi
       emit({ type: 'tool_execution_end', toolCallId: 'read-1', toolName: 'read', isError: false })
     },
   })
-  const parentTools = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'memory_search', 'delegate_task', 'get_goal', 'update_goal']
-  const customTools = [{ name: 'bash' }, { name: 'memory_search' }, { name: 'delegate_task' }, { name: 'get_goal' }, { name: 'update_goal' }, { name: 'not_enabled' }]
+  const parentTools = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'memory_search', 'delegate_task', 'get_goal', 'update_goal', 'get_task_list', 'update_task_list', 'browser_automation']
+  const customTools = [{ name: 'bash' }, { name: 'memory_search' }, { name: 'delegate_task' }, { name: 'get_goal' }, { name: 'update_goal' }, { name: 'get_task_list' }, { name: 'update_task_list' }, { name: 'browser_automation' }, { name: 'not_enabled' }]
   let options
   let installed = null
   let completed = null
@@ -109,7 +109,7 @@ test('read-focused subagents receive only read tools and return structured findi
   assert.equal(installed, session)
   assert.deepEqual(options.tools, ['read', 'grep', 'find', 'ls', 'memory_search'])
   assert.deepEqual(options.customTools, [{ name: 'memory_search' }])
-  assert.deepEqual(new Set(options.excludeTools), new Set(['delegate_task', 'get_goal', 'update_goal', 'mcp_list', 'mcp_manage']))
+  assert.deepEqual(new Set(options.excludeTools), new Set(['delegate_task', 'get_goal', 'update_goal', 'get_task_list', 'update_task_list', 'browser_automation', 'mcp_list', 'mcp_manage']))
   assert.equal(options.sessionManager.kind, 'in-memory')
   assert.match(options.resourceLoader.rolePrompt, /scout subagent/i)
   assert.match(session.agent.state.systemPrompt, /Application: Vesper/)
@@ -147,7 +147,7 @@ test('only worker inherits parent write tools and parent-only tools are always e
     createResourceLoader: createFakeResourceLoader,
   })
 
-  const parentTools = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'memory_search', 'memory_remember', 'delegate_task', 'get_goal', 'update_goal']
+  const parentTools = ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'memory_search', 'memory_remember', 'delegate_task', 'get_goal', 'update_goal', 'get_task_list', 'update_task_list', 'browser_automation']
   const workerResult = await service.run({
     parentSessionId: 'parent-worker',
     cwd: '/workspace',
@@ -155,7 +155,7 @@ test('only worker inherits parent write tools and parent-only tools are always e
     role: 'worker',
     task: 'Investigate the focused change.',
     allowedTools: parentTools,
-    customTools: [{ name: 'memory_search' }, { name: 'memory_remember' }, { name: 'delegate_task' }, { name: 'get_goal' }, { name: 'update_goal' }],
+    customTools: [{ name: 'memory_search' }, { name: 'memory_remember' }, { name: 'delegate_task' }, { name: 'get_goal' }, { name: 'update_goal' }, { name: 'get_task_list' }, { name: 'update_task_list' }, { name: 'browser_automation' }],
   })
   const reviewerResult = await service.run({
     parentSessionId: 'parent-reviewer',

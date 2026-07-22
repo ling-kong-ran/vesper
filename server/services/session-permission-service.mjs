@@ -7,7 +7,7 @@ export const DEFAULT_PERMISSION_MODE = 'auto'
 
 const TOOL_RISKS = new Map(TOOL_CATALOG.map((tool) => [tool.id, tool.risk]))
 const SENSITIVE_RISKS = new Set(['中风险', '高风险'])
-const INTERNAL_SAFE_TOOLS = new Set(['get_goal', 'update_goal'])
+const INTERNAL_SAFE_TOOLS = new Set(['get_goal', 'update_goal', 'get_task_list', 'update_task_list'])
 const DANGEROUS_COMMAND = /(?:\brm\s+-[^\r\n]*r[^\r\n]*f|\brmdir\s+\/s|\bdel\s+\/s|remove-item[^\r\n]*(?:-recurse|-force)|\bformat(?:\.com)?\b|\bshutdown(?:\.exe)?\b|\btaskkill[^\r\n]*\/f|\bgit\s+(?:reset\s+--hard|clean\s+-[^\r\n]*f)|\breg\s+delete\b|\bdrop\s+(?:database|table)\b|\btruncate\s+table\b)/i
 
 function safeArgs(value, depth = 0, key = '') {
@@ -41,6 +41,9 @@ export function permissionRequirement({ mode, cwd, toolName, args, toolRisk }) {
     return { risk, reason: `${toolName} 属于${risk}工具，需要确认后执行。` }
   }
   if (mode !== 'auto') return null
+  if (toolName === 'browser_automation' && ['click', 'type'].includes(String(args?.action || ''))) {
+    return { risk: '高风险', reason: '浏览器交互可能提交表单或改变远端状态，需要确认后执行。' }
+  }
   if (toolName === 'bash' && DANGEROUS_COMMAND.test(String(args?.command || ''))) {
     return { risk: '高风险', reason: 'Shell 命令包含删除、重置或系统级操作。' }
   }

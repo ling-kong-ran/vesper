@@ -12,13 +12,14 @@ export async function createVesperServer({
   production = false,
   port = 5173,
   host = '127.0.0.1',
+  browserAutomationDriver = null,
 } = {}) {
   const appRoot = resolve(root || process.cwd())
   const cwd = resolve(runtimeCwd || appRoot)
   const agentDir = resolve(dataDir)
   process.env.PI_CODING_AGENT_DIR = agentDir
 
-  const runtime = new AgentRuntimeService({ cwd, dataDir: agentDir })
+  const runtime = new AgentRuntimeService({ cwd, dataDir: agentDir, browserAutomationDriver })
   await runtime.init()
 
   let vite = null

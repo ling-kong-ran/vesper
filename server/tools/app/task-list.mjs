@@ -1,0 +1,53 @@
+import { defineTool } from '@earendil-works/pi-coding-agent'
+import { Type } from 'typebox'
+import { MAX_TASK_LIST_ITEMS, MAX_TASK_NOTE_CHARS, MAX_TASK_TITLE_CHARS, TASK_LIST_STATUSES } from '../../services/task-list-service.mjs'
+
+export const TASK_LIST_TOOL_NAMES = Object.freeze(['get_task_list', 'update_task_list'])
+
+const statusSchema = Type.Union(TASK_LIST_STATUSES.map((status) => Type.Literal(status)))
+
+export function createTaskListTools({ getTaskList, updateTaskList }) {
+  return [
+    defineTool({
+      name: 'get_task_list',
+      label: 'Get Task List',
+      description: 'Read the current primary Agent session task list and progress counts.',
+      promptSnippet: 'Read the structured task list for the current primary Agent session',
+      promptGuidelines: [
+        'Use get_task_list when the current task breakdown is needed and has not already been returned by update_task_list.',
+        'This list belongs to the primary Agent session. Subagents cannot read or modify it.',
+      ],
+      parameters: Type.Object({}),
+      async execute() {
+        const taskList = await getTaskList?.()
+        return { content: [{ type: 'text', text: JSON.stringify({ taskList }, null, 2) }], details: { taskList } }
+      },
+    }),
+    defineTool({
+      name: 'update_task_list',
+      label: 'Update Task List',
+      description: 'Replace the current primary Agent session task list with a structured progress snapshot.',
+      promptSnippet: 'Create and maintain a concise structured task list for multi-step work',
+      promptGuidelines: [
+        'Use update_task_list for work with multiple concrete steps or when the user explicitly asks for a task list.',
+        'Keep stable task ids when updating status. Preserve unfinished tasks unless they are genuinely removed from scope.',
+        'Set status to in_progress before substantive work, completed only after verification, and blocked only when a concrete blocker exists.',
+        'Keep the list concise and outcome-oriented. Do not create a task for trivial narration or every individual tool call.',
+        'An empty items array clears the task list.',
+        'This list belongs to the primary Agent session. Subagents cannot read or modify it.',
+      ],
+      parameters: Type.Object({
+        items: Type.Array(Type.Object({
+          id: Type.Optional(Type.String({ minLength: 1, maxLength: 80, description: 'Stable task id reused across updates' })),
+          title: Type.String({ minLength: 1, maxLength: MAX_TASK_TITLE_CHARS }),
+          status: statusSchema,
+          note: Type.Optional(Type.String({ maxLength: MAX_TASK_NOTE_CHARS })),
+        }), { maxItems: MAX_TASK_LIST_ITEMS }),
+      }),
+      async execute(_toolCallId, params) {
+        const taskList = await updateTaskList?.(params.items)
+        return { content: [{ type: 'text', text: JSON.stringify({ taskList }, null, 2) }], details: { taskList } }
+      },
+    }),
+  ]
+}

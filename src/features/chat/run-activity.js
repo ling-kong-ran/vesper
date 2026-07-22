@@ -1,6 +1,6 @@
 export const RUN_INACTIVITY_THRESHOLD_MS = 10_000
 
-const RESEARCH_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'memory_search'])
+const RESEARCH_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'memory_search', 'get_task_list', 'browser_automation'])
 const EDIT_TOOLS = new Set(['edit', 'write', 'memory_remember'])
 
 function timestamp(value) {

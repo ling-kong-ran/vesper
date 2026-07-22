@@ -55,7 +55,7 @@ export const MAX_SUBAGENT_TASK_CHARS = 12_000
 export const MAX_SUBAGENT_OUTPUT_BYTES = 50 * 1024
 
 const READ_ONLY_SUBAGENT_TOOL_NAMES = new Set(['read', 'grep', 'find', 'ls', 'memory_search'])
-const PARENT_ONLY_TOOL_NAMES = new Set(['delegate_task', 'get_goal', 'update_goal', 'mcp_list', 'mcp_manage'])
+const PARENT_ONLY_TOOL_NAMES = new Set(['delegate_task', 'get_goal', 'update_goal', 'get_task_list', 'update_task_list', 'browser_automation', 'mcp_list', 'mcp_manage'])
 
 function textFromContent(content) {
   if (typeof content === 'string') return content
