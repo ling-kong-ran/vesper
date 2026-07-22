@@ -5,6 +5,7 @@ import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, dialog, ipcMain, 
 import updater from 'electron-updater'
 import { createVesperServer } from '../server/app-server.mjs'
 import { createElectronBrowserAutomationDriver } from './browser-automation.mjs'
+import { enableResumableUpdateDownloads } from './resumable-update-download.mjs'
 import { createUpdateLogger, shutdownWithDeadline } from './update-lifecycle.mjs'
 import { LATEST_RELEASE_API, newerVersion, normalizedVersion, RELEASES_URL } from '../shared/app-update.mjs'
 import { releaseNotesMarkdown } from '../shared/release-notes.mjs'
@@ -78,6 +79,7 @@ async function checkForUpdates({ silent = false } = {}) {
       return publishUpdate({
         state: 'error',
         message: error instanceof Error ? error.message : String(error),
+        canResume: false,
         checkedAt: new Date().toISOString(),
       })
     } finally {
@@ -91,6 +93,7 @@ function configureUpdater() {
   updateLogPath = join(app.getPath('logs'), 'updater.log')
   updateLogger = createUpdateLogger({ filePath: updateLogPath })
   autoUpdater.logger = updateLogger
+  enableResumableUpdateDownloads(autoUpdater, { logger: updateLogger })
   autoUpdater.autoDownload = false
   autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.autoRunAppAfterInstall = true
@@ -110,6 +113,7 @@ function configureUpdater() {
       notes: releaseNotesMarkdown(info.releaseNotes),
       releaseUrl: RELEASES_URL,
       canDownload: true,
+      canResume: false,
       checkedAt: new Date().toISOString(),
       message: '',
     })
@@ -123,6 +127,7 @@ function configureUpdater() {
       notes: releaseNotesMarkdown(info.releaseNotes),
       releaseUrl: RELEASES_URL,
       canDownload: false,
+      canResume: false,
       checkedAt: new Date().toISOString(),
       message: '当前已是最新版本。',
     })
@@ -145,15 +150,18 @@ function configureUpdater() {
       releaseUrl: RELEASES_URL,
       canDownload: false,
       canInstall: true,
+      canResume: false,
       percent: 100,
       message: '更新已下载，重启后完成安装。',
     })
   })
   autoUpdater.on('error', (error) => {
     updateLogger.error('Updater error.', error)
+    const canResume = updateState.state === 'downloading' && Boolean(updateState.availableVersion && updateState.canDownload)
     publishUpdate({
       state: 'error',
       message: error instanceof Error ? error.message : String(error),
+      canResume,
       checkedAt: new Date().toISOString(),
     })
   })
@@ -268,11 +276,13 @@ function registerIpc() {
   }))
   ipcMain.handle('vesper:check-for-updates', () => checkForUpdates())
   ipcMain.handle('vesper:download-update', async () => {
-    if (!app.isPackaged || updateState.state !== 'available' || !updateState.canDownload) {
+    const canResume = updateState.state === 'error' && updateState.canResume
+    const canDownload = updateState.state === 'available' || canResume
+    if (!app.isPackaged || !canDownload || !updateState.canDownload) {
       await openExternalUrl(updateState.releaseUrl || RELEASES_URL)
       return publishUpdate({ ...updateState, message: '已打开 GitHub Releases。' })
     }
-    publishUpdate({ state: 'downloading', percent: 0, message: '' })
+    publishUpdate({ state: 'downloading', canResume: false, percent: 0, message: '' })
     await autoUpdater.downloadUpdate()
     return updateState
   })

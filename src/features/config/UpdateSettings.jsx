@@ -55,6 +55,7 @@ export function UpdateSettings({ notify, update }) {
       ? t('当前 Web 源码已同步 {branch}。', { branch: status.branch || 'main' })
       : t('检查后将在这里显示尚未同步的提交。'))
   const available = status.state === 'available'
+  const resumable = status.state === 'error' && status.canResume && status.canDownload
   const downloaded = status.state === 'downloaded'
   const checking = status.state === 'checking'
   const downloading = status.state === 'downloading'
@@ -66,8 +67,8 @@ export function UpdateSettings({ notify, update }) {
     : status.availableCommit?.slice(0, 7) || status.currentCommit?.slice(0, 7) || bundled.version || info.version
   const statusMeta = useMemo(() => ({
     idle: [t('尚未检查'), 'gray'], checking: [t('正在检查'), 'blue'], current: [t('已是最新'), 'green'], available: [t(desktop ? '发现新版本' : '发现代码更新'), 'blue'],
-    downloading: [t('正在下载'), 'blue'], downloaded: [t('等待重启安装'), 'green'], error: [t('检查失败'), 'red'],
-  }[status.state] || [t('尚未检查'), 'gray']), [desktop, status.state, t])
+    downloading: [t('正在下载'), 'blue'], downloaded: [t('等待重启安装'), 'green'], error: [t(resumable ? '下载已暂停' : '检查失败'), 'red'],
+  }[status.state] || [t('尚未检查'), 'gray']), [desktop, resumable, status.state, t])
 
   return <div className="mx-auto flex w-full max-w-[880px] flex-col gap-3">
     <Panel className="p-5">
@@ -84,16 +85,17 @@ export function UpdateSettings({ notify, update }) {
         <div className="rounded-[var(--r-sm)] bg-[var(--surface-muted)] p-3"><small className="text-[12px] text-[var(--muted)]">{t('更新通道')}</small><strong className="mt-1 block text-[14px]">{desktop ? 'Stable' : status.branch || 'main'}</strong></div>
       </div>
       {status.message && <div className={`mt-4 flex items-start gap-2 rounded-[var(--r-sm)] p-3 text-[13px] ${status.state === 'error' ? 'bg-[var(--danger-soft)] text-[var(--danger)]' : 'bg-[var(--accent-soft)] text-[var(--text)]'}`}>{status.state === 'error' ? <TriangleAlert className="mt-0.5 shrink-0" size={15} /> : <Laptop className="mt-0.5 shrink-0" size={15} />}<span>{t(status.message)}</span></div>}
+      {resumable && <small className="mt-2 block text-[12px] text-[var(--muted)]">{t('下载进度已保留，可从断点继续。')}</small>}
       {downloading && <div className="mt-4"><div className="flex justify-between text-[12px] text-[var(--muted)]"><span>{t('下载进度')}</span><span>{Math.round(status.percent || 0)}% · {formatBytes(status.transferred, language)} / {formatBytes(status.total, language)}</span></div><div className="mt-2 h-1.5 overflow-hidden rounded-full bg-[var(--progress-track)]"><i className="block h-full bg-[var(--star)] transition-[width]" style={{ width: `${status.percent || 0}%` }} /></div></div>}
       <div className="mt-5 flex flex-wrap gap-2">
-        <button className="button primary" disabled={checking || downloading} onClick={downloaded ? install : available ? download : check}>{checking || downloading ? <RefreshCw className="spin" size={14} /> : downloaded ? <Rocket size={14} /> : available ? status.canDownload ? <Download size={14} /> : <ExternalLink size={14} /> : <RefreshCw size={14} />}{t(downloaded ? '重启并安装' : available ? status.canDownload ? '下载更新' : desktop ? '查看新版本' : '查看代码更新' : checking ? '正在检查…' : '检查更新')}</button>
+        <button className="button primary" disabled={checking || downloading} onClick={downloaded ? install : available || resumable ? download : check}>{checking || downloading ? <RefreshCw className="spin" size={14} /> : downloaded ? <Rocket size={14} /> : available || resumable ? status.canDownload ? <Download size={14} /> : <ExternalLink size={14} /> : <RefreshCw size={14} />}{t(downloaded ? '重启并安装' : resumable ? '继续下载' : available ? status.canDownload ? '下载更新' : desktop ? '查看新版本' : '查看代码更新' : checking ? '正在检查…' : '检查更新')}</button>
         <button className="button secondary" onClick={openReleases}><ExternalLink size={14} />{desktop ? 'GitHub Releases' : 'GitHub Compare'}</button>
         {desktop && <button className="button secondary" onClick={openUpdateLog}><ExternalLink size={14} />{t('查看更新诊断日志')}</button>}
       </div>
     </Panel>
 
     <Panel className="p-5">
-      <div className="flex items-center justify-between gap-3"><SectionTitle title={t(desktop ? available || downloaded || downloading ? '新版本更新日志' : '当前版本更新日志' : available ? '待同步提交' : '当前源码状态')} /><span className="flex items-center gap-1.5 text-[12px] text-[var(--muted)]"><CheckCircle2 size={13} />{available || downloaded || downloading ? latestIdentifier : desktop ? `v${bundled.version || info.version}` : status.currentCommit?.slice(0, 7) || t('尚未检查')}</span></div>
+      <div className="flex items-center justify-between gap-3"><SectionTitle title={t(desktop ? available || resumable || downloaded || downloading ? '新版本更新日志' : '当前版本更新日志' : available ? '待同步提交' : '当前源码状态')} /><span className="flex items-center gap-1.5 text-[12px] text-[var(--muted)]"><CheckCircle2 size={13} />{available || resumable || downloaded || downloading ? latestIdentifier : desktop ? `v${bundled.version || info.version}` : status.currentCommit?.slice(0, 7) || t('尚未检查')}</span></div>
       {(status.releaseDate || desktop && bundled.date) && <small className="mt-2 block text-[12px] text-[var(--muted)]">{new Intl.DateTimeFormat(language, { dateStyle: 'long' }).format(new Date(status.releaseDate || bundled.date))}</small>}
       <div className="mt-4 rounded-[var(--r-sm)] border border-[var(--stroke-soft)] bg-[var(--surface-subtle)] p-4"><MarkdownMessage>{notes}</MarkdownMessage></div>
     </Panel>
