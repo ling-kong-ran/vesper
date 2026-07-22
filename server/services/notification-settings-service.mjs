@@ -48,7 +48,7 @@ export class NotificationSettingsService {
   async testBrowserTemplate(event) {
     const rendered = this.channels.renderNotification(event, 'browser', sampleNotificationData())
     const published = await this.publishBrowser(rendered.title, rendered.content, event)
-    if (!published) throw new Error('请先启用浏览器通知。')
+    if (!published) throw new Error('请先启用通知。')
     return { sent: 1, preview: rendered.content }
   }
 

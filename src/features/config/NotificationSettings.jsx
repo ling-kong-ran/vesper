@@ -8,7 +8,7 @@ import { apiJson } from '../../lib/api.js'
 const CHANNELS = {
   feishu: { name: '飞书', tone: 'blue' },
   weixin: { name: '微信', tone: 'green' },
-  browser: { name: '浏览器', tone: 'violet' },
+  browser: { name: '通知', tone: 'violet' },
 }
 
 function renderPreview(content, t) {
@@ -16,7 +16,8 @@ function renderPreview(content, t) {
   return String(content || '').replace(/\{\{\s*([\w.]+)\s*\}\}/g, (_match, key) => values[key] || `{{${key}}}`)
 }
 
-function browserPermission() {
+function notificationPermission() {
+  if (typeof window !== 'undefined' && window.vesperDesktop?.showNotification) return 'granted'
   return typeof window !== 'undefined' && 'Notification' in window ? window.Notification.permission : 'unsupported'
 }
 
@@ -25,7 +26,8 @@ export function NotificationSettings({ notify, onBrowserNotificationChange }) {
   const [data, setData] = useState({ browser: { enabled: false }, connections: {}, scopes: [], templates: [] })
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [permission, setPermission] = useState(browserPermission)
+  const desktop = Boolean(window.vesperDesktop?.showNotification)
+  const [permission, setPermission] = useState(notificationPermission)
   const [browserSaving, setBrowserSaving] = useState(false)
 
   const load = useCallback(async () => {
@@ -42,35 +44,43 @@ export function NotificationSettings({ notify, onBrowserNotificationChange }) {
 
   const updateBrowser = async (enabled) => {
     if (enabled) {
-      if (permission === 'unsupported') { notify(t('当前浏览器不支持系统通知')); return }
-      let nextPermission = window.Notification.permission
-      if (nextPermission === 'default') nextPermission = await window.Notification.requestPermission()
-      setPermission(nextPermission)
-      if (nextPermission !== 'granted') { notify(t('浏览器通知权限未授权，请在站点设置中允许通知')); return }
+      if (permission === 'unsupported') { notify(t('当前环境不支持系统通知')); return }
+      if (!desktop) {
+        let nextPermission = window.Notification.permission
+        if (nextPermission === 'default') nextPermission = await window.Notification.requestPermission()
+        setPermission(nextPermission)
+        if (nextPermission !== 'granted') { notify(t('通知权限未授权，请在浏览器站点设置中允许通知')); return }
+      }
     }
     setBrowserSaving(true)
     try {
       const result = await apiJson('/api/settings/notifications/browser', { method: 'PATCH', body: JSON.stringify({ enabled }) })
       setData(result)
       onBrowserNotificationChange?.(result)
-      notify(t(enabled ? '浏览器通知已启用' : '浏览器通知已关闭'))
+      notify(t(enabled ? '通知已启用' : '通知已关闭'))
     } catch (caught) { notify(caught.message, 'error') }
     finally { setBrowserSaving(false) }
   }
 
-  const testBrowserNotification = () => {
+  const testNotification = async () => {
     if (permission !== 'granted') return
-    const item = new window.Notification(t('{app} 通知测试', { app: APP_NAME }), { body: t('浏览器通知工作正常。'), tag: 'vesper-browser-test' })
+    const title = t('{app} 通知测试', { app: APP_NAME })
+    const body = t('通知工作正常。')
+    if (desktop) {
+      await window.vesperDesktop.showNotification({ title, body })
+      return
+    }
+    const item = new window.Notification(title, { body, tag: 'vesper-browser-test' })
     item.onclick = () => { window.focus(); item.close() }
   }
 
   if (loading) return <Panel className="empty-state"><RefreshCw className="spin" size={23} /><h2>{t('正在加载通知设置')}</h2></Panel>
-  const permissionLabel = t(permission === 'granted' ? '权限已允许' : permission === 'denied' ? '权限被拒绝' : permission === 'unsupported' ? '浏览器不支持' : '等待授权')
+  const permissionLabel = t(permission === 'granted' ? '权限已允许' : permission === 'denied' ? '权限被拒绝' : permission === 'unsupported' ? '当前环境不支持' : '等待授权')
   const permissionTone = permission === 'granted' ? 'green' : permission === 'default' ? 'amber' : 'red'
 
   return <div className="notification-settings">
     {error && <div className="config-error"><AlertTriangle size={13} />{error}</div>}
-    <Panel className="browser-notification-card"><div className="notification-option"><span className={`provider-icon ${data.browser.enabled ? 'blue' : ''}`}>{data.browser.enabled ? <Bell size={18} /> : <BellOff size={18} />}</span><div><strong>{t('浏览器通知')}</strong><small>{t('页面在后台或窗口失去焦点时，Agent 完成或失败会发送系统通知。')}</small></div><Badge tone={permissionTone}>{permissionLabel}</Badge><Toggle value={data.browser.enabled} disabled={browserSaving || permission === 'unsupported'} onChange={updateBrowser} /></div><div className="permission-note"><ShieldCheck size={15} /><span><strong>{t('由浏览器权限控制')}</strong><small>{t('配置保存在用户目录；关闭开关不会修改浏览器自身的站点权限。')}</small></span></div><div className="button-row"><button className="button secondary" disabled={!data.browser.enabled || permission !== 'granted'} onClick={testBrowserNotification}><Bell size={14} />{t('发送测试通知')}</button></div></Panel>
+    <Panel className="browser-notification-card"><div className="notification-option"><span className={`provider-icon ${data.browser.enabled ? 'blue' : ''}`}>{data.browser.enabled ? <Bell size={18} /> : <BellOff size={18} />}</span><div><strong>{t('通知')}</strong><small>{t('Agent 完成或失败时，Vesper 会通过当前平台的系统通知提醒你。')}</small></div><Badge tone={permissionTone}>{permissionLabel}</Badge><Toggle value={data.browser.enabled} disabled={browserSaving || permission === 'unsupported'} onChange={updateBrowser} /></div><div className="permission-note"><ShieldCheck size={15} /><span><strong>{t(desktop ? '由操作系统通知设置控制' : '由浏览器站点权限控制')}</strong><small>{t(desktop ? '桌面端使用操作系统通知；关闭开关不会修改系统自身的通知权限。' : 'Web 端使用浏览器站点通知；关闭开关不会修改浏览器自身的站点权限。')}</small></span></div><div className="button-row"><button className="button secondary" disabled={!data.browser.enabled || permission !== 'granted'} onClick={testNotification}><Bell size={14} />{t('发送测试通知')}</button></div></Panel>
     <NotificationTemplates data={data} setData={setData} notify={notify} permission={permission} onSettingsChange={onBrowserNotificationChange} />
   </div>
 }

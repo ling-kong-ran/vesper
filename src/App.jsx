@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
+import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
   ArrowDown,
@@ -205,9 +206,14 @@ function App() {
 
   useEffect(() => () => window.clearTimeout(toastTimer.current), [])
 
-  const showBrowserNotification = useCallback((title, body, { force = false } = {}) => {
-    if (!notificationSettings.browser?.enabled || !('Notification' in window) || window.Notification.permission !== 'granted') return
+  const showSystemNotification = useCallback((title, body, { force = false } = {}) => {
+    if (!notificationSettings.browser?.enabled) return
     if (!force && document.visibilityState === 'visible' && document.hasFocus()) return
+    if (window.vesperDesktop?.showNotification) {
+      void window.vesperDesktop.showNotification({ title, body }).catch(() => {})
+      return
+    }
+    if (!('Notification' in window) || window.Notification.permission !== 'granted') return
     const item = new window.Notification(title, { body, tag: `vesper-${title}` })
     item.onclick = () => { window.focus(); item.close() }
   }, [notificationSettings.browser?.enabled])
@@ -216,8 +222,8 @@ function App() {
     const template = notificationSettings.templates?.find((item) => item.id === event)
     const content = template?.channels?.browser?.content
     if (!template?.enabled || !content) return
-    showBrowserNotification(template.name, renderNotificationContent(content, data), options)
-  }, [notificationSettings.templates, showBrowserNotification])
+    showSystemNotification(template.name, renderNotificationContent(content, data), options)
+  }, [notificationSettings.templates, showSystemNotification])
 
   const registerPrimaryAction = useCallback((action) => {
     return primaryActions.register(action)
@@ -312,14 +318,14 @@ function App() {
       try {
         const result = await apiJson(`/api/settings/notifications/browser/events?after=${encodeURIComponent(browserEventCursor.current)}`)
         if (!active) return
-        for (const event of result.events || []) showBrowserNotification(event.title, event.body, { force: true })
+        for (const event of result.events || []) showSystemNotification(event.title, event.body, { force: true })
         browserEventCursor.current = result.latestId || browserEventCursor.current
       } catch {}
     }
     poll()
     const timer = window.setInterval(poll, 3000)
     return () => { active = false; window.clearInterval(timer) }
-  }, [showBrowserNotification])
+  }, [showSystemNotification])
 
   const activeMeta = page === 'chat' && chatMode === 'focus'
     ? [t('对话'), t('聚集模式 · 单会话工作台')]
@@ -381,6 +387,7 @@ function StatusBar({ page, pluginStats }) {
   const { t, language } = useI18n()
   const [usage, setUsage] = useState(null)
   const [modelLabel, setModelLabel] = useState('')
+  const modelRequest = useRef(0)
 
   const refreshUsage = useCallback(async () => {
     try { setUsage(await apiJson('/api/usage/today')) } catch {}
@@ -399,13 +406,35 @@ function StatusBar({ page, pluginStats }) {
     }
   }, [refreshUsage])
 
-  useEffect(() => {
-    let active = true
-    apiJson('/api/config')
-      .then((config) => { if (active) setModelLabel(config.model ? `${config.provider}/${config.model}` : '') })
-      .catch(() => {})
-    return () => { active = false }
+  const refreshModel = useCallback(async (sessionId = localStorage.getItem(STORAGE_KEYS.activeSession) || '') => {
+    const request = ++modelRequest.current
+    try {
+      const [config, sessionData] = await Promise.all([apiJson('/api/config'), apiJson('/api/sessions')])
+      if (request !== modelRequest.current) return
+      const session = sessionData.sessions?.find((item) => item.id === sessionId)
+      setModelLabel(session?.model || (config.model ? `${config.provider}/${config.model}` : ''))
+    } catch {}
   }, [])
+
+  useEffect(() => {
+    const syncModel = (event) => {
+      const sessionId = event.detail?.id || localStorage.getItem(STORAGE_KEYS.activeSession) || ''
+      if (event.detail?.model) {
+        modelRequest.current += 1
+        setModelLabel(event.detail.model)
+      } else {
+        void refreshModel(sessionId)
+      }
+    }
+    const refreshFromSessions = () => { void refreshModel() }
+    void refreshModel()
+    window.addEventListener(ACTIVE_SESSION_CHANGED_EVENT, syncModel)
+    window.addEventListener(SESSIONS_UPDATED_EVENT, refreshFromSessions)
+    return () => {
+      window.removeEventListener(ACTIVE_SESSION_CHANGED_EVENT, syncModel)
+      window.removeEventListener(SESSIONS_UPDATED_EVENT, refreshFromSessions)
+    }
+  }, [refreshModel])
 
   const usageTitle = usage
     ? t('输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {cacheRead}', {
@@ -681,7 +710,6 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
 
   useEffect(() => {
     if (activeId) localStorage.setItem(STORAGE_KEYS.activeSession, activeId)
-    announceActiveSession(activeId)
   }, [activeId])
 
   useEffect(() => {
@@ -818,7 +846,6 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       await consumeEventStream(response, (event, data) => {
         const eventAt = new Date().toISOString()
         if (event === 'meta') {
-          setModel(data.model)
           updateSessionState(sessionId, (current) => ({ ...current, model: data.model, cwd: data.cwd, permissionMode: data.permissionMode, goal: data.goal ?? null, taskList: data.taskList ?? current.taskList ?? null, runStartedAt: data.startedAt || current.runStartedAt, lastActivityAt: data.lastActivityAt || eventAt }))
           if (data.cwd || data.permissionMode || data.goal !== undefined || data.taskList !== undefined) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
         } else if (event === 'text_delta') {
@@ -997,6 +1024,12 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   }, [notify, t])
   const activeSession = remoteSessions.find((session) => session.id === activeId)
   const activeState = sessionStates[activeId] || { messages: [], tools: [], approvals: [], taskList: null, streaming: false, error: '', loading: false, switchingModel: false, switchingCwd: false, switchingPermission: false, messageStart: null, hasOlder: false, olderCursor: null }
+  const activeModel = activeState.model || activeSession?.model || model
+  const announcedModel = activeState.model || activeSession?.model || ''
+
+  useEffect(() => {
+    announceActiveSession(activeId, announcedModel)
+  }, [activeId, announcedModel])
 
   useEffect(() => {
     document.title = activeSession?.name ? `${activeSession.name} · ${APP_NAME}` : APP_NAME
@@ -1012,7 +1045,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         </div>
       ) : (<>
         {railOpen && <SessionRail sessions={remoteSessions} states={sessionStates} activeId={activeId} onSelect={setActiveId} onCreate={createSession} onClose={() => setRailOpen(false)} />}
-        <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeState.model || activeSession?.model || model} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} taskList={activeState.taskList ?? activeSession?.taskList ?? null} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} runStartedAt={activeState.runStartedAt} lastActivityAt={activeState.lastActivityAt} runFinishedAt={activeState.runFinishedAt} runStopped={activeState.runStopped} runNotice={activeState.runNotice} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} onOpenRail={railOpen ? null : () => setRailOpen(true)} /></>)}
+        <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeModel} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} taskList={activeState.taskList ?? activeSession?.taskList ?? null} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} runStartedAt={activeState.runStartedAt} lastActivityAt={activeState.lastActivityAt} runFinishedAt={activeState.runFinishedAt} runStopped={activeState.runStopped} runNotice={activeState.runNotice} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} onOpenRail={railOpen ? null : () => setRailOpen(true)} /></>)}
     </div>
     {workspaceSession && <WorkspacePicker session={workspaceSession} onClose={() => setWorkspaceSession(null)} onSelect={(cwd) => switchSessionCwd(workspaceSession, cwd)} />}
     </>
@@ -1157,18 +1190,47 @@ function permissionOptions(t) {
 function PermissionModeSelect({ value, onChange, disabled, compact = false }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
+  const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0, width: 250 })
   const rootRef = useRef(null)
+  const menuRef = useRef(null)
   const options = permissionOptions(t)
   const current = options.find((item) => item[0] === value) || options[1]
+  const positionMenu = useCallback(() => {
+    const trigger = rootRef.current?.querySelector('button')
+    if (!trigger) return
+    const rect = trigger.getBoundingClientRect()
+    const edge = 8
+    const gap = 8
+    const width = Math.min(250, window.innerWidth - edge * 2)
+    const height = menuRef.current?.offsetHeight || 180
+    const left = Math.max(edge, Math.min(rect.right - width, window.innerWidth - width - edge))
+    const top = rect.top >= height + gap + edge
+      ? rect.top - height - gap
+      : Math.min(rect.bottom + gap, window.innerHeight - height - edge)
+    setMenuPosition({ left, top: Math.max(edge, top), width })
+  }, [])
+  useLayoutEffect(() => {
+    if (!open) return undefined
+    positionMenu()
+    window.addEventListener('resize', positionMenu)
+    window.addEventListener('scroll', positionMenu, true)
+    return () => {
+      window.removeEventListener('resize', positionMenu)
+      window.removeEventListener('scroll', positionMenu, true)
+    }
+  }, [open, positionMenu])
   useEffect(() => {
     if (!open) return undefined
-    const close = (event) => { if (!rootRef.current?.contains(event.target)) setOpen(false) }
+    const close = (event) => {
+      if (!rootRef.current?.contains(event.target) && !menuRef.current?.contains(event.target)) setOpen(false)
+    }
     const escape = (event) => { if (event.key === 'Escape') setOpen(false) }
     document.addEventListener('mousedown', close)
     document.addEventListener('keydown', escape)
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape) }
   }, [open])
-  return <div ref={rootRef} className={`permission-mode-select icon-only ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}><button type="button" className={`permission-mode-trigger icon-only mode-${current[0]}`} title={t('权限模式：{mode}——{description}', { mode: current[1], description: current[2] })} disabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-label={t('权限模式：{mode}', { mode: current[1] })} onClick={() => setOpen((visible) => !visible)}><ShieldCheck size={compact ? 11 : 14} /></button>{open && <div className="permission-mode-menu" role="menu">{options.map(([mode, label, description]) => <button type="button" role="menuitemradio" aria-checked={mode === current[0]} className={mode === current[0] ? 'active' : ''} onClick={() => { onChange(mode); setOpen(false) }} key={mode}><span className={`permission-level level-${mode}`}><ShieldCheck size={13} /></span><span><strong>{label}</strong><small>{description}</small></span>{mode === current[0] && <Check size={13} />}</button>)}</div>}</div>
+  const menu = open && createPortal(<div ref={menuRef} className="permission-mode-menu !fixed !right-auto !bottom-auto z-[80]" style={menuPosition} role="menu">{options.map(([mode, label, description]) => <button type="button" role="menuitemradio" aria-checked={mode === current[0]} className={mode === current[0] ? 'active' : ''} onClick={() => { onChange(mode); setOpen(false) }} key={mode}><span className={`permission-level level-${mode}`}><ShieldCheck size={13} /></span><span><strong>{label}</strong><small>{description}</small></span>{mode === current[0] && <Check size={13} />}</button>)}</div>, document.body)
+  return <><div ref={rootRef} className={`permission-mode-select icon-only ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}><button type="button" className={`permission-mode-trigger icon-only mode-${current[0]}`} title={t('权限模式：{mode}——{description}', { mode: current[1], description: current[2] })} disabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-label={t('权限模式：{mode}', { mode: current[1] })} onClick={() => setOpen((visible) => !visible)}><ShieldCheck size={compact ? 11 : 14} /></button></div>{menu}</>
 }
 
 function ToolApproval({ approvals, onResolve, compact = false }) {

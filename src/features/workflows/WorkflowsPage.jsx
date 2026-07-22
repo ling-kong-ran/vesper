@@ -29,7 +29,7 @@ const PALETTE = [
 ]
 
 const TARGETS = {
-  browser: { name: '浏览器', Icon: Bell },
+  browser: { name: '通知', Icon: Bell },
   feishu: { name: '飞书', Icon: Bot },
   weixin: { name: '微信', Icon: MessageCircle },
 }

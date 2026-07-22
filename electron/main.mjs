@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { app, BrowserWindow, ipcMain, Menu, nativeTheme, net, shell } from 'electron'
+import { app, BrowserWindow, ipcMain, Menu, nativeTheme, net, Notification as ElectronNotification, shell } from 'electron'
 import updater from 'electron-updater'
 import { createVesperServer } from '../server/app-server.mjs'
 import { createElectronBrowserAutomationDriver } from './browser-automation.mjs'
@@ -245,6 +245,21 @@ function registerIpc() {
     await openExternalUrl(updateState.releaseUrl || RELEASES_URL)
     return true
   })
+  ipcMain.handle('vesper:show-notification', (_event, input = {}) => {
+    if (!ElectronNotification.isSupported()) return false
+    const title = String(input.title || '').trim().slice(0, 120)
+    const body = String(input.body || '').trim().slice(0, 2_000)
+    if (!title) return false
+    const notification = new ElectronNotification({ title, body })
+    notification.on('click', () => {
+      if (!mainWindow) return
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+      mainWindow.focus()
+    })
+    notification.show()
+    return true
+  })
 }
 
 if (!app.requestSingleInstanceLock()) app.quit()
@@ -255,6 +270,7 @@ else {
     mainWindow.focus()
   })
   app.whenReady().then(async () => {
+    app.setAppUserModelId('com.lingkongran.vesper')
     configureUpdater()
     registerIpc()
     nativeTheme.on('updated', updateTitleBarOverlay)

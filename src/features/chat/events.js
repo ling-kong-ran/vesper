@@ -10,8 +10,8 @@ export function requestSessionSelection(id) {
   window.dispatchEvent(new CustomEvent(SESSION_SELECTED_EVENT, { detail: { id } }))
 }
 
-export function announceActiveSession(id) {
-  window.dispatchEvent(new CustomEvent(ACTIVE_SESSION_CHANGED_EVENT, { detail: { id: id || '' } }))
+export function announceActiveSession(id, model = '') {
+  window.dispatchEvent(new CustomEvent(ACTIVE_SESSION_CHANGED_EVENT, { detail: { id: id || '', model: model || '' } }))
 }
 
 export function announceSessionsUpdated() {
