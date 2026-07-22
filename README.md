@@ -133,13 +133,26 @@ npm install
 
 ### 🔆 使用
 
-启动开发服务，默认地址为 `http://127.0.0.1:5173`：
+#### Web 版
+
+启动开发服务：
 
 ```bash
 npm run dev
 ```
 
-构建并运行生产版本：
+服务准备完成后，终端会明确显示访问地址。请在浏览器中打开 `http://127.0.0.1:5173`。默认不会自动创建浏览器页签；如有需要，可设置环境变量 `VESPER_OPEN_BROWSER=1` 开启自动打开。
+
+Web 版启动时会自动检查 GitHub Releases。发现新版本后，左侧导航栏底部会显示更新状态；点击可查看更新日志。检查只提供提醒，不会强制刷新页面、下载文件或覆盖本地源码。
+
+更新源码前请先提交或暂存本地修改，然后执行：
+
+```bash
+git pull
+npm install
+```
+
+构建并运行 Web 生产版本：
 
 ```bash
 npm run build
@@ -148,12 +161,16 @@ npm start
 
 Vesper 默认将本地配置和运行数据保存在 `~/.vesper/agent`。可以通过 `VESPER_AGENT_DIR` 指定其他目录。
 
+#### 桌面版
+
 启动或打包桌面应用：
 
 ```bash
 npm run desktop:dev
 npm run desktop:pack
 ```
+
+桌面版会在启动后自动检查更新，并在左侧导航栏显示新版本提醒。更新不会自动下载；用户确认后才会下载，并可查看应用内更新日志。
 
 发布新版本时，脚本会更新并提交 `package.json` 与 `package-lock.json`，创建 Git Tag，然后由 GitHub Actions 生成更新日志并发布 Windows、macOS 和 Linux 安装包：
 

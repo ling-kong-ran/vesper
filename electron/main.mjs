@@ -5,11 +5,10 @@ import { app, BrowserWindow, ipcMain, Menu, nativeTheme, net, shell } from 'elec
 import updater from 'electron-updater'
 import { createVesperServer } from '../server/app-server.mjs'
 import { createElectronBrowserAutomationDriver } from './browser-automation.mjs'
+import { LATEST_RELEASE_API, newerVersion, normalizedVersion, RELEASES_URL } from '../shared/app-update.mjs'
 import { releaseNotesMarkdown } from '../shared/release-notes.mjs'
 
 const { autoUpdater } = updater
-const RELEASES_URL = 'https://github.com/ling-kong-ran/vesper/releases'
-const LATEST_RELEASE_API = 'https://api.github.com/repos/ling-kong-ran/vesper/releases/latest'
 const UPDATE_CHANNEL = 'vesper:update-status'
 let mainWindow = null
 let vesperServer = null
@@ -19,19 +18,6 @@ let updateState = { state: 'idle', checkedAt: null }
 
 process.env.PI_SKIP_VERSION_CHECK ||= '1'
 process.env.PI_TELEMETRY ||= '0'
-
-function normalizedVersion(value) {
-  return String(value || '').trim().replace(/^v/i, '').split('-')[0]
-}
-
-function newerVersion(candidate, current) {
-  const left = normalizedVersion(candidate).split('.').map((value) => Number.parseInt(value, 10) || 0)
-  const right = normalizedVersion(current).split('.').map((value) => Number.parseInt(value, 10) || 0)
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    if ((left[index] || 0) !== (right[index] || 0)) return (left[index] || 0) > (right[index] || 0)
-  }
-  return false
-}
 
 function publishUpdate(patch) {
   updateState = { ...updateState, ...patch }
@@ -273,7 +259,7 @@ else {
     registerIpc()
     nativeTheme.on('updated', updateTitleBarOverlay)
     await createWindow()
-    setTimeout(() => { void checkForUpdates({ silent: true }) }, 12_000)
+    setTimeout(() => { void checkForUpdates({ silent: true }) }, 3_000)
     app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) void createWindow() })
   })
 }

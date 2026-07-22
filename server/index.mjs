@@ -2,6 +2,7 @@ import { homedir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createVesperServer } from './app-server.mjs'
+import { openBrowser, shouldOpenBrowser } from './open-browser.mjs'
 
 process.env.PI_SKIP_VERSION_CHECK ||= '1'
 process.env.PI_TELEMETRY ||= '0'
@@ -22,8 +23,17 @@ const vesper = await createVesperServer({
   port,
   host,
 })
-console.log(`Vesper running at ${vesper.url}`)
-console.log(`Agent data: ${vesper.dataDir}`)
+console.log('')
+console.log(`Vesper 已启动：${vesper.url}`)
+console.log(`数据目录：${vesper.dataDir}`)
+if (shouldOpenBrowser({ host })) {
+  const opening = openBrowser(vesper.url)
+  console.log(opening ? '正在打开默认浏览器…' : '未能自动打开浏览器。')
+}
+console.log(`请在浏览器中访问：${vesper.url}`)
+console.log('如需启动时自动打开浏览器，可设置 VESPER_OPEN_BROWSER=1。')
+console.log('按 Ctrl+C 停止 Vesper。')
+console.log('')
 
 let shuttingDown = false
 async function shutdown() {

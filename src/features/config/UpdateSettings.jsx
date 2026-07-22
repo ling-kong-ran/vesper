@@ -4,22 +4,7 @@ import MarkdownMessage from '../../components/MarkdownMessage.jsx'
 import { Badge, Panel, SectionTitle } from '../../components/ui.jsx'
 import { useI18n } from '../../app/use-i18n.js'
 
-const RELEASES_URL = 'https://github.com/ling-kong-ran/vesper/releases'
-const LATEST_RELEASE_API = 'https://api.github.com/repos/ling-kong-ran/vesper/releases/latest'
 const BUILD_VERSION = import.meta.env.VITE_APP_VERSION || '0.0.0'
-
-function normalizedVersion(value) {
-  return String(value || '').trim().replace(/^v/i, '').split('-')[0]
-}
-
-function newerVersion(candidate, current) {
-  const left = normalizedVersion(candidate).split('.').map((value) => Number.parseInt(value, 10) || 0)
-  const right = normalizedVersion(current).split('.').map((value) => Number.parseInt(value, 10) || 0)
-  for (let index = 0; index < Math.max(left.length, right.length); index += 1) {
-    if ((left[index] || 0) !== (right[index] || 0)) return (left[index] || 0) > (right[index] || 0)
-  }
-  return false
-}
 
 function platformLabel(info, t) {
   if (!info.desktop) return t('浏览器模式')
@@ -35,11 +20,10 @@ function formatBytes(value, language) {
   return `${(bytes / (1024 ** level)).toLocaleString(language, { maximumFractionDigits: 1 })} ${units[level]}`
 }
 
-export function UpdateSettings({ notify }) {
+export function UpdateSettings({ notify, update }) {
   const { t, language } = useI18n()
-  const bridge = window.vesperDesktop
-  const [info, setInfo] = useState({ desktop: false, packaged: false, version: BUILD_VERSION, platform: 'browser', arch: '', releasesUrl: RELEASES_URL })
-  const [status, setStatus] = useState({ state: 'idle' })
+  const info = update?.info || { desktop: false, packaged: false, version: BUILD_VERSION, platform: 'browser', arch: '' }
+  const status = update?.status || { state: 'idle' }
   const [bundled, setBundled] = useState({ version: BUILD_VERSION, date: '', notes: '' })
 
   useEffect(() => {
@@ -48,60 +32,20 @@ export function UpdateSettings({ notify }) {
       .then((response) => response.ok ? response.json() : null)
       .then((value) => { if (active && value) setBundled(value) })
       .catch(() => {})
-    if (!bridge) return () => { active = false }
-    bridge.getAppInfo().then((value) => {
-      if (!active) return
-      setInfo(value)
-      setStatus(value.update || { state: 'idle' })
-    }).catch(() => {})
-    const unsubscribe = bridge.onUpdateStatus((value) => { if (active) setStatus(value) })
-    return () => { active = false; unsubscribe?.() }
-  }, [bridge])
+    return () => { active = false }
+  }, [])
 
   const check = async () => {
-    setStatus((current) => ({ ...current, state: 'checking', message: '' }))
-    try {
-      if (bridge) {
-        setStatus(await bridge.checkForUpdates())
-        return
-      }
-      const response = await fetch(LATEST_RELEASE_API, { headers: { Accept: 'application/vnd.github+json' } })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const release = await response.json()
-      const version = normalizedVersion(release.tag_name)
-      const available = newerVersion(version, info.version)
-      setStatus({
-        state: available ? 'available' : 'current',
-        availableVersion: version,
-        releaseDate: release.published_at || release.created_at,
-        notes: release.body || '',
-        releaseUrl: release.html_url || RELEASES_URL,
-        canDownload: false,
-        checkedAt: new Date().toISOString(),
-        message: t(available ? '浏览器模式请从 GitHub Releases 下载桌面安装包。' : '当前已是最新版本。'),
-      })
-    } catch (error) {
-      setStatus({ state: 'error', message: error instanceof Error ? error.message : String(error), checkedAt: new Date().toISOString() })
-    }
+    await update?.check()
   }
 
-  const openReleases = async () => {
-    if (bridge) await bridge.openReleases()
-    else window.open(status.releaseUrl || RELEASES_URL, '_blank', 'noopener,noreferrer')
-  }
+  const openReleases = () => update?.openReleases()
 
   const download = async () => {
-    if (!bridge || !status.canDownload) {
-      await openReleases()
-      return
-    }
-    try { setStatus(await bridge.downloadUpdate()) } catch (error) { notify(error.message, 'error') }
+    try { await update?.download() } catch (error) { notify(error.message, 'error') }
   }
 
-  const install = async () => {
-    if (!bridge) return
-    await bridge.installUpdate()
-  }
+  const install = () => update?.install()
 
   const notes = status.notes || bundled.notes || t('该版本暂未提供更新日志。')
   const available = status.state === 'available'

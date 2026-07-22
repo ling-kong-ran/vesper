@@ -5,12 +5,17 @@ function publicError(error) {
   return redactSecretText(error instanceof Error ? error.message : String(error))
 }
 
-export function createApiHandler(runtime) {
+export function createApiHandler(runtime, { updates } = {}) {
   return async function handleApi(req, res, url) {
     if (!url.pathname.startsWith('/api/')) return false
     try {
       if (req.method === 'GET' && url.pathname === '/api/health') {
         json(res, 200, { ok: true, engine: '@earendil-works/pi-coding-agent', version: '0.80.10' })
+        return true
+      }
+      if (req.method === 'GET' && url.pathname === '/api/app-update') {
+        if (!updates) throw new Error('更新检查服务尚未初始化。')
+        json(res, 200, await updates.check({ refresh: url.searchParams.get('refresh') === '1' }))
         return true
       }
       if (req.method === 'GET' && url.pathname === '/api/config') {

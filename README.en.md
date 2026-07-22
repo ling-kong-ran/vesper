@@ -131,13 +131,26 @@ npm install
 
 ### 🔆 Usage
 
-Start the development server at `http://127.0.0.1:5173`:
+#### Web
+
+Start the development server:
 
 ```bash
 npm run dev
 ```
 
-Create and run a production build:
+When the server is ready, the terminal clearly prints its URL. Open `http://127.0.0.1:5173` in a browser. Vesper does not create a browser tab by default; set `VESPER_OPEN_BROWSER=1` to opt into automatic browser launching.
+
+The Web app checks GitHub Releases on startup. When a newer version is available, its status appears at the bottom of the left navigation. The check is informational only: it does not force a refresh, download files, or overwrite local source code.
+
+Commit or stash local changes before updating the source, then run:
+
+```bash
+git pull
+npm install
+```
+
+Create and run a production Web build:
 
 ```bash
 npm run build
@@ -146,12 +159,16 @@ npm start
 
 Vesper stores local configuration and runtime data in `~/.vesper/agent` by default. Set `VESPER_AGENT_DIR` to use another location.
 
+#### Desktop
+
 Start or package the desktop app:
 
 ```bash
 npm run desktop:dev
 npm run desktop:pack
 ```
+
+The desktop app checks for updates shortly after startup and shows new-version status in the left navigation. Updates are never downloaded automatically; the user chooses when to download and can review the release notes in the app.
 
 To publish a release, the script updates and commits `package.json` and `package-lock.json`, creates a Git tag, then lets GitHub Actions generate the release notes and publish Windows, macOS, and Linux packages:
 

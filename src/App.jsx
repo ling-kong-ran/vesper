@@ -56,6 +56,7 @@ import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, consumeEventStream } from './lib/api.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
+import { useAppUpdate } from './features/updates/useAppUpdate.js'
 
 const PluginsPage = lazy(() => import('./features/plugins/PluginsPage.jsx').then((module) => ({ default: module.PluginsPage })))
 const ChannelsPage = lazy(() => import('./features/channels/ChannelsPage.jsx').then((module) => ({ default: module.ChannelsPage })))
@@ -148,6 +149,7 @@ function App() {
   const searchInputRef = useRef(null)
   const toastTimer = useRef(null)
   const appDialog = useAppDialog()
+  const appUpdate = useAppUpdate()
   const [theme, setTheme] = useState(() => {
     const stored = localStorage.getItem(STORAGE_KEYS.theme)
     return THEME_SEQUENCE.includes(stored) ? stored : 'system'
@@ -236,6 +238,11 @@ function App() {
     setMobileNav(false)
   }, [routerNavigate])
 
+  const openUpdateSettings = useCallback(() => {
+    setConfigSection('updates')
+    navigate('config')
+  }, [navigate])
+
   const handlePrimary = useCallback(() => {
     if (page === 'config' && configSection !== 'models') return
     if (['chat', 'config', 'assets', 'plugins', 'channels', 'schedules', 'memory', 'mcp', 'skills', 'workflowCreate'].includes(page)) invokePrimaryAction()
@@ -322,7 +329,7 @@ function App() {
   return (
     <div className="app-shell">
       <div className="app-body">
-        <Sidebar page={page} navigation={navigation} navigate={navigate} setChatMode={setChatMode} open={mobileNav} onClose={() => setMobileNav(false)} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebarCollapsed} />
+        <Sidebar page={page} navigation={navigation} navigate={navigate} setChatMode={setChatMode} open={mobileNav} onClose={() => setMobileNav(false)} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebarCollapsed} update={appUpdate} onOpenUpdates={openUpdateSettings} />
         <main className="main-surface">
           <PageHeader
             meta={activeMeta}
@@ -347,7 +354,7 @@ function App() {
               <Route path={PAGE_PATHS.assets} element={<Suspense fallback={<PageLoader />}><AssetsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} /></Suspense>} />
               <Route path={PAGE_PATHS.channels} element={<Suspense fallback={<PageLoader />}><ChannelsPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>} />
               <Route path={PAGE_PATHS.schedules} element={<Suspense fallback={<PageLoader />}><SchedulesPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} openNotificationSettings={() => { setConfigSection('notifications'); navigate('config') }} /></Suspense>} />
-              <Route path={PAGE_PATHS.config} element={<Suspense fallback={<PageLoader />}><ConfigPage notify={notify} registerPrimaryAction={registerPrimaryAction} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} requestConfirm={appDialog.confirm} /></Suspense>} />
+              <Route path={PAGE_PATHS.config} element={<Suspense fallback={<PageLoader />}><ConfigPage notify={notify} registerPrimaryAction={registerPrimaryAction} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} requestConfirm={appDialog.confirm} update={appUpdate} /></Suspense>} />
               <Route path={PAGE_PATHS.plugins} element={<Suspense fallback={<PageLoader />}><PluginsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} onStatusChange={setPluginStats} /></Suspense>} />
               <Route path={PAGE_PATHS.memory} element={<Suspense fallback={<PageLoader />}><MemoryPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>} />
               <Route path={PAGE_PATHS.mcp} element={<Suspense fallback={<PageLoader />}><McpPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestText={appDialog.prompt} requestConfirm={appDialog.confirm} /></Suspense>} />
@@ -423,7 +430,7 @@ function PageLoader() {
   return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在加载页面')}</h2><p>{t('按需加载功能模块…')}</p></Panel>
 }
 
-function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, collapsed, onToggleCollapse }) {
+function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, collapsed, onToggleCollapse, update, onOpenUpdates }) {
   const { t, language } = useI18n()
   const [sessions, setSessions] = useState([])
   const [historyExpanded, setHistoryExpanded] = useState(true)
@@ -487,10 +494,30 @@ function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, colla
             </div>}
           </section>
         </div>
-        <button className="sidebar-collapse" title={t(collapsed ? '展开侧栏' : '收起侧栏')} aria-label={t(collapsed ? '展开侧栏' : '收起侧栏')} onClick={onToggleCollapse}>{collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}<span>{t(collapsed ? '展开侧栏' : '收起侧栏')}</span></button>
+        <div className="mt-auto grid gap-2">
+          <SidebarUpdateStatus update={update} collapsed={collapsed} onOpen={onOpenUpdates} />
+          <button className="sidebar-collapse !mt-0" title={t(collapsed ? '展开侧栏' : '收起侧栏')} aria-label={t(collapsed ? '展开侧栏' : '收起侧栏')} onClick={onToggleCollapse}>{collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}<span>{t(collapsed ? '展开侧栏' : '收起侧栏')}</span></button>
+        </div>
       </aside>
     </>
   )
+}
+
+function SidebarUpdateStatus({ update, collapsed, onOpen }) {
+  const { t } = useI18n()
+  const status = update?.status || { state: 'idle' }
+  if (!['available', 'downloading', 'downloaded'].includes(status.state)) return null
+  const downloading = status.state === 'downloading'
+  const downloaded = status.state === 'downloaded'
+  const label = t(downloaded ? '等待重启安装' : downloading ? '正在下载' : '发现新版本')
+  const detail = downloading
+    ? `${Math.round(status.percent || 0)}%`
+    : status.availableVersion ? `v${status.availableVersion}` : t('点击查看更新')
+  const Icon = downloaded ? Rocket : downloading ? RefreshCw : Download
+  return <button type="button" className={`flex min-h-11 w-full items-center rounded-[var(--r-sm)] border border-[var(--stroke)] bg-[var(--accent-soft)] text-[var(--text)] transition-colors hover:bg-[var(--surface-hover)] ${collapsed ? 'justify-center px-0' : 'gap-2.5 px-3 text-left'}`} title={`${label} · ${detail}`} aria-label={`${label} · ${detail}`} onClick={onOpen}>
+    <Icon className={downloading ? 'spin shrink-0' : 'shrink-0'} size={16} />
+    {!collapsed && <span className="min-w-0"><strong className="block truncate text-[12px]">{label}</strong><small className="mt-0.5 block truncate text-[11px] text-[var(--muted)]">{detail}</small></span>}
+  </button>
 }
 
 function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, theme, onCycleTheme, searchInputRef, workflowActions, desktopPlatform }) {
