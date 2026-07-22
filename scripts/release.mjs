@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const packagePath = join(root, 'package.json')
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm'
+const npmCli = String(process.env.npm_execpath || '').trim()
 const input = process.argv.slice(2).find((value) => !value.startsWith('--')) || 'patch'
 
 function run(command, args, { capture = false } = {}) {
@@ -15,6 +15,11 @@ function run(command, args, { capture = false } = {}) {
     stdio: capture ? 'pipe' : 'inherit',
   })
   return typeof result === 'string' ? result.trim() : ''
+}
+
+function runNpm(args, options) {
+  if (npmCli) return run(process.execPath, [npmCli, ...args], options)
+  return run(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, options)
 }
 
 function assertVersionInput(value) {
@@ -66,9 +71,9 @@ const behind = Number(run('git', ['rev-list', '--count', `HEAD..${upstream}`], {
 if (behind > 0) throw new Error(`当前分支落后于 ${upstream} ${behind} 个提交，请先同步远端。`)
 
 console.log('正在执行发布前检查…')
-run(npm, ['test'])
-run(npm, ['run', 'lint'])
-run(npm, ['run', 'build'])
+runNpm(['test'])
+runNpm(['run', 'lint'])
+runNpm(['run', 'build'])
 
 const packageJson = JSON.parse(await readFile(packagePath, 'utf8'))
 const nextVersion = resolveVersion(packageJson.version, input)
@@ -85,7 +90,7 @@ if (latestTag && compareVersions(nextVersion, latestTag.replace(/^v/i, '')) <= 0
   throw new Error(`新版本 ${nextVersion} 必须高于最新标签 ${latestTag}。`)
 }
 
-const bumpedVersion = run(npm, [
+const bumpedVersion = runNpm([
   'version',
   nextVersion,
   '--ignore-scripts',
