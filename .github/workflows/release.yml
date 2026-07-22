@@ -17,10 +17,10 @@ jobs:
     name: Prepare release
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
       - name: Validate version and generate release notes
@@ -60,21 +60,29 @@ jobs:
       APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
       APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: npm
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: release-metadata
           path: .
       - run: npm ci
       - run: npm test
       - run: npm run lint
-      - run: npm run desktop:pack -- ${{ matrix.args }}
+      - name: Package desktop app
+        shell: pwsh
+        run: |
+          @('CSC_LINK', 'CSC_KEY_PASSWORD', 'APPLE_ID', 'APPLE_APP_SPECIFIC_PASSWORD', 'APPLE_TEAM_ID') | ForEach-Object {
+            if (-not [Environment]::GetEnvironmentVariable($_)) {
+              Remove-Item "Env:$_" -ErrorAction SilentlyContinue
+            }
+          }
+          npm run desktop:pack -- ${{ matrix.args }}
       - uses: actions/upload-artifact@v4
         with:
           name: vesper-${{ runner.os }}
@@ -95,11 +103,11 @@ jobs:
     needs: build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           name: release-metadata
           path: .
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v5
         with:
           pattern: vesper-*
           path: artifacts

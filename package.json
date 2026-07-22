@@ -3,7 +3,11 @@
   "private": true,
   "version": "0.1.1",
   "description": "A local-first workspace for building and running AI agents.",
-  "author": "ling-kong-ran",
+  "author": {
+    "name": "ling-kong-ran",
+    "email": "65328093+ling-kong-ran@users.noreply.github.com",
+    "url": "https://github.com/ling-kong-ran"
+  },
   "type": "module",
   "main": "electron/main.mjs",
   "scripts": {
