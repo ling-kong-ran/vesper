@@ -141,7 +141,7 @@ npm run dev
 
 When the server is ready, the terminal clearly prints its URL. Open `http://127.0.0.1:5173` in a browser. Vesper does not create a browser tab by default; set `VESPER_OPEN_BROWSER=1` to opt into automatic browser launching.
 
-The Web app checks GitHub Releases on startup. When a newer version is available, its status appears at the bottom of the left navigation. The check is informational only: it does not force a refresh, download files, or overwrite local source code.
+On startup, the Web app compares its current Git commit with GitHub `main` instead of waiting for a Release tag. When remote commits have not been synced, the number of missing commits appears at the bottom of the left navigation; click it to review the comparison. The check is informational only: it does not force a refresh, download files, or overwrite local source code.
 
 Commit or stash local changes before updating the source, then run:
 

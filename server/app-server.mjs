@@ -5,7 +5,7 @@ import { join, resolve } from 'node:path'
 import { createApiHandler } from './http/api-handler.mjs'
 import { createStaticHandler } from './http/static-handler.mjs'
 import { AgentRuntimeService } from './runtime/agent-runtime.mjs'
-import { UpdateCheckService } from './services/update-check-service.mjs'
+import { resolveGitCommit, UpdateCheckService } from './services/update-check-service.mjs'
 
 export async function createVesperServer({
   root,
@@ -24,7 +24,8 @@ export async function createVesperServer({
   const runtime = new AgentRuntimeService({ cwd, dataDir: agentDir, browserAutomationDriver })
   await runtime.init()
   const packageJson = JSON.parse(await readFile(join(appRoot, 'package.json'), 'utf8'))
-  const updates = new UpdateCheckService({ currentVersion: packageJson.version })
+  const currentCommit = await resolveGitCommit(appRoot)
+  const updates = new UpdateCheckService({ currentVersion: packageJson.version, currentCommit })
 
   let vite = null
   if (!production) {

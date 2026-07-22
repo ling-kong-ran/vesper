@@ -1,23 +1,29 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { UpdateCheckService } from '../services/update-check-service.mjs'
+import { resolveGitCommit, UpdateCheckService } from '../services/update-check-service.mjs'
 
-test('server update checks sanitize notes and cache GitHub responses', async () => {
+test('server update checks compare the current commit with main and cache responses', async () => {
   let requests = 0
   let now = Date.parse('2026-07-23T00:00:00.000Z')
   const service = new UpdateCheckService({
     currentVersion: '0.1.2',
+    currentCommit: '1111111111111111111111111111111111111111',
     now: () => now,
     fetcher: async (_url, options) => {
       requests += 1
-      assert.equal(options.headers['User-Agent'], 'Vesper/0.1.2')
+      assert.match(_url, /compare\/1111111111111111111111111111111111111111\.\.\.main$/)
+      assert.equal(options.headers['User-Agent'], 'Vesper/0.1.2 (1111111)')
+      assert.equal(options.headers['X-GitHub-Api-Version'], '2022-11-28')
       return {
         ok: true,
         json: async () => ({
-          tag_name: 'v0.1.3',
-          published_at: '2026-07-22T23:00:00.000Z',
-          body: '<h2>Vesper 0.1.3</h2><p><strong>Improved</strong> startup updates.</p>',
-          html_url: 'https://github.com/ling-kong-ran/vesper/releases/tag/v0.1.3',
+          status: 'ahead',
+          ahead_by: 1,
+          html_url: 'https://github.com/ling-kong-ran/vesper/compare/1111111...main',
+          commits: [{
+            sha: '2222222222222222222222222222222222222222',
+            commit: { message: 'feat: improve startup updates\n\nDetails', committer: { date: '2026-07-22T23:00:00.000Z' } },
+          }],
         }),
       }
     },
@@ -30,8 +36,18 @@ test('server update checks sanitize notes and cache GitHub responses', async () 
 
   assert.equal(first.state, 'available')
   assert.equal(first.currentVersion, '0.1.2')
+  assert.equal(first.currentCommit, '1111111111111111111111111111111111111111')
+  assert.equal(first.availableCommit, '2222222222222222222222222222222222222222')
+  assert.equal(first.behindBy, 1)
+  assert.equal(first.branch, 'main')
   assert.equal(first.canDownload, false)
-  assert.match(first.notes, /\*\*Improved\*\*/)
+  assert.match(first.notes, /feat: improve startup updates \(2222222\)/)
   assert.deepEqual(cached, first)
   assert.equal(requests, 2)
+})
+
+test('current commit resolution prefers environment metadata and safely falls back to git', async () => {
+  assert.equal(await resolveGitCommit('/workspace', { env: { VESPER_COMMIT_SHA: 'ABCDEF1234567' }, runGit: async () => { throw new Error('should not run') } }), 'abcdef1234567')
+  assert.equal(await resolveGitCommit('/workspace', { env: {}, runGit: async () => ({ stdout: '1234567890abcdef\n' }) }), '1234567890abcdef')
+  assert.equal(await resolveGitCommit('/workspace', { env: {}, runGit: async () => { throw new Error('missing git') } }), '')
 })

@@ -1,5 +1,8 @@
 export const RELEASES_URL = 'https://github.com/ling-kong-ran/vesper/releases'
 export const LATEST_RELEASE_API = 'https://api.github.com/repos/ling-kong-ran/vesper/releases/latest'
+export const REPOSITORY_URL = 'https://github.com/ling-kong-ran/vesper'
+export const REPOSITORY_API = 'https://api.github.com/repos/ling-kong-ran/vesper'
+export const DEFAULT_BRANCH = 'main'
 
 export function normalizedVersion(value) {
   return String(value || '').trim().replace(/^v/i, '').split('-')[0]

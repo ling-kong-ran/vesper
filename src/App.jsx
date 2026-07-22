@@ -9,6 +9,7 @@ import {
   ChevronRight,
   Clock3,
   Download,
+  ExternalLink,
   File,
   FolderOpen,
   Grid2X2,
@@ -506,14 +507,21 @@ function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, colla
 function SidebarUpdateStatus({ update, collapsed, onOpen }) {
   const { t } = useI18n()
   const status = update?.status || { state: 'idle' }
+  const desktop = Boolean(update?.info?.desktop)
   if (!['available', 'downloading', 'downloaded'].includes(status.state)) return null
   const downloading = status.state === 'downloading'
   const downloaded = status.state === 'downloaded'
-  const label = t(downloaded ? '等待重启安装' : downloading ? '正在下载' : '发现新版本')
+  const label = t(downloaded ? '等待重启安装' : downloading ? '正在下载' : desktop ? '发现新版本' : '发现代码更新')
   const detail = downloading
     ? `${Math.round(status.percent || 0)}%`
-    : status.availableVersion ? `v${status.availableVersion}` : t('点击查看更新')
-  const Icon = downloaded ? Rocket : downloading ? RefreshCw : Download
+    : desktop && status.availableVersion
+      ? `v${status.availableVersion}`
+      : status.behindBy
+        ? t('落后 {branch} {count} 个提交', { branch: status.branch || 'main', count: status.behindBy })
+        : status.availableCommit
+          ? status.availableCommit.slice(0, 7)
+          : t('点击查看更新')
+  const Icon = downloaded ? Rocket : downloading ? RefreshCw : desktop ? Download : ExternalLink
   return <button type="button" className={`flex min-h-11 w-full items-center rounded-[var(--r-sm)] border border-[var(--stroke)] bg-[var(--accent-soft)] text-[var(--text)] transition-colors hover:bg-[var(--surface-hover)] ${collapsed ? 'justify-center px-0' : 'gap-2.5 px-3 text-left'}`} title={`${label} · ${detail}`} aria-label={`${label} · ${detail}`} onClick={onOpen}>
     <Icon className={downloading ? 'spin shrink-0' : 'shrink-0'} size={16} />
     {!collapsed && <span className="min-w-0"><strong className="block truncate text-[12px]">{label}</strong><small className="mt-0.5 block truncate text-[11px] text-[var(--muted)]">{detail}</small></span>}
