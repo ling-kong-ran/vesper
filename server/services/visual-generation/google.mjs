@@ -27,6 +27,9 @@ function findVideoUri(value) {
 
 async function generateGoogleImage(model, request, signal) {
   const modelId = model.id.replace(/^models\//, '')
+  const sourceParts = (request.sourceImages || []).map((image) => ({
+    inlineData: { mimeType: image.mimeType, data: image.buffer.toString('base64') },
+  }))
   const imageConfig = {
     ...(request.aspectRatio ? { aspectRatio: request.aspectRatio } : {}),
     ...(request.imageSize ? { imageSize: request.imageSize } : {}),
@@ -34,7 +37,7 @@ async function generateGoogleImage(model, request, signal) {
   const data = await googleJson(`${model.baseUrl}/models/${encodeURIComponent(modelId)}:generateContent`, model, {
     method: 'POST',
     body: JSON.stringify({
-      contents: [{ role: 'user', parts: [{ text: request.prompt }] }],
+      contents: [{ role: 'user', parts: [...sourceParts, { text: request.prompt }] }],
       generationConfig: {
         responseModalities: ['TEXT', 'IMAGE'],
         ...(Object.keys(imageConfig).length ? { imageConfig } : {}),

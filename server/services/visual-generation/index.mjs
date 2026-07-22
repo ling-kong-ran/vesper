@@ -1,7 +1,7 @@
-import { generateGoogle } from './google.mjs'
+import { runVisualDriver } from './driver-registry.mjs'
 import { VisualModelCatalog } from './model-selection.mjs'
-import { generateOpenAICompatible } from './openai-compatible.mjs'
 import { saveVisualOutput } from './output.mjs'
+import { loadMaskImage, loadSourceImages } from './source-images.mjs'
 
 export { inferModelKind } from './model-selection.mjs'
 
@@ -31,12 +31,14 @@ export class VisualGenerationService {
 
   async generate(request, options = {}) {
     const kind = request.kind === 'video' ? 'video' : 'image'
+    if (kind === 'video' && (request.sourceImages?.length || request.maskPath)) throw new Error('视频生成暂不支持图片编辑参数。')
     const model = await this.models.select(kind, request.model)
-    const normalizedRequest = normalizeRequest(model, { ...request, kind })
-    options.onProgress?.(`使用 ${model.providerName} / ${model.name} 生成${kind === 'video' ? '视频' : '图片'}…`)
-    const result = model.driver.startsWith('google-')
-      ? await generateGoogle(model, normalizedRequest, options)
-      : await generateOpenAICompatible(model, normalizedRequest, options)
+    const sourceImages = kind === 'image' ? await loadSourceImages(request.sourceImages, request.cwd) : []
+    const maskImage = kind === 'image' ? await loadMaskImage(request.maskPath, request.cwd) : null
+    const operation = sourceImages.length ? 'edit' : 'generate'
+    const normalizedRequest = normalizeRequest(model, { ...request, kind, operation, sourceImages, maskImage })
+    options.onProgress?.(`使用 ${model.providerName} / ${model.name} ${operation === 'edit' ? '编辑图片' : `生成${kind === 'video' ? '视频' : '图片'}`}…`)
+    const result = await runVisualDriver(model, normalizedRequest, options)
     const path = await saveVisualOutput({ cwd: request.cwd, prompt: request.prompt, outputName: request.outputName, result })
     return {
       path,
@@ -48,6 +50,7 @@ export class VisualGenerationService {
       model: model.id,
       modelName: model.name,
       remoteId: result.remoteId || null,
+      operation,
     }
   }
 }

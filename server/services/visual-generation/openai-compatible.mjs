@@ -1,4 +1,5 @@
-import OpenAI from 'openai'
+import { basename } from 'node:path'
+import OpenAI, { toFile } from 'openai'
 
 function dataUrlImage(value) {
   const match = String(value || '').match(/^data:([^;]+);base64,(.+)$/)
@@ -18,9 +19,13 @@ function imageExtension(mimeType) {
 }
 
 async function openRouterImage(client, model, request, signal) {
+  const imageContent = (request.sourceImages || []).map((image) => ({
+    type: 'image_url',
+    image_url: { url: `data:${image.mimeType};base64,${image.buffer.toString('base64')}` },
+  }))
   const response = await client.chat.completions.create({
     model: model.id,
-    messages: [{ role: 'user', content: [{ type: 'text', text: request.prompt }] }],
+    messages: [{ role: 'user', content: [{ type: 'text', text: request.prompt }, ...imageContent] }],
     modalities: ['image'],
     stream: false,
   }, { signal })
@@ -37,14 +42,28 @@ async function openRouterImage(client, model, request, signal) {
 
 async function openAIImage(client, model, request, signal) {
   const isOpenAIImage = /gpt.*image|dall-e/i.test(model.id)
-  const response = await client.images.generate({
+  const common = {
     model: model.id,
     prompt: request.prompt,
     n: 1,
     ...(request.size ? { size: request.size } : {}),
     ...(request.quality ? { quality: request.quality } : {}),
     ...(isOpenAIImage ? { output_format: request.outputFormat || 'png' } : {}),
-  }, { signal })
+  }
+  let response
+  if (request.operation === 'edit') {
+    const images = await Promise.all(request.sourceImages.map((image) => toFile(image.buffer, basename(image.path), { type: image.mimeType })))
+    const mask = request.maskImage
+      ? await toFile(request.maskImage.buffer, basename(request.maskImage.path), { type: request.maskImage.mimeType })
+      : undefined
+    response = await client.images.edit({
+      ...common,
+      image: images.length === 1 ? images[0] : images,
+      ...(mask ? { mask } : {}),
+    }, { signal })
+  } else {
+    response = await client.images.generate(common, { signal })
+  }
   const image = response.data?.[0]
   if (image?.b64_json) {
     const mimeType = request.outputFormat === 'jpeg' ? 'image/jpeg' : request.outputFormat === 'webp' ? 'image/webp' : 'image/png'

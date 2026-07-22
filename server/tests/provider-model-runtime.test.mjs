@@ -116,3 +116,39 @@ test('provider refresh API returns the asynchronously refreshed configuration', 
   assert.equal(response.status, 200)
   assert.equal(JSON.parse(response.body).config.model, 'current-model')
 })
+
+test('visual-only providers ignore chat models returned by a shared relay catalog', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-provider-model-visual-scope-'))
+  const runtime = new AgentRuntimeService({
+    cwd: directory,
+    dataDir: directory,
+    providerModelDiscovery: { async discover() { return { count: 3, models: [
+      { id: 'gpt-image-2', name: 'gpt-image-2', kind: 'image' },
+      { id: 'grok-3-mini', name: 'grok-3-mini', kind: 'chat' },
+      { id: 'grok-imagine-video', name: 'grok-imagine-video', kind: 'video' },
+    ] } } },
+  })
+  t.after(async () => {
+    await runtime.dispose()
+    await rm(directory, { recursive: true, force: true })
+  })
+  await runtime.init()
+  await runtime.createProvider({
+    id: 'openai-image',
+    name: '小土包的生图',
+    api: 'openai-responses',
+    baseUrl: 'https://visual.example.test/v1',
+    apiKey: 'visual-key',
+    model: 'gpt-image-2',
+    modelKind: 'image',
+  })
+
+  const result = await runtime.discoverProviderModels('openai-image')
+  assert.equal(result.scope, 'visual')
+  assert.deepEqual(result.models.map((model) => model.id), ['gpt-image-2', 'grok-imagine-video'])
+  const provider = result.config.providers.find((item) => item.id === 'openai-image')
+  assert.equal(provider.type, 'visual')
+  assert.equal(provider.models.some((model) => model.kind === 'chat'), false)
+  assert.ok(provider.models.some((model) => model.id === 'gpt-image-2'))
+  assert.ok(provider.models.some((model) => model.id === 'grok-imagine-video'))
+})

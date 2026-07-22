@@ -70,6 +70,7 @@ test('visual-only providers save connection settings without replacing the defau
   assert.equal(after.defaultProvider, before.defaultProvider)
   assert.equal(after.defaultModel, before.defaultModel)
   const visual = saved.providers.find((provider) => provider.id === 'visual-relay')
+  assert.equal(visual.type, 'visual')
   assert.equal(visual.models.some((model) => model.kind === 'chat'), false)
   assert.ok(visual.models.some((model) => model.kind === 'image'))
 })

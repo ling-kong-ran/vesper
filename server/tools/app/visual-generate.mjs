@@ -6,9 +6,9 @@ export const manifest = {
   name: 'Visual Generate',
   category: '视觉',
   risk: '高风险',
-  description: '调用已配置的图像或视频模型生成视觉内容并保存到工作目录。',
+  description: '自动调用已配置的视觉 Provider 生成图片、编辑图片或生成视频，并保存到工作目录。',
   scope: '已配置的视觉 Provider；当前会话工作目录/generated/visuals',
-  capability: '消耗模型额度生成图片或视频，并写入生成文件',
+  capability: '自动汇总已启用视觉模型，调用生成图片、编辑图片或生成视频接口，并写入输出文件',
   source: 'app',
 }
 
@@ -19,9 +19,10 @@ export function createVisualGenerateTool({ cwd, visualGenerationService, onGener
     name: manifest.id,
     label: manifest.name,
     description: manifest.description,
-    promptSnippet: 'Generate an image or video with a configured visual model',
+    promptSnippet: 'Generate or edit an image, or generate a video, with configured visual models',
     promptGuidelines: [
       'Use generate_visual when the user asks to create an image, illustration, poster, concept art, animation, or video.',
+      'When the user asks to modify an existing image, pass its local path in sourceImages. The tool will automatically use an image editing interface.',
       'Before using generate_visual, include all important subject, style, composition, lighting, camera, motion, and text requirements in its prompt.',
       'generate_visual consumes external provider quota and writes the result under generated/visuals.',
     ],
@@ -29,6 +30,8 @@ export function createVisualGenerateTool({ cwd, visualGenerationService, onGener
       kind: Type.Union([Type.Literal('image'), Type.Literal('video')], { description: '生成图片或视频' }),
       prompt: Type.String({ minLength: 1, description: '完整的视觉生成提示词' }),
       model: Type.Optional(Type.String({ description: '可选模型 ID，支持 provider/model；留空自动选择' })),
+      sourceImages: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: 8, description: '需要编辑的本地图片路径；传入后自动调用图片编辑接口' })),
+      maskPath: Type.Optional(Type.String({ minLength: 1, description: '可选 PNG 蒙版路径，仅用于图片编辑' })),
       outputName: Type.Optional(Type.String({ description: '输出文件名，不需要扩展名' })),
       aspectRatio: optionalStringEnum(['1:1', '16:9', '9:16', '4:3', '3:4']),
       size: optionalStringEnum(['1024x1024', '1536x1024', '1024x1536', '1280x720', '720x1280', '1792x1024', '1024x1792']),
@@ -52,7 +55,7 @@ export function createVisualGenerateTool({ cwd, visualGenerationService, onGener
       return {
         content: [{
           type: 'text',
-          text: `${result.kind === 'video' ? '视频' : '图片'}已生成。\n文件：${result.path}\nProvider：${result.providerName}\n模型：${result.modelName}`,
+          text: `${result.operation === 'edit' ? '图片已编辑' : result.kind === 'video' ? '视频已生成' : '图片已生成'}。\n文件：${result.path}\nProvider：${result.providerName}\n模型：${result.modelName}`,
         }],
         details: result,
       }

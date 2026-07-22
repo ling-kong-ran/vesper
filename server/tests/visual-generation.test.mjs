@@ -40,6 +40,12 @@ test('OpenAI-compatible image and video models generate files', async () => {
       res.end(JSON.stringify({ created: Date.now(), data: [{ b64_json: PNG.toString('base64') }] }))
       return
     }
+    if (req.method === 'POST' && url.pathname === '/v1/images/edits') {
+      for await (const _chunk of req) void _chunk
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ created: Date.now(), data: [{ b64_json: PNG.toString('base64') }] }))
+      return
+    }
     if (req.method === 'POST' && url.pathname === '/v1/videos') {
       for await (const _chunk of req) void _chunk
       res.writeHead(200, { 'content-type': 'application/json' })
@@ -58,10 +64,16 @@ test('OpenAI-compatible image and video models generate files', async () => {
     config: { name: 'Fake Visual', api: 'openai-responses', baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: 'gpt-image-1', kind: 'image' }, { id: 'sora-2', kind: 'video' }] },
   })
   try {
+    const sourcePath = join(value.directory, 'source.png')
+    await writeFile(sourcePath, PNG)
     const image = await value.service.generate({ kind: 'image', prompt: 'test image', cwd: value.directory })
+    const edited = await value.service.generate({ kind: 'image', prompt: 'make the background blue', sourceImages: [sourcePath], cwd: value.directory })
     const video = await value.service.generate({ kind: 'video', prompt: 'test video', cwd: value.directory, durationSeconds: 4, size: '1280x720' })
     assert.equal((await readFile(image.path)).length, PNG.length)
+    assert.equal((await readFile(edited.path)).length, PNG.length)
+    assert.equal(edited.operation, 'edit')
     assert.equal((await readFile(video.path)).length, MP4.length)
+    assert.equal(video.mimeType, 'video/mp4')
     assert.ok(TOOL_CATALOG.some((tool) => tool.id === 'generate_visual'))
     assert.ok(!TOOL_CATALOG.some((tool) => tool.id === 'workspace_summary'))
     let indexedPath = ''
@@ -111,6 +123,60 @@ test('Google Gemini and Veo models generate files', async () => {
     const video = await value.service.generate({ kind: 'video', prompt: 'test video', cwd: value.directory, aspectRatio: '16:9' })
     assert.equal((await readFile(image.path)).length, PNG.length)
     assert.equal((await readFile(video.path)).length, MP4.length)
+  } finally {
+    server.close()
+    await value.cleanup()
+  }
+})
+
+test('Grok visual models use xAI image and video endpoints', async () => {
+  const requests = []
+  let port
+  const { server, port: listeningPort } = await listen(async (req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1')
+    requests.push(`${req.method} ${url.pathname}`)
+    if (req.method === 'POST' && url.pathname === '/v1/images/generations') {
+      for await (const _chunk of req) void _chunk
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] }))
+      return
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/images/edits') {
+      for await (const _chunk of req) void _chunk
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ data: [{ b64_json: PNG.toString('base64') }] }))
+      return
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/videos/generations') {
+      for await (const _chunk of req) void _chunk
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ request_id: 'grok-video', status: 'completed', video: { url: `http://127.0.0.1:${port}/grok.mp4` } }))
+      return
+    }
+    if (req.method === 'GET' && url.pathname === '/grok.mp4') {
+      res.writeHead(200, { 'content-type': 'video/mp4' })
+      res.end(MP4)
+      return
+    }
+    res.writeHead(404).end()
+  })
+  port = listeningPort
+  const value = await fixture({
+    id: 'grok-relay',
+    config: { name: 'Grok Relay', api: 'openai-responses', baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: 'grok-imagine-image', kind: 'image' }, { id: 'grok-imagine-video', kind: 'video' }] },
+  })
+  try {
+    const sourcePath = join(value.directory, 'grok-source.png')
+    await writeFile(sourcePath, PNG)
+    const image = await value.service.generate({ kind: 'image', prompt: 'test Grok image', cwd: value.directory })
+    const edited = await value.service.generate({ kind: 'image', prompt: 'edit Grok image', sourceImages: [sourcePath], cwd: value.directory })
+    const video = await value.service.generate({ kind: 'video', prompt: 'test Grok video', cwd: value.directory, durationSeconds: 4 })
+    assert.equal((await readFile(image.path)).length, PNG.length)
+    assert.equal((await readFile(edited.path)).length, PNG.length)
+    assert.equal((await readFile(video.path)).length, MP4.length)
+    assert.ok(requests.includes('POST /v1/images/edits'))
+    assert.ok(requests.includes('POST /v1/videos/generations'))
+    assert.equal(video.mimeType, 'video/mp4')
   } finally {
     server.close()
     await value.cleanup()

@@ -248,6 +248,12 @@ function sameBaseUrl(left, right) {
   return String(left || '').trim().replace(/\/+$/, '').toLowerCase() === String(right || '').trim().replace(/\/+$/, '').toLowerCase()
 }
 
+function inferredProviderType(providerConfig) {
+  const models = Array.isArray(providerConfig?.models) ? providerConfig.models : []
+  if (!models.length) return 'chat'
+  return models.every((model) => inferModelKind(model.id, model.kind) !== 'chat') ? 'visual' : 'chat'
+}
+
 export class AgentRuntimeService {
   constructor({ cwd, dataDir, providerDiscovery, providerModelDiscovery, browserAutomationDriver } = {}) {
     this.cwd = cwd
@@ -572,9 +578,10 @@ export class AgentRuntimeService {
   }
 
   async archiveAttachments(sessionId, sessionName, attachments = []) {
+    const archived = []
     for (const attachment of attachments) {
       try {
-        await this.createAsset({
+        const created = await this.createAsset({
           name: attachment.name,
           mimeType: attachment.mimeType,
           data: attachment.data,
@@ -583,10 +590,14 @@ export class AgentRuntimeService {
           sessionId,
           sessionName,
         })
+        const stored = this.assetIndex.assets.find((asset) => asset.id === created.id)
+        archived.push(stored ? { id: stored.id, path: stored.storagePath || stored.filePath || '' } : null)
       } catch {
         // Asset archival must not block the chat request.
+        archived.push(null)
       }
     }
+    return archived
   }
 
   async recordGeneratedFile(sessionId, value, filePath) {
@@ -1250,13 +1261,13 @@ export class AgentRuntimeService {
     this.permissions.attachEmitter(session.sessionId, emit)
     try {
       const safeAttachments = Array.isArray(attachments) ? attachments.slice(0, 8) : []
-      await this.archiveAttachments(session.sessionId, value.name, safeAttachments)
+      const archivedAttachments = await this.archiveAttachments(session.sessionId, value.name, safeAttachments)
       const images = []
       const contexts = []
       const memoryContext = await this.memory.relevantContext(message, value.cwd)
       const activeGoal = this.goals.get(session.sessionId)
       if (activeGoal?.status === 'active') contexts.push(goalContinuationPrompt(activeGoal))
-      for (const attachment of safeAttachments) {
+      for (const [attachmentIndex, attachment] of safeAttachments.entries()) {
         const name = safeAttachmentName(attachment.name)
         if (attachment.kind === 'image') {
           const data = String(attachment.data || '')
@@ -1264,7 +1275,8 @@ export class AgentRuntimeService {
           if (!mimeType.startsWith('image/') || !data) throw new Error(`${name} 不是有效图片`)
           if (data.length > 15_000_000) throw new Error(`${name} 图片数据过大`)
           images.push({ type: 'image', data, mimeType })
-          contexts.push(`[图片附件] ${name}`)
+          const localPath = archivedAttachments[attachmentIndex]?.path
+          contexts.push(`[图片附件] ${name}${localPath ? `\n本地路径：${localPath}\n如需编辑这张图片，把此路径传给 generate_visual 的 sourceImages。` : ''}`)
         } else if (attachment.kind === 'text') {
           const text = String(attachment.text || '').slice(0, MAX_EXTRACTED_CHARS)
           contexts.push(`[文本附件: ${name}]\n${text}${attachment.truncated ? '\n（内容已截断）' : ''}`)
@@ -1489,7 +1501,7 @@ export class AgentRuntimeService {
       providers: state.providers,
       connections: state.connections,
       scopes: state.scopes,
-      models: config.providers.filter((provider) => provider.enabled && provider.configured).flatMap((provider) => provider.models.filter((model) => model.kind === 'chat').map((model) => ({ provider: provider.id, model: model.id, label: `${provider.name} / ${model.name}` }))),
+      models: config.providers.filter((provider) => provider.type !== 'visual' && provider.enabled && provider.configured).flatMap((provider) => provider.models.filter((model) => model.kind === 'chat').map((model) => ({ provider: provider.id, model: model.id, label: `${provider.name} / ${model.name}` }))),
     }
   }
 
@@ -1552,7 +1564,7 @@ export class AgentRuntimeService {
     const notificationSettings = await this.notificationSettings.getState()
     return {
       ...this.schedules.getState(),
-      models: config.providers.filter((provider) => provider.enabled && provider.configured).flatMap((provider) => provider.models.filter((model) => model.kind === 'chat').map((model) => ({ provider: provider.id, model: model.id, label: `${provider.name} / ${model.name}` }))),
+      models: config.providers.filter((provider) => provider.type !== 'visual' && provider.enabled && provider.configured).flatMap((provider) => provider.models.filter((model) => model.kind === 'chat').map((model) => ({ provider: provider.id, model: model.id, label: `${provider.name} / ${model.name}` }))),
       notificationTargets: {
         browser: { enabled: notificationSettings.browser.enabled },
         feishu: { enabled: Boolean(notificationSettings.connections.feishu?.enabled) },
@@ -1586,7 +1598,7 @@ export class AgentRuntimeService {
     return {
       ...this.workflows.getState(),
       cwd: this.cwd,
-      models: config.providers.filter((provider) => provider.enabled && provider.configured).flatMap((provider) => provider.models.filter((model) => model.kind === 'chat').map((model) => ({ provider: provider.id, model: model.id, label: `${provider.name} / ${model.name}` }))),
+      models: config.providers.filter((provider) => provider.type !== 'visual' && provider.enabled && provider.configured).flatMap((provider) => provider.models.filter((model) => model.kind === 'chat').map((model) => ({ provider: provider.id, model: model.id, label: `${provider.name} / ${model.name}` }))),
       notificationTargets: {
         browser: { enabled: notificationSettings.browser.enabled },
         feishu: { enabled: Boolean(notificationSettings.connections.feishu?.enabled) },
@@ -1775,31 +1787,35 @@ export class AgentRuntimeService {
       const runtimeProvider = runtimeProviders.find((item) => item.id === id)
       const overlay = modelsJson.providers?.[id] || {}
       const overlayModels = Array.isArray(overlay.models) ? overlay.models : []
+      const type = appConfig.providerTypes?.[id] || inferredProviderType(overlay)
+      const models = this.modelRuntime.getModels(id).map((model) => {
+        const definition = overlayModels.find((item) => item.id === model.id)
+        return {
+          id: model.id,
+          name: model.name || model.id,
+          kind: inferModelKind(model.id, definition?.kind || model.vesperKind),
+          reasoning: Boolean(model.reasoning),
+          contextWindow: model.contextWindow || null,
+          baseUrl: model.baseUrl || '',
+          baseUrlOverride: definition?.baseUrl || '',
+        }
+      }).filter((model) => type !== 'visual' || model.kind !== 'chat')
+        .sort((a, b) => modelRank(id, b) - modelRank(id, a) || a.name.localeCompare(b.name))
       return {
         id,
         name: PROVIDER_LABELS[id] || overlay.name || runtimeProvider?.name || id,
+        type,
         configured: Boolean(credentials[id]) || this.modelRuntime.hasConfiguredAuth(id),
         enabled: !disabledProviders.has(id),
         custom: !KNOWN_PROVIDERS.includes(id),
         api: overlay.api || this.modelRuntime.getModels(id)[0]?.api || 'openai-responses',
         baseUrl: overlay.baseUrl || PROVIDER_DEFAULT_BASE_URLS[id] || '',
         organization: overlay.headers?.['OpenAI-Organization'] || '',
-        models: this.modelRuntime.getModels(id).map((model) => {
-          const definition = overlayModels.find((item) => item.id === model.id)
-          return {
-            id: model.id,
-            name: model.name || model.id,
-            kind: inferModelKind(model.id, definition?.kind || model.vesperKind),
-            reasoning: Boolean(model.reasoning),
-            contextWindow: model.contextWindow || null,
-            baseUrl: model.baseUrl || '',
-            baseUrlOverride: definition?.baseUrl || '',
-          }
-        }).sort((a, b) => modelRank(id, b) - modelRank(id, a) || a.name.localeCompare(b.name)),
+        models,
       }
     }).filter((provider) => provider.models.length > 0 || KNOWN_PROVIDERS.includes(provider.id))
 
-    const hasChatModel = (provider) => provider.models.some((model) => model.kind === 'chat')
+    const hasChatModel = (provider) => provider.type !== 'visual' && provider.models.some((model) => model.kind === 'chat')
     const selectedProviderEntry = providers.find((item) => item.id === settings.defaultProvider && item.enabled && item.configured && hasChatModel(item))
       || providers.find((item) => item.enabled && item.configured && hasChatModel(item))
       || providers.find((item) => item.enabled && hasChatModel(item))
@@ -1822,6 +1838,10 @@ export class AgentRuntimeService {
     const model = String(input.model || '').trim()
     if (!provider) throw new Error('Provider 不能为空。')
     const currentAppConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
+    const existingOverlay = await readJson(this.modelsPath, { providers: {} })
+    const providerType = input.providerType === 'visual' || input.providerType === 'chat'
+      ? input.providerType
+      : currentAppConfig.providerTypes?.[provider] || inferredProviderType(existingOverlay.providers?.[provider] || {})
     if ((currentAppConfig.disabledProviders || []).includes(provider)) throw new Error('请先启用该 Provider，再将其设为默认配置。')
 
     const credentials = await readJson(this.authPath, {})
@@ -1831,7 +1851,7 @@ export class AgentRuntimeService {
     }
     await writeJsonAtomic(this.authPath, credentials)
 
-    const modelsJson = await readJson(this.modelsPath, { providers: {} })
+    const modelsJson = existingOverlay
     modelsJson.providers ||= {}
     const providerOverlay = { ...(modelsJson.providers[provider] || {}) }
     const baseUrl = String(input.baseUrl || '').trim()
@@ -1886,7 +1906,7 @@ export class AgentRuntimeService {
     else delete modelsJson.providers[provider]
     await writeJsonAtomic(this.modelsPath, modelsJson)
 
-    if (model) this.settingsManager.setDefaultModelAndProvider(provider, model)
+    if (providerType !== 'visual' && model) this.settingsManager.setDefaultModelAndProvider(provider, model)
     this.settingsManager.setDefaultThinkingLevel(input.thinkingLevel || 'medium')
     await this.settingsManager.flush()
     const errors = this.settingsManager.drainErrors()
@@ -1898,6 +1918,7 @@ export class AgentRuntimeService {
       toolMode: requestedToolMode,
       enabledTools: requestedToolMode === 'custom' ? toolsFromConfig(currentAppConfig) : TOOL_PRESETS[requestedToolMode],
       disabledProviders: [...new Set(currentAppConfig.disabledProviders || [])],
+      providerTypes: { ...(currentAppConfig.providerTypes || {}), [provider]: providerType },
     })
     await this.disposeSessions()
     await this.reloadModelRuntime()
@@ -1917,12 +1938,25 @@ export class AgentRuntimeService {
     const settings = this.settingsManager.getGlobalSettings()
     if (!enabled && settings.defaultProvider === provider) {
       const credentials = await readJson(this.authPath, {})
-      const alternative = this.modelRuntime.getProviders().find((item) => item.id !== provider && !disabled.has(item.id) && credentials[item.id] && this.modelRuntime.getModels(item.id).length)
+      const providerTypes = appConfig.providerTypes || {}
+      const modelsJson = await readJson(this.modelsPath, { providers: {} })
+      const alternative = this.modelRuntime.getProviders().find((item) => {
+        const type = providerTypes[item.id] || inferredProviderType(modelsJson.providers?.[item.id] || {})
+        return item.id !== provider
+          && type !== 'visual'
+          && !disabled.has(item.id)
+          && credentials[item.id]
+          && this.modelRuntime.getModels(item.id).some((model) => inferModelKind(model.id, model.vesperKind) === 'chat')
+      })
       if (!alternative) throw new Error('至少需要保留一个已配置并启用的 Provider。')
-      this.settingsManager.setDefaultModelAndProvider(alternative.id, this.modelRuntime.getModels(alternative.id)[0].id)
+      const alternativeModel = this.modelRuntime.getModels(alternative.id).find((model) => inferModelKind(model.id, model.vesperKind) === 'chat')
+      this.settingsManager.setDefaultModelAndProvider(alternative.id, alternativeModel.id)
       await this.settingsManager.flush()
     }
-    await writeJsonAtomic(this.appConfigPath, { ...appConfig, disabledProviders: [...disabled] })
+    await writeJsonAtomic(this.appConfigPath, {
+      ...appConfig,
+      disabledProviders: [...disabled],
+    })
     return this.getConfig()
   }
 
@@ -1932,7 +1966,9 @@ export class AgentRuntimeService {
     const api = String(input.api || 'openai-responses').trim()
     const baseUrl = String(input.baseUrl || '').trim()
     const modelId = String(input.model || '').trim()
+    const providerType = input.providerType === 'visual' || inferModelKind(modelId, input.modelKind) !== 'chat' ? 'visual' : 'chat'
     if (!id || !name || !baseUrl || !modelId) throw new Error('名称、Provider ID、Base URL 和初始模型不能为空。')
+    if (providerType === 'visual' && inferModelKind(modelId, input.modelKind) === 'chat') throw new Error('视觉 Provider 的初始模型必须是图像或视频模型。')
     if (this.modelRuntime.getProviders().some((item) => item.id === id) || KNOWN_PROVIDERS.includes(id)) throw new Error('Provider ID 已存在，请使用不同的连接标识。')
 
     const modelsJson = await readJson(this.modelsPath, { providers: {} })
@@ -1964,7 +2000,11 @@ export class AgentRuntimeService {
     const disabled = new Set(appConfig.disabledProviders || [])
     if (input.enabled === false) disabled.add(id)
     else disabled.delete(id)
-    await writeJsonAtomic(this.appConfigPath, { ...appConfig, disabledProviders: [...disabled] })
+    await writeJsonAtomic(this.appConfigPath, {
+      ...appConfig,
+      disabledProviders: [...disabled],
+      providerTypes: { ...(appConfig.providerTypes || {}), [id]: providerType },
+    })
     await this.disposeSessions()
     await this.reloadModelRuntime()
     return { ...(await this.getConfig()), createdProviderId: id }
@@ -2025,9 +2065,10 @@ export class AgentRuntimeService {
   async discoverProviderModels(providerId, input = {}) {
     const provider = String(providerId || '').trim()
     if (!this.modelRuntime.getProviders().some((item) => item.id === provider) && !KNOWN_PROVIDERS.includes(provider)) throw new Error('Provider 不存在。')
-    const [modelsJson, credentials] = await Promise.all([
+    const [modelsJson, credentials, appConfig] = await Promise.all([
       readJson(this.modelsPath, { providers: {} }),
       readJson(this.authPath, {}),
+      readJson(this.appConfigPath, { providerTypes: {} }),
     ])
     const overlay = modelsJson.providers?.[provider] || {}
     const runtimeModel = this.modelRuntime.getModels(provider)[0]
@@ -2036,13 +2077,19 @@ export class AgentRuntimeService {
     const baseUrl = String(input.baseUrl || configuredBaseUrl || '').trim()
     if (!baseUrl) throw new Error('请先配置 Provider Base URL。')
     const apiKey = String(input.apiKey || '').trim() || configuredProviderSecret(credentials[provider], overlay)
-    const result = await this.providerModelDiscovery.discover({
+    const discovered = await this.providerModelDiscovery.discover({
       api,
       baseUrl,
       apiKey,
       organization: String(input.organization || overlay.headers?.['OpenAI-Organization'] || '').trim(),
       headers: overlay.headers,
     })
+    const scope = input.providerType === 'visual' || input.providerType === 'chat'
+      ? input.providerType
+      : appConfig.providerTypes?.[provider] || inferredProviderType(overlay)
+    const models = scope === 'visual' ? discovered.models.filter((model) => model.kind !== 'chat') : discovered.models
+    if (!models.length) throw new Error(scope === 'visual' ? 'Provider 没有返回可用的图像或视频模型。' : 'Provider 没有返回可用的模型。')
+    const result = { ...discovered, count: models.length, models, scope }
     const previousModelIds = new Set(this.modelRuntime.getModels(provider).map((model) => model.id))
     let sync = { addedModelIds: [], removedModelIds: [] }
     const synchronized = sameBaseUrl(baseUrl, configuredBaseUrl)
@@ -2072,9 +2119,13 @@ export class AgentRuntimeService {
     const models = Array.isArray(inputs) ? inputs : []
     if (!models.length) throw new Error('请至少选择一个模型。')
     if (models.length > 250) throw new Error('单次最多添加 250 个模型。')
-    const modelsJson = await readJson(this.modelsPath, { providers: {} })
+    const [modelsJson, appConfig] = await Promise.all([
+      readJson(this.modelsPath, { providers: {} }),
+      readJson(this.appConfigPath, { providerTypes: {} }),
+    ])
     modelsJson.providers ||= {}
     const overlay = { ...(modelsJson.providers[provider] || {}) }
+    const providerType = appConfig.providerTypes?.[provider] || inferredProviderType(overlay)
     overlay.models = Array.isArray(overlay.models) ? [...overlay.models] : []
     const existing = new Set([...overlay.models.map((item) => item.id), ...this.modelRuntime.getModels(provider).map((item) => item.id)])
     const addedModelIds = []
@@ -2082,6 +2133,8 @@ export class AgentRuntimeService {
       const modelId = String(input?.id || '').trim()
       if (!modelId) throw new Error('模型 ID 不能为空。')
       if (modelId.length > 240) throw new Error('模型 ID 过长。')
+      const modelKind = inferModelKind(modelId, input.kind)
+      if (providerType === 'visual' && modelKind === 'chat') throw new Error('视觉 Provider 只能添加图像或视频模型。')
       if (existing.has(modelId)) {
         if (!skipExisting) throw new Error('该模型已经存在。')
         continue
@@ -2090,7 +2143,7 @@ export class AgentRuntimeService {
         id: modelId,
         name: String(input.name || modelId).trim() || modelId,
         api: String(input.api || overlay.api || 'openai-responses'),
-        kind: inferModelKind(modelId, input.kind),
+        kind: modelKind,
         ...(String(input.baseUrl || '').trim() ? { baseUrl: String(input.baseUrl).trim() } : {}),
         reasoning: input.reasoning !== false,
         input: ['text', 'image'],
@@ -2126,13 +2179,22 @@ export class AgentRuntimeService {
     await writeJsonAtomic(this.authPath, credentials)
     const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
     appConfig.disabledProviders = (appConfig.disabledProviders || []).filter((item) => item !== provider)
+    if (appConfig.providerTypes) delete appConfig.providerTypes[provider]
     await writeJsonAtomic(this.appConfigPath, appConfig)
     await this.providerModelCatalog.remove(provider)
     const settings = this.settingsManager.getGlobalSettings()
     if (settings.defaultProvider === provider) {
-      const alternative = this.modelRuntime.getProviders().find((item) => item.id !== provider && credentials[item.id] && this.modelRuntime.getModels(item.id).length)
+      const providerTypes = appConfig.providerTypes || {}
+      const alternative = this.modelRuntime.getProviders().find((item) => {
+        const type = providerTypes[item.id] || inferredProviderType(modelsJson.providers?.[item.id] || {})
+        return item.id !== provider
+          && type !== 'visual'
+          && credentials[item.id]
+          && this.modelRuntime.getModels(item.id).some((model) => inferModelKind(model.id, model.vesperKind) === 'chat')
+      })
       if (alternative) {
-        this.settingsManager.setDefaultModelAndProvider(alternative.id, this.modelRuntime.getModels(alternative.id)[0].id)
+        const alternativeModel = this.modelRuntime.getModels(alternative.id).find((model) => inferModelKind(model.id, model.vesperKind) === 'chat')
+        this.settingsManager.setDefaultModelAndProvider(alternative.id, alternativeModel.id)
         await this.settingsManager.flush()
       }
     }

@@ -30,6 +30,7 @@ function driverFor(model) {
   if (model.visualApi) return model.visualApi
   const value = `${model.providerId} ${model.api} ${model.baseUrl} ${model.id}`.toLowerCase()
   if (value.includes('google') || value.includes('generativelanguage.googleapis.com')) return model.kind === 'video' ? 'google-video' : 'google-image'
+  if (value.includes('xai') || value.includes('x.ai') || value.includes('grok')) return model.kind === 'video' ? 'xai-video' : 'xai-image'
   if (value.includes('openrouter')) return model.kind === 'video' ? 'openai-video' : 'openrouter-image'
   return model.kind === 'video' ? 'openai-video' : 'openai-image'
 }
