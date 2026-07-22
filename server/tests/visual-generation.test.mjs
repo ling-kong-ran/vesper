@@ -150,7 +150,7 @@ test('Grok visual models use xAI image and video endpoints', async () => {
     if (req.method === 'POST' && url.pathname === '/v1/videos/generations') {
       for await (const _chunk of req) void _chunk
       res.writeHead(200, { 'content-type': 'application/json' })
-      res.end(JSON.stringify({ request_id: 'grok-video', status: 'completed', video: { url: `http://127.0.0.1:${port}/grok.mp4` } }))
+      res.end(JSON.stringify({ task_id: 'grok-video', status: 'succeeded', url: `http://127.0.0.1:${port}/grok.mp4` }))
       return
     }
     if (req.method === 'GET' && url.pathname === '/grok.mp4') {
@@ -177,6 +177,81 @@ test('Grok visual models use xAI image and video endpoints', async () => {
     assert.ok(requests.includes('POST /v1/images/edits'))
     assert.ok(requests.includes('POST /v1/videos/generations'))
     assert.equal(video.mimeType, 'video/mp4')
+  } finally {
+    server.close()
+    await value.cleanup()
+  }
+})
+
+test('New API relays are detected automatically and use their video task protocol', async () => {
+  const requests = []
+  const { server, port } = await listen(async (req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1')
+    requests.push(`${req.method} ${url.pathname}`)
+    if (req.method === 'GET' && url.pathname === '/') {
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.end('<title>New API</title><meta name="description" content="Unified AI API gateway and admin dashboard.">')
+      return
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/videos') {
+      for await (const _chunk of req) void _chunk
+      res.writeHead(200, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ id: 'new-api-video', object: 'video', status: 'completed' }))
+      return
+    }
+    if (req.method === 'GET' && url.pathname === '/v1/videos/new-api-video/content') {
+      res.writeHead(200, { 'content-type': 'video/mp4' })
+      res.end(MP4)
+      return
+    }
+    res.writeHead(404).end()
+  })
+  const value = await fixture({
+    id: 'new-api-relay',
+    config: { name: 'New API Relay', api: 'openai-responses', baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: 'grok-imagine-video', kind: 'video' }] },
+  })
+  try {
+    const video = await value.service.generate({ kind: 'video', prompt: 'test New API video', cwd: value.directory, durationSeconds: 4, aspectRatio: '16:9' })
+    assert.equal((await readFile(video.path)).length, MP4.length)
+    assert.equal(video.mimeType, 'video/mp4')
+    assert.ok(requests.includes('GET /'))
+    assert.ok(requests.includes('POST /v1/videos'))
+    assert.ok(requests.includes('GET /v1/videos/new-api-video/content'))
+    assert.ok(!requests.includes('POST /v1/videos/generations'))
+  } finally {
+    server.close()
+    await value.cleanup()
+  }
+})
+
+test('New API channel conversion failures are exposed without retrying another video route', async () => {
+  const requests = []
+  const { server, port } = await listen(async (req, res) => {
+    const url = new URL(req.url, 'http://127.0.0.1')
+    requests.push(`${req.method} ${url.pathname}`)
+    if (req.method === 'GET' && url.pathname === '/') {
+      res.writeHead(200, { 'content-type': 'text/html' })
+      res.end('<title>New API</title>')
+      return
+    }
+    if (req.method === 'POST' && url.pathname === '/v1/videos') {
+      for await (const _chunk of req) void _chunk
+      res.writeHead(400, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ message: 'Failed to deserialize the JSON body into the target type: duplicate field `duration`' }))
+      return
+    }
+    res.writeHead(404).end()
+  })
+  const value = await fixture({
+    id: 'new-api-broken-relay',
+    config: { name: 'New API Relay', api: 'openai-responses', baseUrl: `http://127.0.0.1:${port}/v1`, models: [{ id: 'grok-imagine-video', kind: 'video' }] },
+  })
+  try {
+    await assert.rejects(
+      value.service.generate({ kind: 'video', prompt: 'test broken relay', cwd: value.directory, durationSeconds: 4 }),
+      /New API 视频渠道转发失败.*duplicate field `duration`.*渠道映射或协议适配/,
+    )
+    assert.deepEqual(requests, ['GET /', 'POST /v1/videos'])
   } finally {
     server.close()
     await value.cleanup()

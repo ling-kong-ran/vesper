@@ -108,7 +108,8 @@ function videoStatus(value) {
 }
 
 async function createVideo(root, model, request, signal) {
-  const body = {
+  const size = String(request.size || (request.aspectRatio === '9:16' ? '720x1280' : '1280x720'))
+  const xaiBody = {
     model: model.id,
     prompt: request.prompt,
     ...(request.durationSeconds ? { duration: request.durationSeconds } : {}),
@@ -116,14 +117,22 @@ async function createVideo(root, model, request, signal) {
     ...(request.resolution ? { resolution: request.resolution } : {}),
   }
   try {
-    return await jsonRequest(`${root}/videos/generations`, model, { method: 'POST', body: JSON.stringify(body) }, signal)
+    const task = await jsonRequest(`${root}/videos/generations`, model, { method: 'POST', body: JSON.stringify(xaiBody) }, signal)
+    return { ...task, _vesperEndpoint: 'videos/generations' }
   } catch (error) {
     if (![404, 405].includes(error.status)) throw error
-    return jsonRequest(`${root}/videos`, model, { method: 'POST', body: JSON.stringify({ ...body, seconds: request.durationSeconds ? String(request.durationSeconds) : undefined, size: request.size }) }, signal)
   }
+  const task = await jsonRequest(`${root}/videos`, model, {
+    method: 'POST',
+    body: JSON.stringify({ model: model.id, prompt: request.prompt, seconds: request.durationSeconds ? String(request.durationSeconds) : undefined, size }),
+  }, signal)
+  return { ...task, _vesperEndpoint: 'videos' }
 }
 
-async function getVideo(root, id, model, signal) {
+async function getVideo(root, id, endpoint, model, signal) {
+  if (endpoint === 'videos/generations') {
+    return jsonRequest(`${root}/videos/generations/${encodeURIComponent(id)}`, model, { method: 'GET' }, signal)
+  }
   try {
     return await jsonRequest(`${root}/videos/${encodeURIComponent(id)}`, model, { method: 'GET' }, signal)
   } catch (error) {
@@ -135,7 +144,8 @@ async function getVideo(root, id, model, signal) {
 async function generateVideo(model, request, signal, onProgress) {
   const root = model.baseUrl.replace(/\/+$/, '')
   let task = await createVideo(root, model, request, signal)
-  const id = task.request_id || task.id || task.data?.id
+  const id = task.task_id || task.request_id || task.id || task.data?.task_id || task.data?.id
+  const endpoint = task._vesperEndpoint
   let url = videoUrl(task)
   while (!url && id) {
     const status = videoStatus(task)
@@ -146,7 +156,7 @@ async function generateVideo(model, request, signal, onProgress) {
       const timer = setTimeout(resolve, 5000)
       signal?.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason || new Error('已取消')) }, { once: true })
     })
-    task = await getVideo(root, id, model, signal)
+    task = await getVideo(root, id, endpoint, model, signal)
     url = videoUrl(task)
   }
   if (url) {
