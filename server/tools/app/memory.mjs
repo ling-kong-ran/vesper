@@ -58,10 +58,12 @@ export function createMemoryRememberTool({ cwd, memoryRuntime }) {
       'Use memory_remember when the user explicitly asks you to remember something, or when a stable project decision will matter in future sessions.',
       'Never store API keys, passwords, access tokens, private credentials, or transient conversational details.',
       'Use global scope only for preferences that apply across projects; use project scope for codebase-specific facts and decisions.',
+      'Provide a stable topic key and reuse it when a newer fact replaces an older fact on the same subject.',
     ],
     parameters: Type.Object({
       title: Type.String({ minLength: 1, description: '简短、可辨识的星辰名称' }),
       content: Type.String({ minLength: 1, description: '独立可理解、未来可复用的星忆内容' }),
+      topic: Type.Optional(Type.String({ minLength: 1, maxLength: 180, description: '稳定的主题键；更新同一事实时复用，例如 project.brand_colors' })),
       type: Type.Optional(Type.Union([
         Type.Literal('preference'), Type.Literal('decision'), Type.Literal('fact'), Type.Literal('risk'), Type.Literal('task'),
       ])),

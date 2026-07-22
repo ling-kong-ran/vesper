@@ -32,7 +32,9 @@ export async function extractConversationMemories({ modelRuntime, model, user, a
       '允许：用户长期偏好、明确约束、项目架构与技术决策、已完成的重要改动、反复出现的风险。',
       '禁止：临时问题、寒暄、推测、完整对话复述、API Key、密码、令牌或其他秘密。',
       '只输出 JSON 数组，最多 3 项；没有值得记忆的信息时输出 []。',
-      '每项格式：{"title":"简短标题","content":"独立可理解的事实","type":"preference|decision|fact|risk|task","scope":"global|project","importance":0.1到1}',
+      '为每项提供稳定的 topic，用于识别同一主题的新旧事实，例如 project.brand_colors、user.response_style；同一主题发生变化时必须复用原 topic。',
+      '新事实取代旧事实时，在 content 中明确写出当前有效结论，避免同时保留互相冲突的表述。',
+      '每项格式：{"title":"简短标题","content":"独立可理解的当前事实","topic":"稳定的主题键","type":"preference|decision|fact|risk|task","scope":"global|project","importance":0.1到1}',
     ].join('\n'),
     messages: [{
       role: 'user',
@@ -51,6 +53,7 @@ export async function extractConversationMemories({ modelRuntime, model, user, a
     return [{
       title,
       content,
+      topic: String(item?.topic || '').trim().slice(0, 180),
       type: ['preference', 'decision', 'fact', 'risk', 'task'].includes(item.type) ? item.type : 'fact',
       scope: item.scope === 'global' ? 'global' : 'project',
       importance: Math.min(1, Math.max(0.1, Number(item.importance) || 0.5)),

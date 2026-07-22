@@ -9,7 +9,7 @@
 
 # Vesper
 
-<em>Turn ambitious ideas into unstoppable action.</em>
+<em>A local-first AI agent workspace for running independent sessions in parallel.</em>
 
 <!-- BADGES -->
 <em>Built with the tools and technologies:</em>
@@ -30,6 +30,7 @@
 ## ☀️ Table of Contents
 
 - [🌞 Overview](#-overview)
+- [🎬 Product Demo](#-product-demo)
 - [🔥 Features](#-features)
 - [🌅 Project Structure](#-project-structure)
 - [🚀 Getting Started](#-getting-started)
@@ -44,12 +45,13 @@
 
 ## 🌞 Overview
 
-Vesper is a full-stack workspace for building, extending, and automating AI agent workflows. It combines persistent context, external tools, scheduled execution, and multi-channel integrations in a unified developer-friendly interface.
+Vesper is a local-first AI agent workspace that runs coding agents across multiple independent sessions in parallel, with unified management for models, tools, memory, workflows, schedules, and two-way channels.
 
 **Why Vesper?**
 
 This project simplifies the orchestration of capable AI agents while keeping integrations, automation, and data under control. The core features include:
 
+- **🧩 Parallel Sessions:** Give every session its own model, permissions, context, and working directory, then monitor and operate multiple agents together in grid mode.
 - **🟣 Agent Runtime:** Run context-aware coding agents with configurable models, tools, documents, and persistent sessions.
 - **🔵 MCP Integration:** Discover and safely connect external Model Context Protocol servers and tools.
 - **🟢 Workflow Automation:** Design and monitor workflows with prompts, conditions, approvals, parallel paths, and notifications.
@@ -59,17 +61,26 @@ This project simplifies the orchestration of capable AI agents while keeping int
 
 ---
 
+## 🎬 Product Demo
+
+[![Vesper product demo](./docs/show.gif)](./docs/show.html)
+
+Click the animation to open the [interactive product demo](./docs/show.html). It starts with multiple independent Agent sessions running in parallel, then tours Conversations, Assets, Channels, Schedules, Plugins, Memory, MCP, Skills, Workflows, plus the Models, Notifications, Interface, and Updates settings. Every frame comes from the current React application and supports offline playback, pause, previous/next navigation, and keyboard controls.
+
+---
+
 ## 🔥 Features
 
 |      | Component | Details |
 | :--- | :--- | :--- |
-| 💬 | **Conversations** | Persistent sessions, paginated history, Markdown rendering, file and image attachments, model switching, workspace selection, and tiled multi-session views. |
+| 💬 | **Multi-session Chat** | Run multiple independent Agent sessions in parallel, each with its own model, permissions, context, and working directory, in grid or focus mode. |
 | 🧠 | **Agent Runtime** | Pi Coding Agent integration with configurable permissions, structured tool activity, goals, reusable skills, and isolated subagent delegation. |
 | 🔌 | **Tools & MCP** | Built-in and application tool registry, plugin controls, MCP service management, and credential-safe structured configuration. |
 | 🌌 | **Memory** | Lightweight local SQLite memory scoped by workspace, with search, manual capture, editing, and conversation-derived memories. |
 | 🎨 | **Multimodal** | Image, document, and code analysis plus visual generation through configured OpenAI-compatible, Gemini, Imagen, Veo, or xAI models. |
 | ⚡ | **Automation** | Recurring schedules and visual workflows with model selection, retries, timeouts, failure policies, execution history, and notifications. |
 | 📡 | **Channels** | Two-way Feishu and personal Weixin connections with per-channel reply models, workspace routing, attachments, and reusable notification templates. |
+| 🖥️ | **Desktop App** | Native Electron window, single-instance runtime, branded icons, in-app release notes, and GitHub Releases auto-update. |
 | 🛡️ | **Security** | Per-session permission modes, approval gates for sensitive actions, server-side secret redaction, and user data stored outside the repository. |
 
 ---
