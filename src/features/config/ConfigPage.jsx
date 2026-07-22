@@ -89,7 +89,7 @@ export function ConfigPage({ notify, registerPrimaryAction, section, setSection,
     const source = provider.source === 'codex-config' ? 'Codex config.toml' : 'Claude settings.json'
     const approved = await requestConfirm({
       title: t('加载 Provider 配置'),
-      message: t('将把 {source} 中的 Provider、地址、模型和可用认证加载到 Vesper。不会覆盖 Vesper 已有配置或认证。', { source }),
+      message: t('从 {source} 加载此 Provider 配置？', { source }),
       confirmLabel: t('加载配置'),
     })
     if (!approved) return
@@ -225,12 +225,11 @@ function discoverySourceLabel(provider) {
 function discoveryAuthLabel(provider, t) {
   if (provider.authType === 'environment') return t('密钥变量：{name}', { name: provider.authVariable })
   if (provider.authType === 'bearer' || provider.authType === 'api_key') return t('配置中包含认证')
-  if (provider.authType === 'external-login') return t('登录认证未导入')
+  if (provider.authType === 'external-login') return t('需重新认证')
   return t('配置中未包含认证')
 }
 
 function discoveryWarningLabel(code, t) {
-  if (code === 'login_auth_not_imported') return t('配置引用的 CLI 登录认证不会导入')
   if (code === 'multiple_auth_values') return t('检测到多个认证字段，将优先使用授权字段')
   if (code === 'invalid_url') return t('Provider 地址无效')
   if (code === 'unsupported_api') return t('配置中的 API 协议暂不支持')
@@ -262,8 +261,7 @@ function DiscoveredProvidersPanel({ discovery, discovering, error, importing, on
         </div>
       })}
     </div> : <div className="provider-discovery-empty"><Server size={15} />{t('未检测到可导入的 Codex 或 Claude Provider 配置。')}</div>}
-    {(error || errors.length > 0 || providers.some((provider) => provider.warnings?.length)) && <div className="provider-discovery-errors" aria-live="polite">{error && <span><AlertTriangle size={13} />{error}</span>}{errors.map((item, index) => <span key={`${item.source}-${item.code}-${index}`}><AlertTriangle size={13} />{discoverySourceLabel(item)} · {errorLabel(item)}</span>)}{providers.flatMap((provider) => (provider.warnings || []).map((warning, index) => <span key={`${provider.id}-${warning.code}-${index}`}><AlertTriangle size={13} />{discoverySourceLabel(provider)} · {discoveryWarningLabel(warning.code, t)}</span>))}</div>}
-    <small className="provider-discovery-security"><ShieldCheck size={12} />{t('配置内容仅由服务端读取；认证值不会发送到浏览器，也不会覆盖 Vesper 已有配置。')}</small>
+    {(error || errors.length > 0 || providers.some((provider) => provider.warnings?.some((warning) => warning.code !== 'login_auth_not_imported'))) && <div className="provider-discovery-errors" aria-live="polite">{error && <span><AlertTriangle size={13} />{error}</span>}{errors.map((item, index) => <span key={`${item.source}-${item.code}-${index}`}><AlertTriangle size={13} />{discoverySourceLabel(item)} · {errorLabel(item)}</span>)}{providers.flatMap((provider) => (provider.warnings || []).filter((warning) => warning.code !== 'login_auth_not_imported').map((warning, index) => <span key={`${provider.id}-${warning.code}-${index}`}><AlertTriangle size={13} />{discoverySourceLabel(provider)} · {discoveryWarningLabel(warning.code, t)}</span>))}</div>}
   </Panel>
 }
 

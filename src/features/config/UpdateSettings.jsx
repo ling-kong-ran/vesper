@@ -75,7 +75,7 @@ export function UpdateSettings({ notify, update }) {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex min-w-0 items-start gap-3">
           <span className="language-settings-icon"><PackageCheck size={19} /></span>
-          <span className="min-w-0"><strong className="block text-[16px]">{t('Vesper 应用更新')}</strong><small className="mt-1 block text-[13px] leading-5 text-[var(--muted)]">{t(desktop ? '自动检查 GitHub Releases，并在应用内展示版本和更新日志。' : '自动比较当前 Web 源码与 GitHub main 分支，并展示尚未同步的提交。')}</small></span>
+          <span className="min-w-0"><strong className="block text-[16px]">{t('Vesper 应用更新')}</strong></span>
         </div>
         <Badge tone={statusMeta[1]}>{statusMeta[0]}</Badge>
       </div>

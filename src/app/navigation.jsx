@@ -22,7 +22,7 @@ export const NAV_GROUPS = [
 export const NAV_ITEMS = NAV_GROUPS.flatMap(([, items]) => items)
 
 export const PAGE_META = {
-  chat: ['对话', '多 session 并行工作台'],
+  chat: ['对话', '多 session 并行'],
   chatHistory: ['历史会话', '浏览、搜索与管理全部对话记录'],
   assets: ['资产', '历史会话产物统一归档'],
   channels: ['渠道', '双向协作渠道与会话管理'],

@@ -328,7 +328,7 @@ function App() {
   }, [showSystemNotification])
 
   const activeMeta = page === 'chat' && chatMode === 'focus'
-    ? [t('对话'), t('聚集模式 · 单会话工作台')]
+    ? [t('对话'), '']
     : pageMeta[page]
 
   if (!startupReady) return <div className="app-startup"><BrandLogo size={30} className="startup-logo" /><strong>{t('正在唤醒 Vesper…')}</strong></div>

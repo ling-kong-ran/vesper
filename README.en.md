@@ -9,7 +9,7 @@
 
 # Vesper
 
-<em>A local-first AI agent workspace for running independent sessions in parallel.</em>
+<em>An AI agent application for running independent sessions in parallel.</em>
 
 <!-- BADGES -->
 <em>Built with the tools and technologies:</em>
@@ -45,27 +45,13 @@
 
 ## 🌞 Overview
 
-Vesper is a local-first AI agent workspace that runs coding agents across multiple independent sessions in parallel, with unified management for models, tools, memory, workflows, schedules, and two-way channels.
-
-**Why Vesper?**
-
-This project simplifies the orchestration of capable AI agents while keeping integrations, automation, and data under control. The core features include:
-
-- **🧩 Parallel Sessions:** Give every session its own model, permissions, context, and working directory, then monitor and operate multiple agents together in grid mode.
-- **🟣 Agent Runtime:** Run context-aware coding agents with configurable models, tools, documents, and persistent sessions.
-- **🔵 MCP Integration:** Discover and safely connect external Model Context Protocol servers and tools.
-- **🟢 Workflow Automation:** Design and monitor workflows with prompts, conditions, approvals, parallel paths, and notifications.
-- **🟡 Schedules & Channels:** Automate recurring tasks and deliver results through browser, Feishu, or Weixin notifications.
-- **🟠 Skills & Subagents:** Extend agents with reusable skills and delegate bounded work to specialized parallel agents.
-- **🔴 Local Memory:** Retain project knowledge, decisions, risks, and preferences with scoped storage and sensitive-data redaction.
+Vesper is an AI agent application that runs coding agents across multiple independent sessions and manages models, tools, memory, workflows, schedules, and two-way channels.
 
 ---
 
 ## 🎬 Product Demo
 
-[![Vesper product demo](./docs/show.gif)](./docs/show.html)
-
-Click the animation to open the [interactive product demo](./docs/show.html). It starts with multiple independent Agent sessions running in parallel, then tours Conversations, Assets, Channels, Schedules, Plugins, Memory, MCP, Skills, Workflows, plus the Models, Notifications, Interface, and Updates settings. Every frame comes from the current React application and supports offline playback, pause, previous/next navigation, and keyboard controls.
+![Vesper product demo](./docs/show.gif)
 
 ---
 
