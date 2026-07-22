@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { hasMeaningfulGeneratedNotes } from '../shared/release-notes.mjs'
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const packagePath = join(root, 'package.json')
@@ -28,16 +29,24 @@ const tags = run('git', ['tag', '--list', 'v*', '--sort=-version:refname'])
   .split(/\r?\n/)
   .filter((value) => /^v\d+\.\d+\.\d+$/.test(value))
 const previousTag = tags.find((value) => value !== tag)
-const generated = token
-  ? await generateGitHubNotes({ repository, token, tag, previousTag })
-  : generateLocalNotes({ tag, previousTag })
+let source = '本地 Git 提交'
+let generated = generateLocalNotes({ tag, previousTag })
+if (token) {
+  const githubNotes = await generateGitHubNotes({ repository, token, tag, previousTag })
+  if (hasMeaningfulGeneratedNotes(githubNotes.body)) {
+    generated = githubNotes
+    source = 'GitHub 自动 Release Notes'
+  } else {
+    source = '本地 Git 提交（GitHub 自动日志无有效条目）'
+  }
+}
 const date = new Date().toISOString().slice(0, 10)
 const markdown = normalizeMarkdown(generated.body, version)
 
 await mkdir(dirname(releaseNotesPath), { recursive: true })
 await writeFile(releaseNotesPath, `${JSON.stringify({ version, date, notes: markdown }, null, 2)}\n`, 'utf8')
 await writeFile(releaseBodyPath, `${markdown}\n`, 'utf8')
-console.log(`已从 ${token ? 'GitHub 自动 Release Notes' : '本地 Git 提交'}生成 Vesper ${version} 更新日志。`)
+console.log(`已从 ${source}生成 Vesper ${version} 更新日志。`)
 
 async function generateGitHubNotes({ repository: repo, token: githubToken, tag: currentTag, previousTag: previous }) {
   const payload = {

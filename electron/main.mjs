@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { app, BrowserWindow, ipcMain, Menu, nativeTheme, net, shell } from 'electron'
 import updater from 'electron-updater'
 import { createVesperServer } from '../server/app-server.mjs'
+import { releaseNotesMarkdown } from '../shared/release-notes.mjs'
 
 const { autoUpdater } = updater
 const RELEASES_URL = 'https://github.com/ling-kong-ran/vesper/releases'
@@ -31,12 +32,6 @@ function newerVersion(candidate, current) {
   return false
 }
 
-function releaseNotesMarkdown(notes) {
-  if (typeof notes === 'string') return notes
-  if (!Array.isArray(notes)) return ''
-  return notes.map((item) => typeof item === 'string' ? item : item?.note || '').filter(Boolean).join('\n\n')
-}
-
 function publishUpdate(patch) {
   updateState = { ...updateState, ...patch }
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send(UPDATE_CHANNEL, updateState)
@@ -53,7 +48,7 @@ async function githubLatestRelease() {
   return {
     version,
     releaseDate: release.published_at || release.created_at || null,
-    notes: String(release.body || ''),
+    notes: releaseNotesMarkdown(release.body),
     releaseUrl: release.html_url || RELEASES_URL,
     available: newerVersion(version, app.getVersion()),
   }
