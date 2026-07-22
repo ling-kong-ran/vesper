@@ -147,7 +147,7 @@ export function ChatHistoryPage({ query, navigate, setChatMode, notify, requestC
           })}
         </Panel>
       ) : (
-        <Panel className="empty-state"><StarOrbit size={48} /><h2>{t(query ? '没有匹配的历史会话' : '暂无历史会话')}</h2><p>{t(query ? '更换搜索关键词后重试。' : '创建并开始对话后，会话会显示在这里。')}</p></Panel>
+        <Panel className="empty-state"><StarOrbit size={48} /><h2>{t(query ? '没有匹配的历史会话' : '还没有会话留下回声')}</h2><p>{t(query ? '更换搜索关键词后重试。' : '开始一段对话后，它会被安静地收进这里。')}</p></Panel>
       )}
     </div>
   )

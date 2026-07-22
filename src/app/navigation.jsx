@@ -1,39 +1,39 @@
 import { Brain, CalendarClock, FolderOpen, MessageSquare, Plug, RadioTower, Server, Settings, Sparkles, Workflow } from 'lucide-react'
 
 export const NAV_GROUPS = [
-  ['工作区', [
-    ['chat', '对话', MessageSquare],
+  ['工作台', [
+    ['chat', '会话', MessageSquare],
     ['assets', '资产', FolderOpen],
     ['channels', '渠道', RadioTower],
     ['schedules', '定时任务', CalendarClock],
   ]],
   ['能力', [
-    ['plugins', '插件', Plug],
+    ['plugins', '工具', Plug],
     ['memory', '星忆', Brain],
     ['mcp', 'MCP', Server],
     ['skills', '技能', Sparkles],
     ['workflows', '工作流', Workflow],
   ]],
   ['系统', [
-    ['config', '配置', Settings],
+    ['config', '设置', Settings],
   ]],
 ]
 
 export const NAV_ITEMS = NAV_GROUPS.flatMap(([, items]) => items)
 
 export const PAGE_META = {
-  chat: ['对话', '多 session 并行'],
-  chatHistory: ['历史会话', '浏览、搜索与管理全部对话记录'],
-  assets: ['资产', '历史会话产物统一归档'],
-  channels: ['渠道', '双向协作渠道与会话管理'],
-  schedules: ['定时任务', '周期性 prompt 自动执行'],
-  config: ['配置', '模型、运行参数与通知设置'],
-  plugins: ['插件', '控制 agent 可使用的工具与插件权限'],
-  memory: ['星忆', '让思考、文件与决策在星图中持续闪耀'],
-  mcp: ['MCP', 'MCP 服务、工具能力与连接健康管理'],
-  skills: ['技能', '技能安装、启用与触发条件管理'],
-  workflows: ['工作流', '预设流程、自定义编排与多工作流并行运行'],
-  workflowCreate: ['新建工作流', '拖拽节点到画布，自定义 agent 执行流程'],
+  chat: ['会话', '让多个会话沿各自轨道并行推进'],
+  chatHistory: ['历史会话', '每一次交谈，都在这里留下清晰可寻的回声'],
+  assets: ['资产', '收拢对话中的文件、图像与灵感产物'],
+  channels: ['渠道', '让 Vesper 穿过屏幕，抵达你的协作现场'],
+  schedules: ['定时任务', '把重复的等待，交给准时启程的任务'],
+  config: ['设置', '校准模型、运行策略与通知节奏'],
+  plugins: ['工具', '为 Agent 选择可触及的工具，也划清行动边界'],
+  memory: ['星忆', '让思考、偏好与决策在星图中长久发光'],
+  mcp: ['MCP', '连接外部能力，也守住每一道权限边界'],
+  skills: ['技能', '收纳可复用的技艺，让能力随任务被唤醒'],
+  workflows: ['工作流', '把灵感编排成路径，让多个流程并行生长'],
+  workflowCreate: ['新建工作流', '拖拽节点，把一次设想编排成可运行的星轨'],
 }
 
 export function getNavigation(t = (value) => value) {

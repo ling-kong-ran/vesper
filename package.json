@@ -2,7 +2,7 @@
   "name": "vesper",
   "private": true,
   "version": "0.1.3",
-  "description": "An AI agent application for running independent sessions in parallel.",
+  "description": "A local-first multi-agent workspace for parallel sessions, tools, memory, and workflows.",
   "author": {
     "name": "ling-kong-ran",
     "email": "65328093+ling-kong-ran@users.noreply.github.com",
