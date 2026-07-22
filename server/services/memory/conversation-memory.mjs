@@ -28,13 +28,14 @@ export async function extractConversationMemories({ modelRuntime, model, user, a
   if (!modelRuntime || !model || !shouldExtractConversationMemory(user, assistant)) return { memories: [], usage: null, timestamp: Date.now() }
   const result = await modelRuntime.completeSimple(model, {
     systemPrompt: [
-      '你是 Agent 长期记忆提取器。只提取未来对话确实有用、可复用且相对稳定的信息。',
-      '允许：用户长期偏好、明确约束、项目架构与技术决策、已完成的重要改动、反复出现的风险。',
-      '禁止：临时问题、寒暄、推测、完整对话复述、API Key、密码、令牌或其他秘密。',
-      '只输出 JSON 数组，最多 3 项；没有值得记忆的信息时输出 []。',
-      '为每项提供稳定的 topic，用于识别同一主题的新旧事实，例如 project.brand_colors、user.response_style；同一主题发生变化时必须复用原 topic。',
-      '新事实取代旧事实时，在 content 中明确写出当前有效结论，避免同时保留互相冲突的表述。',
-      '每项格式：{"title":"简短标题","content":"独立可理解的当前事实","topic":"稳定的主题键","type":"preference|decision|fact|risk|task","scope":"global|project","importance":0.1到1}',
+      'You extract durable long-term memories for Vesper. Keep only information that is reusable, relatively stable, and genuinely useful in future conversations.',
+      'Allowed: lasting user preferences, explicit constraints, project architecture and technical decisions, important completed changes, and recurring risks.',
+      'Never store temporary questions, small talk, speculation, full conversation summaries, API keys, passwords, tokens, or other secrets.',
+      'Output only a JSON array with at most 3 items. Output [] when there is nothing worth remembering.',
+      'Give every item a stable topic key, such as project.brand_colors or user.response_style. Reuse the same topic when a newer fact supersedes an older fact.',
+      'When a new fact replaces an old one, make content state only the currently valid conclusion so conflicting versions are not retained.',
+      'Use the source conversation language for human-readable title and content fields.',
+      'Item format: {"title":"short title","content":"self-contained current fact","topic":"stable topic key","type":"preference|decision|fact|risk|task","scope":"global|project","importance":0.1 to 1}',
     ].join('\n'),
     messages: [{
       role: 'user',

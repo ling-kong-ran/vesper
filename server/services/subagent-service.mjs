@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { createAgentSession, DefaultResourceLoader, estimateTokens, SessionManager } from '@earendil-works/pi-coding-agent'
+import { applyVesperSystemPrompt, vesperPromptExtension } from '../prompts/vesper-system-prompt.mjs'
 
 export const SUBAGENT_ROLES = Object.freeze({
   scout: Object.freeze({
@@ -159,6 +160,7 @@ async function createRoleResourceLoader({ cwd, agentDir, settingsManager, rolePr
     cwd,
     agentDir: agentDir || cwd,
     ...(settingsManager ? { settingsManager } : {}),
+    extensionFactories: [vesperPromptExtension],
     appendSystemPromptOverride: (base) => [...base, rolePrompt],
   })
   await loader.reload()
@@ -319,6 +321,7 @@ export class SubagentService {
       })
       const session = result?.session
       if (!session) throw new Error('Subagent session could not be created.')
+      applyVesperSystemPrompt(session, model)
       record.session = session
       onSession?.(session)
       unsubscribe = session.subscribe((event) => {

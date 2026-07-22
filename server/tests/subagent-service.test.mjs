@@ -32,7 +32,7 @@ function createFakeSession({ onPrompt } = {}) {
 
 const createFakeResourceLoader = async ({ role, rolePrompt }) => ({ role, rolePrompt })
 
-test('default Pi resource loader appends the role system prompt', async (t) => {
+test('default runtime resource loader appends the role system prompt', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vesper-subagent-loader-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   let appendedPrompt = ''
@@ -112,7 +112,8 @@ test('read-focused subagents receive only read tools and return structured findi
   assert.deepEqual(new Set(options.excludeTools), new Set(['delegate_task', 'get_goal', 'update_goal', 'mcp_list', 'mcp_manage']))
   assert.equal(options.sessionManager.kind, 'in-memory')
   assert.match(options.resourceLoader.rolePrompt, /scout subagent/i)
-  assert.equal(session.agent.state.systemPrompt, 'Base system prompt')
+  assert.match(session.agent.state.systemPrompt, /Application: Vesper/)
+  assert.match(session.agent.state.systemPrompt, /Base system prompt/)
   assert.equal(completed, result)
   assert.equal(result.parentSessionId, 'parent-1')
   assert.equal(result.role, 'scout')
@@ -174,8 +175,10 @@ test('only worker inherits parent write tools and parent-only tools are always e
   assert.equal(reviewerResult.writeCapable, false)
   assert.match(options[0].resourceLoader.rolePrompt, /implementation subagent/i)
   assert.match(options[1].resourceLoader.rolePrompt, /code-review subagent/i)
-  assert.equal(sessions[0].agent.state.systemPrompt, 'Base system prompt')
-  assert.equal(sessions[1].agent.state.systemPrompt, 'Base system prompt')
+  assert.match(sessions[0].agent.state.systemPrompt, /Application: Vesper/)
+  assert.match(sessions[1].agent.state.systemPrompt, /Application: Vesper/)
+  assert.match(sessions[0].agent.state.systemPrompt, /Active model: gpt-5/)
+  assert.match(sessions[1].agent.state.systemPrompt, /Active model: gpt-5/)
 })
 
 test('concurrent roles preserve write access only for workers', async () => {

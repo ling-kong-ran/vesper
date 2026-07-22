@@ -31,6 +31,7 @@ import { createAppTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry
 import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
 import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
 import { installSessionPersistenceRedaction, redactPersistedSessionFiles, redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
+import { applyVesperSystemPrompt, vesperPromptExtension } from '../prompts/vesper-system-prompt.mjs'
 
 const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'kimi-coding', 'zai-coding-cn']
 const PROVIDER_LABELS = {
@@ -249,7 +250,7 @@ export class AgentRuntimeService {
       agentDir: dataDir,
       cwd,
       getSettingsManager: () => this.settingsManager,
-      extensionFactories: [],
+      extensionFactories: [vesperPromptExtension],
     })
     this.channels = new ChannelService({
       path: join(dataDir, 'vesper-channels.json'),
@@ -869,6 +870,7 @@ export class AgentRuntimeService {
     const defaultThinkingLevel = settings.defaultThinkingLevel
     try {
       await value.session.setModel(model)
+      applyVesperSystemPrompt(value.session, model)
     } finally {
       if (defaultProvider && defaultModel) {
         this.settingsManager.setDefaultModelAndProvider(defaultProvider, defaultModel)
@@ -1054,6 +1056,7 @@ export class AgentRuntimeService {
     runtimeSession = session
     this.syncGoalTools(value, this.goals.get(session.sessionId))
     this.permissions.install(session, { sessionId: session.sessionId, cwd: effectiveCwd })
+    applyVesperSystemPrompt(session, session.model)
     this.sessions.set(session.sessionId, value)
     return value
   }
@@ -1216,6 +1219,7 @@ export class AgentRuntimeService {
         : null
       const shouldForceVisualTool = isVisualGenerationRequest(message) && session.getActiveToolNames().includes('generate_visual')
       const restorePayloadHandler = shouldForceVisualTool ? forceNextToolCall(session.agent, 'generate_visual') : () => {}
+      applyVesperSystemPrompt(session, session.model)
       const originalSystemPrompt = session.agent.state.systemPrompt
       if (memoryContext.text) session.agent.state.systemPrompt = `${originalSystemPrompt}\n\n${memoryContext.text}`
       try {
@@ -1263,7 +1267,7 @@ export class AgentRuntimeService {
       ? `\n附件：${attachments.map((item) => safeAttachmentName(item.name)).join('、')}`
       : ''
     const result = await this.modelRuntime.completeSimple(model, {
-      systemPrompt: '你是会话标题生成器。根据用户任务生成一个清晰、具体的中文标题。只输出标题，不加引号、句号、解释或“标题”前缀。标题最多20个汉字；保留必要的文件名、技术名词和错误名称。',
+      systemPrompt: 'You generate clear, specific session titles from the user task. Output only a Simplified Chinese title with no quotes, punctuation, explanation, or title prefix. Use at most 20 Chinese characters while preserving necessary filenames, technical terms, and error names.',
       messages: [{
         role: 'user',
         content: `${String(message || '').slice(0, 1200)}${attachmentText}`,

@@ -97,14 +97,16 @@ vesper/
 ├─ shared/               # 前后端共享的工作流图逻辑
 ├─ server/
 │  ├─ http/              # HTTP API、SSE 与静态资源响应
+│  ├─ prompts/           # Agent 系统提示词与运行时身份注入
 │  ├─ runtime/           # Pi Agent 会话与模型运行时
 │  ├─ security/          # 凭据与输出脱敏
-│  ├─ services/          # 领域服务与外部集成
+│  ├─ services/          # 渠道、记忆、工作流等领域服务与外部集成
 │  ├─ storage/           # 本地持久化工具
 │  ├─ tests/             # Node.js 测试
 │  └─ tools/             # 内置工具与应用工具注册表
 └─ src/
    ├─ app/               # 路由、导航与国际化
+   ├─ assets/            # 前端静态资源
    ├─ components/        # 通用 React 组件
    ├─ features/          # 功能页面与交互
    ├─ hooks/             # 通用 React Hooks
