@@ -1820,7 +1820,7 @@ export class AgentRuntimeService {
   async saveConfig(input) {
     const provider = String(input.provider || '').trim()
     const model = String(input.model || '').trim()
-    if (!provider || !model) throw new Error('Provider 和模型不能为空。')
+    if (!provider) throw new Error('Provider 不能为空。')
     const currentAppConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
     if ((currentAppConfig.disabledProviders || []).includes(provider)) throw new Error('请先启用该 Provider，再将其设为默认配置。')
 
@@ -1837,8 +1837,8 @@ export class AgentRuntimeService {
     const baseUrl = String(input.baseUrl || '').trim()
     const modelBaseUrl = String(input.modelBaseUrl || '').trim()
     const organization = String(input.organization || '').trim()
-    const runtimeModel = this.modelRuntime.getModel(provider, model)
-    if (!runtimeModel) {
+    const runtimeModel = model ? this.modelRuntime.getModel(provider, model) : null
+    if (model && !runtimeModel) {
       providerOverlay.name ||= String(input.providerName || provider)
       providerOverlay.api ||= String(input.api || 'openai-responses')
       providerOverlay.models = Array.isArray(providerOverlay.models) ? [...providerOverlay.models] : []
@@ -1856,8 +1856,8 @@ export class AgentRuntimeService {
       }
     }
     const modelDefinitions = Array.isArray(providerOverlay.models) ? [...providerOverlay.models] : []
-    const definitionIndex = modelDefinitions.findIndex((item) => item.id === model)
-    if (modelBaseUrl || definitionIndex >= 0) {
+    const definitionIndex = model ? modelDefinitions.findIndex((item) => item.id === model) : -1
+    if (model && (modelBaseUrl || definitionIndex >= 0)) {
       const definition = definitionIndex >= 0 ? { ...modelDefinitions[definitionIndex] } : {
         id: model,
         name: runtimeModel?.name || String(input.modelName || model),
@@ -1886,7 +1886,7 @@ export class AgentRuntimeService {
     else delete modelsJson.providers[provider]
     await writeJsonAtomic(this.modelsPath, modelsJson)
 
-    this.settingsManager.setDefaultModelAndProvider(provider, model)
+    if (model) this.settingsManager.setDefaultModelAndProvider(provider, model)
     this.settingsManager.setDefaultThinkingLevel(input.thinkingLevel || 'medium')
     await this.settingsManager.flush()
     const errors = this.settingsManager.drainErrors()

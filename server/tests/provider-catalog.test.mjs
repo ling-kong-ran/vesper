@@ -39,3 +39,37 @@ test('model configuration exposes built-in Kimi and GLM providers', async (t) =>
   assert.equal(runtime.modelRuntime.getModel('zai-coding-cn', 'glm-5.2').baseUrl, 'https://open.bigmodel.cn/api/paas/v4')
   assert.equal((await runtime.getConfig()).providers.find((provider) => provider.id === 'zai-coding-cn').configured, true)
 })
+
+test('visual-only providers save connection settings without replacing the default chat model', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-visual-provider-config-'))
+  const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  t.after(async () => {
+    await runtime.dispose()
+    await rm(directory, { recursive: true, force: true })
+  })
+  await runtime.init()
+  await runtime.refreshProviderModels()
+  const before = runtime.settingsManager.getGlobalSettings()
+  await runtime.createProvider({
+    id: 'visual-relay',
+    name: 'Visual Relay',
+    api: 'openai-responses',
+    baseUrl: 'https://visual.example.test/v1',
+    apiKey: 'visual-key',
+    model: 'gpt-image-1',
+    modelKind: 'image',
+  })
+  const saved = await runtime.saveConfig({
+    provider: 'visual-relay',
+    model: '',
+    baseUrl: 'https://visual.example.test/v1',
+    thinkingLevel: 'medium',
+    toolMode: 'read-only',
+  })
+  const after = runtime.settingsManager.getGlobalSettings()
+  assert.equal(after.defaultProvider, before.defaultProvider)
+  assert.equal(after.defaultModel, before.defaultModel)
+  const visual = saved.providers.find((provider) => provider.id === 'visual-relay')
+  assert.equal(visual.models.some((model) => model.kind === 'chat'), false)
+  assert.ok(visual.models.some((model) => model.kind === 'image'))
+})
