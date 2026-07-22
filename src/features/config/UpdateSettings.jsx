@@ -41,6 +41,7 @@ export function UpdateSettings({ notify, update }) {
   }
 
   const openReleases = () => update?.openReleases()
+  const openUpdateLog = () => update?.openUpdateLog?.()
 
   const download = async () => {
     try { await update?.download() } catch (error) { notify(error.message, 'error') }
@@ -87,6 +88,7 @@ export function UpdateSettings({ notify, update }) {
       <div className="mt-5 flex flex-wrap gap-2">
         <button className="button primary" disabled={checking || downloading} onClick={downloaded ? install : available ? download : check}>{checking || downloading ? <RefreshCw className="spin" size={14} /> : downloaded ? <Rocket size={14} /> : available ? status.canDownload ? <Download size={14} /> : <ExternalLink size={14} /> : <RefreshCw size={14} />}{t(downloaded ? '重启并安装' : available ? status.canDownload ? '下载更新' : desktop ? '查看新版本' : '查看代码更新' : checking ? '正在检查…' : '检查更新')}</button>
         <button className="button secondary" onClick={openReleases}><ExternalLink size={14} />{desktop ? 'GitHub Releases' : 'GitHub Compare'}</button>
+        {desktop && <button className="button secondary" onClick={openUpdateLog}><ExternalLink size={14} />{t('查看更新诊断日志')}</button>}
       </div>
     </Panel>
 

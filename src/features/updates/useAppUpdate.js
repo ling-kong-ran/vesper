@@ -54,6 +54,8 @@ export function useAppUpdate() {
     return true
   }, [bridge, status.releaseUrl])
 
+  const openUpdateLog = useCallback(() => bridge?.openUpdateLog?.(), [bridge])
+
   const download = useCallback(async () => {
     if (!bridge || !status.canDownload) return openReleases()
     const next = await bridge.downloadUpdate()
@@ -63,5 +65,5 @@ export function useAppUpdate() {
 
   const install = useCallback(() => bridge?.installUpdate(), [bridge])
 
-  return { info, status, check, download, install, openReleases }
+  return { info, status, check, download, install, openReleases, openUpdateLog }
 }
