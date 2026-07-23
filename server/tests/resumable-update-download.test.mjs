@@ -1,9 +1,9 @@
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { PassThrough, Readable } from 'node:stream'
+import { Readable } from 'node:stream'
 import test from 'node:test'
 import { downloadResumableFile, downloadResumableWithRetry, enableResumableUpdateDownloads } from '../../electron/resumable-update-download.mjs'
 
@@ -11,16 +11,12 @@ function sha512(buffer) {
   return createHash('sha512').update(buffer).digest('base64')
 }
 
-function response({ statusCode = 200, headers = {}, body }) {
-  return { statusCode, headers, body: Readable.from(body), abort() {} }
+function downloadIdentity(url, options) {
+  return createHash('sha256').update(String(url)).update('\0').update(String(options.sha512 || '')).digest('hex')
 }
 
-function interruptedResponse({ headers, chunk, message }) {
-  const body = new PassThrough()
-  setTimeout(() => {
-    body.write(chunk, () => setTimeout(() => body.destroy(new Error(message)), 5))
-  }, 0)
-  return { statusCode: 200, headers, body, abort: () => body.destroy() }
+function response({ statusCode = 200, headers = {}, body }) {
+  return { statusCode, headers, body: Readable.from(body), abort() {} }
 }
 
 async function fixture(t) {
@@ -33,47 +29,49 @@ async function fixture(t) {
   }
 }
 
+async function seedPartial(paths, { url, options, content, split, etag }) {
+  const identity = downloadIdentity(url, options)
+  await mkdir(paths.resumeDirectory, { recursive: true })
+  const partPath = join(paths.resumeDirectory, `${identity}.part`)
+  const metadataPath = join(paths.resumeDirectory, `${identity}.json`)
+  await writeFile(partPath, content.subarray(0, split))
+  await writeFile(metadataPath, `${JSON.stringify({
+    total: content.length,
+    ...(etag ? { etag } : {}),
+  })}\n`)
+  return { partPath, metadataPath }
+}
+
 test('interrupted update downloads resume from the persisted byte offset', async (t) => {
   const paths = await fixture(t)
   const content = Buffer.alloc(1024 * 1024, 7)
   const split = 410_321
+  const url = 'https://example.test/Vesper.exe'
+  const options = { sha512: sha512(content) }
+  await seedPartial(paths, { url, options, content, split, etag: '"release-1"' })
+
   let requests = 0
   let resumedRange = ''
-  const openResponse = async ({ headers }) => {
-    requests += 1
-    if (requests === 1) {
-      return interruptedResponse({
-        headers: { 'content-length': String(content.length), etag: '"release-1"' },
-        chunk: content.subarray(0, split),
-        message: 'socket disconnected',
-      })
-    }
-    resumedRange = headers.Range
-    return response({
-      statusCode: 206,
-      headers: {
-        'content-length': String(content.length - split),
-        'content-range': `bytes ${split}-${content.length - 1}/${content.length}`,
-        etag: '"release-1"',
-      },
-      body: [content.subarray(split)],
-    })
-  }
-
-  await assert.rejects(downloadResumableFile({
-    url: 'https://example.test/Vesper.exe',
-    ...paths,
-    options: { sha512: sha512(content) },
-    openResponse,
-  }), /socket disconnected/)
-
   await downloadResumableFile({
-    url: 'https://example.test/Vesper.exe',
+    url,
     ...paths,
-    options: { sha512: sha512(content) },
-    openResponse,
+    options,
+    openResponse: async ({ headers }) => {
+      requests += 1
+      resumedRange = headers.Range
+      return response({
+        statusCode: 206,
+        headers: {
+          'content-length': String(content.length - split),
+          'content-range': `bytes ${split}-${content.length - 1}/${content.length}`,
+          etag: '"release-1"',
+        },
+        body: [content.subarray(split)],
+      })
+    },
   })
 
+  assert.equal(requests, 1)
   assert.equal(resumedRange, `bytes=${split}-`)
   assert.deepEqual(await readFile(paths.destination), content)
   assert.deepEqual(await readdir(paths.resumeDirectory), [])
@@ -83,34 +81,25 @@ test('a server that ignores Range safely restarts the current file from zero', a
   const paths = await fixture(t)
   const content = Buffer.from('complete installer payload')
   const split = 8
+  const url = 'https://example.test/Vesper.exe'
+  const options = { sha512: sha512(content) }
+  await seedPartial(paths, { url, options, content, split })
+
   let requests = 0
   let receivedRange = ''
-  const openResponse = async ({ headers }) => {
-    requests += 1
-    if (requests === 1) {
-      return interruptedResponse({
-        headers: { 'content-length': String(content.length) },
-        chunk: content.subarray(0, split),
-        message: 'offline',
-      })
-    }
-    receivedRange = headers.Range
-    return response({ headers: { 'content-length': String(content.length) }, body: [content] })
-  }
-
-  await assert.rejects(downloadResumableFile({
-    url: 'https://example.test/Vesper.exe',
-    ...paths,
-    options: { sha512: sha512(content) },
-    openResponse,
-  }), /offline/)
   await downloadResumableFile({
-    url: 'https://example.test/Vesper.exe',
+    url,
     ...paths,
-    options: { sha512: sha512(content) },
-    openResponse,
+    options,
+    openResponse: async ({ headers }) => {
+      requests += 1
+      receivedRange = headers.Range
+      // 200 without content-range: resume range ignored, full body from zero.
+      return response({ headers: { 'content-length': String(content.length) }, body: [content] })
+    },
   })
 
+  assert.equal(requests, 1)
   assert.equal(receivedRange, `bytes=${split}-`)
   assert.deepEqual(await readFile(paths.destination), content)
 })
@@ -119,26 +108,47 @@ test('transient failures retry automatically using the saved partial file', asyn
   const paths = await fixture(t)
   const content = Buffer.alloc(64 * 1024, 3)
   const split = 12_345
-  let requests = 0
+  const url = 'https://example.test/Vesper.exe'
+  const options = { sha512: sha512(content) }
+  await seedPartial(paths, { url, options, content, split })
   const ranges = []
+  let requests = 0
 
   await downloadResumableWithRetry({
-    url: 'https://example.test/Vesper.exe',
+    url,
     ...paths,
-    options: { sha512: sha512(content) },
+    options,
     openResponse: async ({ headers }) => {
       requests += 1
       ranges.push(headers.Range || '')
-      if (requests === 1) return interruptedResponse({ headers: { 'content-length': String(content.length) }, chunk: content.subarray(0, split), message: 'temporary disconnect' })
+      if (requests === 1) {
+        const body = new Readable({
+          read() {
+            this.destroy(new Error('temporary disconnect'))
+          },
+        })
+        return {
+          statusCode: 206,
+          headers: {
+            'content-length': String(content.length - split),
+            'content-range': `bytes ${split}-${content.length - 1}/${content.length}`,
+          },
+          body,
+          abort: () => body.destroy(),
+        }
+      }
       return response({
         statusCode: 206,
-        headers: { 'content-length': String(content.length - split), 'content-range': `bytes ${split}-${content.length - 1}/${content.length}` },
+        headers: {
+          'content-length': String(content.length - split),
+          'content-range': `bytes ${split}-${content.length - 1}/${content.length}`,
+        },
         body: [content.subarray(split)],
       })
     },
   }, { retryDelays: [0] })
 
-  assert.deepEqual(ranges, ['', `bytes=${split}-`])
+  assert.deepEqual(ranges, [`bytes=${split}-`, `bytes=${split}-`])
   assert.deepEqual(await readFile(paths.destination), content)
 })
 
