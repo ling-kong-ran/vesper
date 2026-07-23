@@ -3,7 +3,9 @@ import { createHash, randomUUID } from 'node:crypto'
 import { basename, dirname, extname, join, resolve, sep } from 'node:path'
 import { OfficeParser } from 'officeparser'
 import {
+  calculateContextTokens,
   createAgentSession,
+  estimateTokens,
   ModelRuntime,
   SessionManager,
   SettingsManager,
@@ -181,6 +183,38 @@ function startedCompaction(reason, startedAt) {
     willRetry: false,
     error: '',
   }
+}
+
+function validAssistantUsage(message) {
+  if (message?.role !== 'assistant' || message.stopReason === 'aborted' || message.stopReason === 'error' || !message.usage) return null
+  return calculateContextTokens(message.usage) > 0 ? message.usage : null
+}
+
+function estimateMessageContextTokens(messages = []) {
+  let usageIndex = -1
+  let tokens = 0
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const usage = validAssistantUsage(messages[index])
+    if (!usage) continue
+    usageIndex = index
+    tokens = calculateContextTokens(usage)
+    break
+  }
+  const start = usageIndex >= 0 ? usageIndex + 1 : 0
+  for (let index = start; index < messages.length; index += 1) tokens += estimateTokens(messages[index])
+  return Math.max(0, Math.round(tokens))
+}
+
+function persistedContextUsage(manager, contextWindow) {
+  if (!manager || !contextWindow) return undefined
+  const branch = manager.getBranch()
+  const latestCompactionIndex = branch.findLastIndex((entry) => entry?.type === 'compaction')
+  if (latestCompactionIndex >= 0) {
+    const hasPostCompactionUsage = branch.slice(latestCompactionIndex + 1).some((entry) => entry?.type === 'message' && validAssistantUsage(entry.message))
+    if (!hasPostCompactionUsage) return { tokens: null, contextWindow, percent: null }
+  }
+  const tokens = estimateMessageContextTokens(manager.buildSessionContext().messages)
+  return { tokens, contextWindow, percent: (tokens / contextWindow) * 100 }
 }
 
 function finishedCompaction(previous, event, finishedAt) {
@@ -784,6 +818,7 @@ export class AgentRuntimeService {
       permissionMode: this.sessionMeta[value.session.sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
       goal: null,
       taskList: this.taskLists.get(value.session.sessionId),
+      contextUsage: this.compactionAwareContextUsage(value.session),
     }
   }
 
@@ -886,6 +921,56 @@ export class AgentRuntimeService {
     return attachGeneratedAssets(messages, assets)
   }
 
+  compactionAwareContextUsage(session, compaction = null) {
+    if (!session?.model) return undefined
+    const contextWindow = optionalTokenCount(session.model.contextWindow)
+    const raw = typeof session.getContextUsage === 'function'
+      ? session.getContextUsage()
+      : contextWindow
+        ? (() => {
+            const tokens = estimateMessageContextTokens(session.messages)
+            return { tokens, contextWindow, percent: (tokens / contextWindow) * 100 }
+          })()
+        : undefined
+    return this.decorateContextUsage(raw, compaction)
+  }
+
+  decorateContextUsage(raw, compaction = null) {
+    const contextWindow = optionalTokenCount(raw?.contextWindow)
+    if (!contextWindow) return undefined
+    let tokens = raw?.tokens == null ? null : optionalTokenCount(raw.tokens)
+    let estimated = false
+    if (tokens == null && compaction?.status === 'completed' && compaction.estimatedTokensAfter != null) {
+      tokens = optionalTokenCount(compaction.estimatedTokensAfter)
+      estimated = tokens != null
+    }
+    const settings = this.settingsManager?.getCompactionSettings?.() || { enabled: true, reserveTokens: 16_384 }
+    const compactAtTokens = settings.enabled ? Math.max(0, contextWindow - Math.max(0, Number(settings.reserveTokens) || 0)) : null
+    return {
+      tokens,
+      contextWindow,
+      percent: tokens == null ? null : (tokens / contextWindow) * 100,
+      estimated,
+      autoCompactEnabled: Boolean(settings.enabled),
+      compactAtTokens,
+      compactAtPercent: compactAtTokens == null ? null : (compactAtTokens / contextWindow) * 100,
+    }
+  }
+
+  async getSessionContextUsage(id, compaction = null) {
+    const active = this.sessions.get(id)
+    if (active) return this.compactionAwareContextUsage(active.session, compaction || this.liveSessions.get(id)?.compaction)
+    const info = await this.findSessionInfo(id)
+    if (!info) return undefined
+    const manager = SessionManager.open(info.path, this.sessionDir, this.cwd)
+    const context = manager.buildSessionContext()
+    const globalSettings = this.settingsManager?.getGlobalSettings?.() || {}
+    const provider = context.model?.provider || globalSettings.defaultProvider
+    const modelId = context.model?.modelId || globalSettings.defaultModel
+    const model = provider && modelId ? this.modelRuntime?.getModel?.(provider, modelId) : null
+    return this.decorateContextUsage(persistedContextUsage(manager, model?.contextWindow || 0), compaction)
+  }
+
   async getSessionMessagePage(id, { before, limit = DEFAULT_MESSAGE_PAGE_SIZE } = {}) {
     const messages = await this.getSessionHistoryMessages(id)
     const pageSize = Math.min(MAX_MESSAGE_PAGE_SIZE, Math.max(1, Number.parseInt(limit, 10) || DEFAULT_MESSAGE_PAGE_SIZE))
@@ -894,6 +979,7 @@ export class AgentRuntimeService {
     const start = Math.max(0, end - pageSize)
     return {
       messages: messages.slice(start, end),
+      contextUsage: await this.getSessionContextUsage(id),
       pageInfo: {
         start,
         end,
@@ -937,6 +1023,7 @@ export class AgentRuntimeService {
       permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
       goal: live?.goal ?? this.goals.get(id),
       taskList: live?.taskList ?? this.taskLists.get(id),
+      contextUsage: this.compactionAwareContextUsage(active?.session, live?.compaction) || page.contextUsage,
       compaction: redactSecretValue(live?.compaction || null),
       approvals: redactSecretValue(this.permissions.getPending(id)),
       pageInfo: page.pageInfo,
@@ -987,6 +1074,7 @@ export class AgentRuntimeService {
       model: `${model.provider}/${model.id}`,
       provider: model.provider,
       modelId: model.id,
+      contextUsage: this.compactionAwareContextUsage(value.session),
     }
   }
 
@@ -1206,7 +1294,7 @@ export class AgentRuntimeService {
     const keepTaskList = goal?.status === 'active' || isGoalContinuationMessage(message)
     if (!keepTaskList) await this.taskLists.replace(session.sessionId, [])
     const startedAt = new Date().toISOString()
-    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, taskList: this.taskLists.get(session.sessionId), compaction: null, startedAt, lastActivityAt: startedAt }
+    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, taskList: this.taskLists.get(session.sessionId), contextUsage: this.compactionAwareContextUsage(session), compaction: null, startedAt, lastActivityAt: startedAt }
     this.liveSessions.set(session.sessionId, live)
     this.goalEmitters.set(session.sessionId, emit)
     this.taskListEmitters.set(session.sessionId, emit)
@@ -1230,6 +1318,7 @@ export class AgentRuntimeService {
       permissionMode: this.sessionMeta[session.sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
       goal,
       taskList: live.taskList,
+      contextUsage: live.contextUsage,
       startedAt: live.startedAt,
       lastActivityAt: live.lastActivityAt,
     })
@@ -1269,7 +1358,12 @@ export class AgentRuntimeService {
         emit('compaction_start', live.compaction)
       } else if (event.type === 'compaction_end') {
         live.compaction = finishedCompaction(live.compaction, event, live.lastActivityAt)
+        live.contextUsage = this.compactionAwareContextUsage(session, live.compaction)
         emit('compaction_end', live.compaction)
+        emit('context_usage', live.contextUsage)
+      } else if (event.type === 'message_end') {
+        live.contextUsage = this.compactionAwareContextUsage(session, live.compaction)
+        emit('context_usage', live.contextUsage)
       } else if (event.type === 'tool_execution_start') {
         const toolStartedAt = live.lastActivityAt
         live.tools.push({ id: event.toolCallId, name: event.toolName, status: 'running', startedAt: toolStartedAt, updatedAt: toolStartedAt })
@@ -1396,6 +1490,7 @@ export class AgentRuntimeService {
         } catch {}
       }
       const finishedAt = finishLiveRun()
+      live.contextUsage = this.compactionAwareContextUsage(session, live.compaction)
       emit('done', {
         sessionId: session.sessionId,
         text: live.text,
@@ -1404,6 +1499,7 @@ export class AgentRuntimeService {
         approvals: [],
         goal: this.goals.get(session.sessionId),
         taskList: this.taskLists.get(session.sessionId),
+        contextUsage: live.contextUsage,
         compaction: live.compaction,
         startedAt: live.startedAt,
         finishedAt,
@@ -1419,6 +1515,7 @@ export class AgentRuntimeService {
       flushText()
       live.error = error instanceof Error ? error.message : String(error)
       const finishedAt = live.streaming ? finishLiveRun(live.error) : live.finishedAt
+      live.contextUsage = this.compactionAwareContextUsage(session, live.compaction)
       if (this.goals.get(session.sessionId)?.status === 'active') await this.pauseSessionGoal(session.sessionId)
       emit('error', {
         sessionId: session.sessionId,
@@ -1429,6 +1526,7 @@ export class AgentRuntimeService {
         approvals: [],
         goal: this.goals.get(session.sessionId),
         taskList: this.taskLists.get(session.sessionId),
+        contextUsage: live.contextUsage,
         compaction: live.compaction,
         startedAt: live.startedAt,
         finishedAt,

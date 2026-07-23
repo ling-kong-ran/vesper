@@ -1091,6 +1091,12 @@ const EN_EXTENDED_MESSAGES = Object.freeze({
 
   '正在理解任务': 'Understanding the task',
   '正在压缩上下文': 'Compacting context',
+  '上下文': 'Context',
+  '上下文占用：{tokens} / {limit} tokens（{percent}%）': 'Context usage: {tokens} / {limit} tokens ({percent}%)',
+  '上下文占用（估算）：{tokens} / {limit} tokens（{percent}%）': 'Estimated context usage: {tokens} / {limit} tokens ({percent}%)',
+  '上下文占用将在下一次模型响应后更新；上限 {limit} tokens': 'Context usage will update after the next model response; limit: {limit} tokens',
+  '自动压缩阈值约 {percent}%': 'Auto-compaction threshold: about {percent}%',
+  '自动上下文压缩未启用': 'Automatic context compaction is disabled',
   '上下文接近上限，正在摘要较早消息': 'Context is nearing its limit; summarizing older messages',
   '上下文已满，压缩后将自动重试': 'Context is full; the request will retry after compaction',
   '正在按请求整理较早消息': 'Summarizing older messages as requested',

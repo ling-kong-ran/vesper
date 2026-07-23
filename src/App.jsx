@@ -13,6 +13,7 @@ import {
   ExternalLink,
   File,
   FolderOpen,
+  Gauge,
   Link2,
   ListChecks,
   Menu,
@@ -659,6 +660,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           permissionMode: data.permissionMode || current.permissionMode,
           goal: data.goal ?? current.goal ?? null,
           taskList: data.taskList ?? current.taskList ?? null,
+          contextUsage: data.contextUsage ?? current.contextUsage ?? null,
           compaction: data.compaction ?? current.compaction ?? null,
           approvals: data.approvals || [],
         }
@@ -679,7 +681,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
       const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/messages?limit=${limit}`)
       updateSessionState(id, (latest) => latest.streaming
         ? { ...latest, loaded: true, loading: false, pageSize: Math.max(latest.pageSize || 0, limit) }
-        : { ...latest, ...latestPageState(latest, data), loaded: true, loading: false, pageSize: Math.max(latest.pageSize || 0, limit), error: '', olderError: '' })
+        : { ...latest, ...latestPageState(latest, data), contextUsage: data.contextUsage ?? latest.contextUsage ?? null, loaded: true, loading: false, pageSize: Math.max(latest.pageSize || 0, limit), error: '', olderError: '' })
     } catch (caught) {
       updateSessionState(id, { loading: false, error: caught.message })
     }
@@ -839,7 +841,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           sessionsRef.current = next
           return next
         })
-        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', goal: created.goal || null, taskList: created.taskList || null, compaction: null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
+        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', goal: created.goal || null, taskList: created.taskList || null, contextUsage: created.contextUsage || null, compaction: null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
         try {
           await refreshSessions(created.id)
         } catch (caught) {
@@ -1054,6 +1056,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             goal: data.goal ?? null,
             // Prefer explicit meta.taskList (including empty) over leftover client state.
             taskList: data.taskList !== undefined ? data.taskList : current.taskList,
+            contextUsage: data.contextUsage ?? current.contextUsage ?? null,
             runStartedAt: data.startedAt || current.runStartedAt,
             lastActivityAt: data.lastActivityAt || eventAt,
           }))
@@ -1066,6 +1069,8 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
               taskList: data.taskList !== undefined ? data.taskList : session.taskList,
             } : session))
           }
+        } else if (event === 'context_usage') {
+          updateSessionState(sessionId, { contextUsage: data })
         } else if (event === 'compaction_start') {
           typewriter.flush()
           toolScheduler.flush()
@@ -1165,6 +1170,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             runNotice: '',
             goal: data.goal ?? current.goal ?? null,
             taskList: data.taskList !== undefined ? data.taskList : current.taskList,
+            contextUsage: data.contextUsage ?? current.contextUsage ?? null,
             compaction: data.compaction ?? current.compaction ?? null,
             approvals: data.approvals || [],
             tools: settleToolCalls(data.tools || current.tools, { finishedAt }),
@@ -1194,6 +1200,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             streaming: false,
             runFinishedAt: finishedAt,
             lastActivityAt: finishedAt,
+            contextUsage: data.contextUsage ?? current.contextUsage ?? null,
             compaction: data.compaction ?? current.compaction ?? null,
             approvals: [],
             tools: settleToolCalls(data.tools || current.tools, { finishedAt, error: data.message }),
@@ -1277,7 +1284,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         method: 'PUT',
         body: JSON.stringify({ provider: selected.provider, model: selected.modelId }),
       })
-      updateSessionState(sessionId, { model: updated.model, switchingModel: false })
+      updateSessionState(sessionId, { model: updated.model, contextUsage: updated.contextUsage ?? null, switchingModel: false })
       setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, model: updated.model } : session))
       notify(t('已切换至 {model}', { model: selected.label }))
     } catch (caught) {
@@ -1451,6 +1458,7 @@ function SessionDockPanel({ params, api }) {
       goal={state.goal ?? session.goal ?? null}
       taskList={resolveSessionTaskList(state, session)}
       compaction={state.compaction}
+      contextUsage={state.contextUsage}
       cwd={state.cwd || session.cwd}
       availableModels={context.availableModels}
       switchingModel={state.switchingModel}
@@ -1562,6 +1570,35 @@ function TaskListPanel({ taskList, compact = false, streaming = false }) {
       {compact && items.length > visibleItems.length && <small className="task-list-more">{t('还有 {count} 项', { count: items.length - visibleItems.length })}</small>}
     </div>}
   </section>
+}
+
+function ContextUsageIndicator({ usage }) {
+  const { t } = useI18n()
+  const contextWindow = Number(usage?.contextWindow) || 0
+  if (!contextWindow) return null
+  const known = usage?.percent != null && Number.isFinite(Number(usage.percent))
+  const percent = known ? Math.max(0, Number(usage.percent)) : null
+  const roundedPercent = percent == null ? null : Math.round(percent)
+  const compactAtPercent = usage?.compactAtPercent == null ? null : Number(usage.compactAtPercent)
+  const warningAt = compactAtPercent == null ? 75 : Math.max(50, compactAtPercent - 15)
+  const tone = percent == null ? 'unknown' : compactAtPercent != null && percent >= compactAtPercent ? 'danger' : percent >= warningAt ? 'warning' : 'normal'
+  const usageText = known
+    ? t(usage.estimated ? '上下文占用（估算）：{tokens} / {limit} tokens（{percent}%）' : '上下文占用：{tokens} / {limit} tokens（{percent}%）', {
+        tokens: formatTokenCount(usage.tokens),
+        limit: formatTokenCount(contextWindow),
+        percent: roundedPercent,
+      })
+    : t('上下文占用将在下一次模型响应后更新；上限 {limit} tokens', { limit: formatTokenCount(contextWindow) })
+  const thresholdText = usage.autoCompactEnabled && compactAtPercent != null
+    ? t('自动压缩阈值约 {percent}%', { percent: Math.round(compactAtPercent) })
+    : t('自动上下文压缩未启用')
+  const label = `${usageText} · ${thresholdText}`
+  const tokenLabel = `${usage?.tokens == null ? '—' : formatTokenCount(usage.tokens)} / ${formatTokenCount(contextWindow)}`
+  return <div className={`context-usage-chip ${tone}`} role="status" aria-label={label} title={label}>
+    <Gauge size={12} />
+    <span><strong>{tokenLabel}</strong><small>{roundedPercent == null ? '—' : `${roundedPercent}%`}</small></span>
+    <i aria-hidden="true"><b style={{ width: `${Math.min(100, percent || 0)}%` }} /></i>
+  </div>
 }
 
 function SessionModelSelect({ value, models, onChange, disabled, compact = false }) {
@@ -1718,7 +1755,7 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, taskList, compaction, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onAbort, onOpenRail }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, taskList, compaction, contextUsage, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onAbort, onOpenRail }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const [goalArmed, setGoalArmed] = useState(false)
@@ -1813,7 +1850,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
       {hasUnread && <button type="button" className="button secondary jump-to-latest" onClick={() => scrollToBottom('smooth')}><ArrowDown size={14} />{t('有新内容')}</button>}
-      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title={t('添加附件')} aria-label={t('添加附件')} onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><GoalModeControl goal={goal} armed={goalArmed} onChange={(enabled) => { if (!enabled && goal?.status === 'active') void onGoalPause?.(); else setGoalArmed(enabled) }} /><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onPaste={selection.pasteImages} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={t(streaming ? 'Agent 正在运行，可停止后继续输入' : '写下你想完成的事，Shift + Enter 换行')} disabled={streaming} /><button className="send-button" title={t('发送消息')} aria-label={t('发送消息')} disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
+      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title={t('添加附件')} aria-label={t('添加附件')} onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><div className="focus-composer-secondary"><ContextUsageIndicator usage={contextUsage} /><GoalModeControl goal={goal} armed={goalArmed} onChange={(enabled) => { if (!enabled && goal?.status === 'active') void onGoalPause?.(); else setGoalArmed(enabled) }} /></div><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onPaste={selection.pasteImages} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={t(streaming ? 'Agent 正在运行，可停止后继续输入' : '写下你想完成的事，Shift + Enter 换行')} disabled={streaming} /><button className="send-button" title={t('发送消息')} aria-label={t('发送消息')} disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
     </Panel>
   )
 }

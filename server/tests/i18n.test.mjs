@@ -18,6 +18,7 @@ test('English interface translations resolve static and interpolated messages', 
   assert.equal(translateText('拆分到左侧', 'en-US'), 'Split to left')
   assert.equal(translateText('将 {name} 拆分到右侧', 'en-US', { name: 'Research' }), 'Split Research to the right')
   assert.equal(translateText('正在压缩上下文', 'en-US'), 'Compacting context')
+  assert.equal(translateText('上下文占用：{tokens} / {limit} tokens（{percent}%）', 'en-US', { tokens: '64K', limit: '128K', percent: 50 }), 'Context usage: 64K / 128K tokens (50%)')
   assert.equal(translateText('上下文已压缩：{before} → {after} tokens', 'en-US', { before: '92K', after: '18.5K' }), 'Context compacted: 92K → 18.5K tokens')
   assert.equal(translateText('这片星域尚未点亮。点击左上角 +，种下第一颗星。', 'en-US'), 'This memory space is still unlit. Click + in the top-left to plant the first star.')
   assert.equal(translateText('{count} 个技能包', 'en-US', { count: 2 }), '2 skill packages')

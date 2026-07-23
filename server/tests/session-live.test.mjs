@@ -205,6 +205,33 @@ test('stream failures emit a single terminal error snapshot without throwing', a
   assert.equal(live.error, 'model failed')
 })
 
+test('context usage reports the current window share and automatic compaction threshold', () => {
+  const runtime = new AgentRuntimeService({ cwd: process.cwd(), dataDir: process.cwd() })
+  runtime.settingsManager = { getCompactionSettings: () => ({ enabled: true, reserveTokens: 16_384 }) }
+  const session = {
+    model: { provider: 'openai', id: 'gpt-5.4', contextWindow: 200_000 },
+    getContextUsage: () => ({ tokens: 120_000, contextWindow: 200_000, percent: 60 }),
+  }
+  assert.deepEqual(runtime.compactionAwareContextUsage(session), {
+    tokens: 120_000,
+    contextWindow: 200_000,
+    percent: 60,
+    estimated: false,
+    autoCompactEnabled: true,
+    compactAtTokens: 183_616,
+    compactAtPercent: 91.808,
+  })
+  assert.deepEqual(runtime.decorateContextUsage({ tokens: null, contextWindow: 200_000, percent: null }, { status: 'completed', estimatedTokensAfter: 18_500 }), {
+    tokens: 18_500,
+    contextWindow: 200_000,
+    percent: 9.25,
+    estimated: true,
+    autoCompactEnabled: true,
+    compactAtTokens: 183_616,
+    compactAtPercent: 91.808,
+  })
+})
+
 test('session messages are returned newest-first by bounded cursor pages', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vesper-message-pages-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
@@ -213,7 +240,8 @@ test('session messages are returned newest-first by bounded cursor pages', async
     cwd: directory,
     session: {
       isStreaming: false,
-      model: { provider: 'openai', id: 'gpt-5.4' },
+      model: { provider: 'openai', id: 'gpt-5.4', contextWindow: 128_000 },
+      getContextUsage: () => ({ tokens: 64_000, contextWindow: 128_000, percent: 50 }),
       messages: Array.from({ length: 95 }, (_, index) => ({
         role: index % 2 ? 'assistant' : 'user',
         content: `message-${index}`,
@@ -227,6 +255,8 @@ test('session messages are returned newest-first by bounded cursor pages', async
   assert.equal(latest.messages[0].text, 'message-75')
   assert.equal(latest.messages.at(-1).text, 'message-94')
   assert.deepEqual(latest.pageInfo, { start: 75, end: 95, total: 95, hasMore: true, nextCursor: '75' })
+  assert.equal(latest.contextUsage.percent, 50)
+  assert.equal(latest.contextUsage.contextWindow, 128_000)
 
   const older = await runtime.getSessionMessagePage('session-pages', { limit: 20, before: latest.pageInfo.nextCursor })
   assert.equal(older.messages[0].text, 'message-55')
