@@ -6,12 +6,12 @@ import { setTimeout as delay } from 'node:timers/promises'
 import test from 'node:test'
 import {
   DEFAULT_SANDBOX_DOMAINS,
-  LocalSandboxService,
   buildCommandSandboxOverrides,
   buildSandboxConfig,
   sandboxChildEnvironment,
   windowsSensitiveGuardPaths,
-} from '../services/local-sandbox-service.mjs'
+} from '../security/local-sandbox-policy.mjs'
+import { LocalSandboxService } from '../services/local-sandbox-service.mjs'
 import { shouldRunBashOutsideSandbox } from '../tools/sandboxed-bash.mjs'
 
 test('sandbox config accepts workspace sets and protects credentials', () => {
