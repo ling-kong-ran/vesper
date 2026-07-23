@@ -16,6 +16,7 @@ import { LocalSandboxService } from '../services/local-sandbox-service.mjs'
 import { shouldRunBashOutsideSandbox } from '../tools/sandboxed-bash.mjs'
 
 const TEST_WINDOWS_SHELL = 'C:\\Program Files\\Git\\bin\\bash.exe'
+const TEST_WINDOWS_HOME = resolve(join(tmpdir(), 'vesper-sandbox-empty-home'))
 
 test('sandbox config accepts workspace sets and protects credentials', () => {
   const workspace = resolve('workspace')
@@ -214,7 +215,7 @@ test('Windows switches one granted workspace at a time instead of accumulating r
     cleanupAfterCommand: () => {},
     reset: async () => { enabled = false; resetCount += 1 },
   }
-  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-win-data'), platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
+  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-win-data'), homeDir: TEST_WINDOWS_HOME, platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
   const operations = service.createBashOperations()
 
   await operations.exec('first', first, { onData: () => {}, timeout: 5 })
@@ -245,7 +246,7 @@ test('same Windows workspace commands run concurrently without reinitializing SR
     cleanupAfterCommand: () => {},
     reset: async () => { enabled = false },
   }
-  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-shared-data'), platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
+  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-shared-data'), homeDir: TEST_WINDOWS_HOME, platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
   const operations = service.createBashOperations()
 
   const first = operations.exec('first', workspace, { onData: () => {}, timeout: 5 })
@@ -282,7 +283,7 @@ test('an aborted cross-workspace waiter never resets or switches the active Wind
     cleanupAfterCommand: () => {},
     reset: async () => { enabled = false; resetCount += 1 },
   }
-  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-abort-data'), platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
+  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-abort-data'), homeDir: TEST_WINDOWS_HOME, platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
   const operations = service.createBashOperations()
   const running = operations.exec('running', first, { onData: () => {}, timeout: 5 })
   for (let attempt = 0; attempt < 40 && service.activeCommands < 1; attempt += 1) await delay(10)
@@ -320,7 +321,7 @@ test('workspace reset failures fail closed and keep the previous grant registere
     cleanupAfterCommand: () => {},
     reset: async () => { throw new Error('reset failed') },
   }
-  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-reset-data'), platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
+  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-reset-data'), homeDir: TEST_WINDOWS_HOME, platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
   const operations = service.createBashOperations()
 
   await operations.exec('first', first, { onData: () => {}, timeout: 5 })
