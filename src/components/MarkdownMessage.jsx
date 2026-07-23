@@ -1,10 +1,18 @@
-import { Children, isValidElement, useState } from 'react'
+import { Children, isValidElement, memo, useState } from 'react'
 import { Check, Copy } from 'lucide-react'
 import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 import { useI18n } from '../app/use-i18n.js'
 import { prepareMarkdown } from '../lib/markdown.js'
+
+const MARKDOWN_PLUGINS = [remarkGfm]
+const HIGHLIGHT_PLUGINS = [[rehypeHighlight, { detect: false, ignoreMissing: true }]]
+const MARKDOWN_COMPONENTS = {
+  a: ({ children: label, node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer">{label}</a>,
+  pre: ({ children: codeChildren }) => <CodeBlock>{codeChildren}</CodeBlock>,
+  code: ({ children: code, className, node: _node, ...props }) => <code className={className || ''} {...props}>{code}</code>,
+}
 
 function textContent(value) {
   if (typeof value === 'string' || typeof value === 'number') return String(value)
@@ -55,16 +63,14 @@ function CodeBlock({ children }) {
   </div>
 }
 
-export default function MarkdownMessage({ children, streaming = false }) {
+function MarkdownMessage({ children, streaming = false }) {
   const source = prepareMarkdown(children, streaming)
   // Streaming: skip full AST + syntax highlight. Rebuilding them on every SSE token causes flicker
   // (especially over remote desktops). Final message still gets full markdown rendering.
   if (streaming) {
     return <div className="markdown-body markdown-streaming" aria-busy="true"><pre className="streaming-plain">{source}</pre></div>
   }
-  return <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeHighlight, { detect: true }]]} components={{
-    a: ({ children: label, node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer">{label}</a>,
-    pre: ({ children: codeChildren }) => <CodeBlock>{codeChildren}</CodeBlock>,
-    code: ({ children: code, className, node: _node, ...props }) => <code className={className || ''} {...props}>{code}</code>,
-  }}>{source}</ReactMarkdown></div>
+  return <div className="markdown-body"><ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} rehypePlugins={HIGHLIGHT_PLUGINS} components={MARKDOWN_COMPONENTS}>{source}</ReactMarkdown></div>
 }
+
+export default memo(MarkdownMessage)
