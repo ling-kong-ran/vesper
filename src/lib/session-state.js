@@ -26,3 +26,21 @@ export function applySessionUpdate(previous, update) {
   const next = typeof update === 'function' ? update(base) : { ...base, ...update }
   return sessionStateChanged(base, next) ? next : base
 }
+
+/**
+ * Prefer the live session-state task list once a session has been opened.
+ * Important: `null` means “cleared”, and must NOT fall back to stale listSessions data.
+ */
+export function resolveSessionTaskList(state, session) {
+  if (state && (state.loaded || state.streaming || Object.hasOwn(state, 'taskList'))) {
+    return state.taskList ?? null
+  }
+  return session?.taskList ?? state?.taskList ?? null
+}
+
+export function isTaskListActive(taskList, { streaming = false } = {}) {
+  const items = taskList?.items || []
+  if (!items.length) return false
+  if (streaming) return true
+  return items.some((item) => item?.status !== 'completed')
+}

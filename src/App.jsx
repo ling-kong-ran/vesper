@@ -56,7 +56,7 @@ import { settleToolCalls } from './features/chat/run-activity.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, applyTextPatch, consumeEventStream } from './lib/api.js'
-import { applySessionUpdate, DEFAULT_SESSION_STATE } from './lib/session-state.js'
+import { applySessionUpdate, DEFAULT_SESSION_STATE, isTaskListActive, resolveSessionTaskList } from './lib/session-state.js'
 import { createToolUpdateScheduler, createTypewriterDisplay } from './lib/streaming-ui.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
@@ -860,7 +860,32 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         }),
       }))
     })
-    updateSessionState(sessionId, (current) => ({ ...current, messages: [...current.messages, userMessage, { id: agentId, role: 'agent', text: '', streaming: true }], tools: [], approvals: [], error: '', streaming: true, loaded: true, runStartedAt, lastActivityAt: runStartedAt, runFinishedAt: null, runStopped: false, runNotice: '' }))
+    updateSessionState(sessionId, (current) => {
+      const keepTaskList = goalMode || current.goal?.status === 'active'
+      return {
+        ...current,
+        messages: [...current.messages, userMessage, { id: agentId, role: 'agent', text: '', streaming: true }],
+        tools: [],
+        approvals: [],
+        error: '',
+        streaming: true,
+        loaded: true,
+        runStartedAt,
+        lastActivityAt: runStartedAt,
+        runFinishedAt: null,
+        runStopped: false,
+        runNotice: '',
+        // Explicit null means cleared; do not keep a previous turn's plan hanging around.
+        taskList: keepTaskList ? current.taskList : null,
+      }
+    })
+    if (!goalMode) {
+      setRemoteSessions((current) => current.map((session) => {
+        if (session.id !== sessionId) return session
+        if (session.goal?.status === 'active') return session
+        return { ...session, taskList: null }
+      }))
+    }
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
@@ -870,8 +895,26 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       await consumeEventStream(response, (event, data) => {
         const eventAt = new Date().toISOString()
         if (event === 'meta') {
-          updateSessionState(sessionId, (current) => ({ ...current, model: data.model, cwd: data.cwd, permissionMode: data.permissionMode, goal: data.goal ?? null, taskList: data.taskList ?? current.taskList ?? null, runStartedAt: data.startedAt || current.runStartedAt, lastActivityAt: data.lastActivityAt || eventAt }))
-          if (data.cwd || data.permissionMode || data.goal !== undefined || data.taskList !== undefined) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
+          updateSessionState(sessionId, (current) => ({
+            ...current,
+            model: data.model,
+            cwd: data.cwd,
+            permissionMode: data.permissionMode,
+            goal: data.goal ?? null,
+            // Prefer explicit meta.taskList (including empty) over leftover client state.
+            taskList: data.taskList !== undefined ? data.taskList : current.taskList,
+            runStartedAt: data.startedAt || current.runStartedAt,
+            lastActivityAt: data.lastActivityAt || eventAt,
+          }))
+          if (data.cwd || data.permissionMode || data.goal !== undefined || data.taskList !== undefined) {
+            setRemoteSessions((current) => current.map((session) => session.id === sessionId ? {
+              ...session,
+              cwd: data.cwd || session.cwd,
+              permissionMode: data.permissionMode || session.permissionMode,
+              goal: data.goal ?? session.goal ?? null,
+              taskList: data.taskList !== undefined ? data.taskList : session.taskList,
+            } : session))
+          }
         } else if (event === 'text_patch') {
           responseText = applyTextPatch(responseText, data)
           typewriter.setTarget(responseText, eventAt)
@@ -920,9 +963,12 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
           updateSessionState(sessionId, (current) => ({
             ...current,
             lastActivityAt: eventAt,
-            taskList: data.taskList ?? current.taskList ?? null,
+            taskList: data.taskList !== undefined ? data.taskList : current.taskList,
           }))
-          setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, taskList: data.taskList ?? session.taskList ?? null } : session))
+          setRemoteSessions((current) => current.map((session) => session.id === sessionId ? {
+            ...session,
+            taskList: data.taskList !== undefined ? data.taskList : session.taskList,
+          } : session))
         } else if (event === 'session_title') {
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, name: data.name } : session))
         } else if (event === 'retry') {
@@ -940,7 +986,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
             lastActivityAt: finishedAt,
             runNotice: '',
             goal: data.goal ?? current.goal ?? null,
-            taskList: data.taskList ?? current.taskList ?? null,
+            taskList: data.taskList !== undefined ? data.taskList : current.taskList,
             approvals: data.approvals || [],
             tools: settleToolCalls(data.tools || current.tools, { finishedAt }),
             messages: current.messages.map((item) => item.id === agentId ? {
@@ -950,7 +996,12 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
               ...(data.assets?.length ? { attachments: data.assets } : {}),
             } : item),
           }))
-          setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
+          setRemoteSessions((current) => current.map((session) => session.id === sessionId ? {
+            ...session,
+            streaming: false,
+            goal: data.goal ?? session.goal ?? null,
+            taskList: data.taskList !== undefined ? data.taskList : session.taskList,
+          } : session))
           return false
         } else if (event === 'error') {
           const finishedAt = data.finishedAt || eventAt
@@ -1149,7 +1200,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         </div>
       ) : (<>
         {railOpen && <SessionRail sessions={remoteSessions} states={sessionStates} activeId={activeId} onSelect={setActiveId} onCreate={createSession} onClose={() => setRailOpen(false)} />}
-        <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeModel} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} taskList={activeState.taskList ?? activeSession?.taskList ?? null} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} runStartedAt={activeState.runStartedAt} lastActivityAt={activeState.lastActivityAt} runFinishedAt={activeState.runFinishedAt} runStopped={activeState.runStopped} runNotice={activeState.runNotice} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} onOpenRail={railOpen ? null : () => setRailOpen(true)} /></>)}
+        <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeModel} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} taskList={resolveSessionTaskList(activeState, activeSession)} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} runStartedAt={activeState.runStartedAt} lastActivityAt={activeState.lastActivityAt} runFinishedAt={activeState.runFinishedAt} runStopped={activeState.runStopped} runNotice={activeState.runNotice} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} onOpenRail={railOpen ? null : () => setRailOpen(true)} /></>)}
     </div>
     {workspaceSession && <WorkspacePicker session={workspaceSession} onClose={() => setWorkspaceSession(null)} onSelect={(cwd) => switchSessionCwd(workspaceSession, cwd)} />}
     </>
@@ -1187,11 +1238,12 @@ function SessionRail({ sessions, states, activeId, onSelect, onCreate, onClose }
   )
 }
 
-function TaskListPanel({ taskList, compact = false }) {
+function TaskListPanel({ taskList, compact = false, streaming = false }) {
   const { t } = useI18n()
   const [expanded, setExpanded] = useState(!compact)
   const items = taskList?.items || EMPTY_LIST
-  if (!items.length) return null
+  // Hide fully completed leftover plans when the agent is idle; keep them visible while streaming.
+  if (!isTaskListActive(taskList, { streaming })) return null
   const visibleItems = compact ? items.slice(0, 3) : items
   const completed = taskList?.counts?.completed ?? items.filter((item) => item.status === 'completed').length
   const statusMeta = {
@@ -1226,8 +1278,8 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
   const selection = useAttachmentSelection()
   const messages = (state?.messages || EMPTY_LIST).slice(-GRID_MESSAGE_PAGE_SIZE)
   const tools = state?.tools || EMPTY_LIST
-  const taskList = state?.taskList ?? session.taskList ?? null
   const streaming = Boolean(state?.streaming)
+  const taskList = resolveSessionTaskList(state, session)
   const lastMessage = messages[messages.length - 1]
   const liveTextBucket = Math.floor((lastMessage?.text?.length || 0) / 64)
   const liveVersion = `${session.id}:${lastMessage?.id || ''}:${liveTextBucket}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${taskList?.updatedAt || ''}:${state?.error || ''}:${streaming ? '1' : '0'}`
@@ -1243,7 +1295,7 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
   return (
     <Panel className="session-card">
       <div className="card-head"><button className="session-title-button" onClick={onOpen}><h3 title={session.name}>{session.name}</h3><span className={streaming ? 'success' : ''}>{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || messages.length })} · {relativeTime(session.modified, language)}</span><small className="workspace-summary" title={state?.cwd || session.cwd}><FolderOpen size={10} />{workspaceName(state?.cwd || session.cwd, language)}</small></button><div className="card-head-actions"><button className="icon-button" title={t('设置工作目录')} onClick={onWorkspace} disabled={streaming || state?.switchingCwd}><FolderOpen size={14} /></button><button className="icon-button" title={t('重命名会话')} onClick={onRename}><Pencil size={14} /></button><button className="icon-button" title={t('移出平铺')} aria-label={t('将 {name} 移出平铺', { name: session.name })} onClick={onRemoveFromTiled}><X size={14} /></button>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={11} />{t('停止')}</button> : <button className="icon-button" onClick={onOpen}><MoreHorizontal size={17} /></button>}</div></div>
-      <TaskListPanel taskList={taskList} compact />
+      <TaskListPanel taskList={taskList} compact streaming={streaming} />
       <div className="session-live-body" ref={liveRef} onScroll={onLiveScroll}>
         {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />{t('加载消息…')}</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />{t('从一束新的想法开始')}</button> : messages.map((message) => <MiniChatMessage key={message.id} message={message} />)}
         {(streaming || state?.runStartedAt) && <AgentRunActivity compact streaming={streaming} text={lastMessage?.role === 'agent' ? lastMessage.text : ''} tools={tools} error={state?.error} stopped={state?.runStopped} notice={state?.runNotice} startedAt={state?.runStartedAt} lastActivityAt={state?.lastActivityAt} finishedAt={state?.runFinishedAt} />}
@@ -1488,7 +1540,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
     <Panel className="focus-session">
       <div className="card-head"><div className="session-runtime-meta">{onOpenRail && <button className="icon-button session-rail-open-btn" title={t('展开会话列表')} aria-label={t('展开会话列表')} onClick={onOpenRail}><PanelLeftOpen size={15} /></button>}<span className={streaming ? 'success' : ''}>{t(streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} tiled={tiled} streaming={streaming} switchingCwd={switchingCwd} onToggleTiled={onToggleTiled} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
       {/* Keep the plan/task list outside the auto-scrolling transcript so it stays visible while tokens stream. */}
-      <TaskListPanel taskList={taskList} />
+      <TaskListPanel taskList={taskList} streaming={streaming} />
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
         {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />{t('重试加载更早消息')}</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />{t('正在加载更早消息…')}</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />{t('加载更早消息')}</button>}</div>}
         {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>{t('让我们从一束想法开始')}</h2><p>{t('Vesper 已准备好读取当前工作区、搜索代码，并陪你把任务推进到完成。默认从只读权限开始。')}</p><div className="welcome-chips">{welcomeChips(t).map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}

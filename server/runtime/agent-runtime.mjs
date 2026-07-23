@@ -1162,6 +1162,9 @@ export class AgentRuntimeService {
         : await this.goals.start(session.sessionId, { objective: message })
     }
     this.syncGoalTools(value, goal)
+    // Drop stale plans from previous turns unless a Goal is actively driving multi-turn work.
+    const keepTaskList = goal?.status === 'active' || isGoalContinuationMessage(message)
+    if (!keepTaskList) await this.taskLists.replace(session.sessionId, [])
     const startedAt = new Date().toISOString()
     const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, taskList: this.taskLists.get(session.sessionId), startedAt, lastActivityAt: startedAt }
     this.liveSessions.set(session.sessionId, live)
