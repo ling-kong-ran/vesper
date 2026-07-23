@@ -56,6 +56,7 @@ import { deriveRunActivity, formatRunDuration, groupToolCalls, runDurationMs, se
 import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, applyTextPatch, consumeEventStream } from './lib/api.js'
+import { createStreamingTextScheduler } from './lib/streaming-ui.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
 import { useAppUpdate } from './features/updates/useAppUpdate.js'
@@ -841,6 +842,14 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     const agentId = `agent-${Date.now()}`
     const runStartedAt = new Date().toISOString()
     let responseText = ''
+    const textScheduler = createStreamingTextScheduler((text, activityAt) => {
+      updateSessionState(sessionId, (current) => ({
+        ...current,
+        lastActivityAt: activityAt || current.lastActivityAt,
+        runNotice: '',
+        messages: current.messages.map((item) => item.id === agentId ? { ...item, text } : item),
+      }))
+    })
     updateSessionState(sessionId, (current) => ({ ...current, messages: [...current.messages, userMessage, { id: agentId, role: 'agent', text: '', streaming: true }], tools: [], approvals: [], error: '', streaming: true, loaded: true, runStartedAt, lastActivityAt: runStartedAt, runFinishedAt: null, runStopped: false, runNotice: '' }))
     try {
       const response = await fetch('/api/chat', {
@@ -855,13 +864,14 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
           if (data.cwd || data.permissionMode || data.goal !== undefined || data.taskList !== undefined) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
         } else if (event === 'text_patch') {
           responseText = applyTextPatch(responseText, data)
-          updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, runNotice: '', messages: current.messages.map((item) => item.id === agentId ? { ...item, text: applyTextPatch(item.text, data) } : item) }))
+          textScheduler.push(responseText, eventAt)
         } else if (event === 'text_delta') {
           responseText += data.delta || ''
-          updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, runNotice: '', messages: current.messages.map((item) => item.id === agentId ? { ...item, text: item.text + data.delta } : item) }))
+          textScheduler.push(responseText, eventAt)
         } else if (event === 'thinking_delta') {
           updateSessionState(sessionId, { lastActivityAt: eventAt })
         } else if (event === 'tool_start') {
+          textScheduler.flush()
           updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, runNotice: '', tools: [...current.tools, { id: data.id, name: data.name, status: 'running', startedAt: data.startedAt || eventAt, updatedAt: eventAt }] }))
         } else if (event === 'tool_update') {
           updateSessionState(sessionId, (current) => ({
@@ -878,6 +888,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
             tools: current.tools.map((item) => item.id === data.id ? { ...item, status: data.error ? 'error' : 'done', message: data.message || '', updatedAt: data.finishedAt || eventAt, finishedAt: data.finishedAt || eventAt } : item),
           }))
         } else if (event === 'permission_request') {
+          textScheduler.flush()
           updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, approvals: [...(current.approvals || []).filter((item) => item.id !== data.id), data] }))
         } else if (event === 'permission_resolved') {
           updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, approvals: (current.approvals || []).filter((item) => item.id !== data.id) }))
@@ -902,6 +913,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         } else if (event === 'done') {
           const finishedAt = data.finishedAt || eventAt
           if (typeof data.text === 'string') responseText = data.text
+          textScheduler.cancel()
           updateSessionState(sessionId, (current) => ({
             ...current,
             streaming: false,
@@ -914,7 +926,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
             tools: settleToolCalls(data.tools || current.tools, { finishedAt }),
             messages: current.messages.map((item) => item.id === agentId ? {
               ...item,
-              text: typeof data.text === 'string' ? data.text : item.text,
+              text: typeof data.text === 'string' ? data.text : responseText || item.text,
               streaming: false,
               ...(data.assets?.length ? { attachments: data.assets } : {}),
             } : item),
@@ -924,6 +936,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         } else if (event === 'error') {
           const finishedAt = data.finishedAt || eventAt
           if (typeof data.text === 'string') responseText = data.text
+          textScheduler.cancel()
           updateSessionState(sessionId, (current) => ({
             ...current,
             streaming: false,
@@ -931,11 +944,12 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
             lastActivityAt: finishedAt,
             approvals: [],
             tools: settleToolCalls(data.tools || current.tools, { finishedAt, error: data.message }),
-            messages: current.messages.map((item) => item.id === agentId ? { ...item, text: typeof data.text === 'string' ? data.text : item.text, streaming: false } : item),
+            messages: current.messages.map((item) => item.id === agentId ? { ...item, text: typeof data.text === 'string' ? data.text : responseText || item.text, streaming: false } : item),
           }))
           throw new Error(data.message)
         }
       })
+      textScheduler.flush()
       const fallbackFinishedAt = new Date().toISOString()
       updateSessionState(sessionId, (current) => {
         const runFinishedAt = current.runFinishedAt || fallbackFinishedAt
@@ -951,10 +965,12 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       }
       browserNotify?.('chat.completed', { chat: { title: completed?.name || t('{app} 对话', { app: APP_NAME }), summary: responseText.trim().slice(0, 260) || t('Agent 已完成回复。'), model: sessionStatesRef.current[sessionId]?.model || model } })
     } catch (caught) {
+      textScheduler.cancel()
       const runFinishedAt = new Date().toISOString()
-      updateSessionState(sessionId, (current) => ({ ...current, streaming: false, error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: caught.message }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || caught.message } : item) }))
+      updateSessionState(sessionId, (current) => ({ ...current, streaming: false, error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: caught.message }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || responseText || caught.message } : item) }))
       setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false } : session))
     } finally {
+      textScheduler.cancel()
       updateSessionState(sessionId, { streaming: false })
       window.dispatchEvent(new Event(USAGE_UPDATED_EVENT))
     }
@@ -1181,7 +1197,8 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
   const taskList = state?.taskList ?? session.taskList ?? null
   const streaming = Boolean(state?.streaming)
   const lastMessage = messages[messages.length - 1]
-  const liveVersion = `${session.id}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}:${tool.message?.length || 0}`).join('|')}:${taskList?.updatedAt || ''}:${state?.lastActivityAt || ''}:${state?.error || ''}`
+  const liveTextBucket = Math.floor((lastMessage?.text?.length || 0) / 64)
+  const liveVersion = `${session.id}:${lastMessage?.id || ''}:${liveTextBucket}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${taskList?.updatedAt || ''}:${state?.error || ''}:${streaming ? '1' : '0'}`
   const { scrollRef: liveRef, onScroll: onLiveScroll, scrollToBottom } = useAutoScroll(liveVersion)
   const submit = (event) => {
     event.preventDefault()
@@ -1485,7 +1502,9 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   const promptRef = useRef(null)
   const prependSnapshot = useRef(null)
   const lastMessage = messages[messages.length - 1]
-  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${lastMessage?.text?.length || 0}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}:${tool.message?.length || 0}`).join('|')}:${taskList?.updatedAt || ''}:${lastActivityAt || ''}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${error || ''}`
+  // Bucket streaming text length so auto-scroll does not fire on every token.
+  const textScrollBucket = Math.floor((lastMessage?.text?.length || 0) / 64)
+  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${textScrollBucket}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${taskList?.updatedAt || ''}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${error || ''}:${streaming ? '1' : '0'}`
   const { scrollRef: transcriptRef, onScroll: onTranscriptScroll, hasUnread, scrollToBottom } = useAutoScroll(transcriptVersion)
   const loadOlder = useCallback(async () => {
     const node = transcriptRef.current

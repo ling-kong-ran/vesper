@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 
 export function useAutoScroll(contentVersion, { threshold = 64 } = {}) {
   const scrollRef = useRef(null)
+  const frameRef = useRef(0)
   const [pinnedToBottom, setPinnedToBottom] = useState(true)
   const [hasUnread, setHasUnread] = useState(false)
 
@@ -22,8 +23,14 @@ export function useAutoScroll(contentVersion, { threshold = 64 } = {}) {
 
   useEffect(() => {
     if (!scrollRef.current) return
-    if (pinnedToBottom) scrollToBottom()
-    else setHasUnread(true)
+    if (!pinnedToBottom) {
+      setHasUnread(true)
+      return undefined
+    }
+    // Coalesce scroll jumps to one per animation frame to reduce remote-desktop flicker.
+    cancelAnimationFrame(frameRef.current)
+    frameRef.current = requestAnimationFrame(() => scrollToBottom())
+    return () => cancelAnimationFrame(frameRef.current)
   }, [contentVersion, pinnedToBottom, scrollToBottom])
 
   return { scrollRef, onScroll, hasUnread, scrollToBottom }

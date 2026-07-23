@@ -57,6 +57,11 @@ function CodeBlock({ children }) {
 
 export default function MarkdownMessage({ children, streaming = false }) {
   const source = prepareMarkdown(children, streaming)
+  // Streaming: skip full AST + syntax highlight. Rebuilding them on every SSE token causes flicker
+  // (especially over remote desktops). Final message still gets full markdown rendering.
+  if (streaming) {
+    return <div className="markdown-body markdown-streaming" aria-busy="true"><pre className="streaming-plain">{source}</pre></div>
+  }
   return <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeHighlight, { detect: true }]]} components={{
     a: ({ children: label, node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer">{label}</a>,
     pre: ({ children: codeChildren }) => <CodeBlock>{codeChildren}</CodeBlock>,
