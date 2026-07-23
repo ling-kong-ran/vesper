@@ -67,7 +67,7 @@ const MemoryPage = lazy(() => import('./features/memory/MemoryPage.jsx').then((m
 const SchedulesPage = lazy(() => import('./features/schedules/SchedulesPage.jsx').then((module) => ({ default: module.SchedulesPage })))
 const AssetsPage = lazy(() => import('./features/assets/AssetsPage.jsx').then((module) => ({ default: module.AssetsPage })))
 const McpPage = lazy(() => import('./features/workflows/PreviewPages.jsx').then((module) => ({ default: module.McpPage })))
-const SkillsPage = lazy(() => import('./features/workflows/PreviewPages.jsx').then((module) => ({ default: module.SkillsPage })))
+const SkillsPage = lazy(() => import('./features/skills/SkillsPage.jsx').then((module) => ({ default: module.SkillsPage })))
 const WorkflowsPage = lazy(() => import('./features/workflows/WorkflowsPage.jsx').then((module) => ({ default: module.WorkflowsPage })))
 const WorkflowBuilder = lazy(() => import('./features/workflows/WorkflowsPage.jsx').then((module) => ({ default: module.WorkflowBuilder })))
 const LazyMarkdownMessage = lazy(() => import('./components/MarkdownMessage.jsx'))

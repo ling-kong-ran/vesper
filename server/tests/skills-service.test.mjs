@@ -93,6 +93,56 @@ test('skills service installs Pi package skill resources through DefaultPackageM
   assert.equal(installed.packages[0].installed, true)
 })
 
+test('skills dashboard uses single-flight caching and skills-only discovery', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-skills-cache-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const agentDir = join(directory, 'agent')
+  const cwd = join(directory, 'workspace')
+  await mkdir(cwd, { recursive: true })
+  await writeSkill(join(agentDir, 'skills', 'cache-skill'), 'cache-skill', 'Validate dashboard caching.')
+
+  let resolveCalls = 0
+  const service = new SkillsService({
+    path: join(agentDir, 'vesper-skills.json'),
+    agentDir,
+    cwd,
+    getSettingsManager: () => SettingsManager.inMemory({ enableSkillCommands: true }),
+    createPackageManager: () => ({
+      async resolve() {
+        resolveCalls += 1
+        return {
+          extensions: [],
+          prompts: [],
+          themes: [],
+          skills: [{
+            path: join(agentDir, 'skills', 'cache-skill'),
+            enabled: true,
+            metadata: { source: 'auto', scope: 'user', origin: 'top-level' },
+          }],
+        }
+      },
+      listConfiguredPackages() {
+        return []
+      },
+    }),
+  })
+  await service.init()
+
+  const [first, second] = await Promise.all([service.dashboard(), service.dashboard()])
+  assert.equal(first.skills[0].name, 'cache-skill')
+  assert.equal(second.skills[0].name, 'cache-skill')
+  assert.equal(resolveCalls, 1)
+
+  const cached = await service.dashboard()
+  assert.equal(cached.skills[0].name, 'cache-skill')
+  assert.equal(resolveCalls, 1)
+
+  service.invalidateDashboardCache()
+  const forced = await service.dashboard({ force: true })
+  assert.equal(forced.skills[0].name, 'cache-skill')
+  assert.equal(resolveCalls, 2)
+})
+
 test('skills service installs only skill resources from a local source and can remove Vesper-managed skills', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vesper-skill-install-'))
   t.after(() => rm(directory, { recursive: true, force: true }))

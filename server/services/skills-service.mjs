@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { existsSync, statSync } from 'node:fs'
 import { cp, lstat, mkdir, readFile, readdir, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path'
@@ -14,6 +15,7 @@ const MAX_SKILL_SOURCE_CHARS = 2_000
 const MAX_SKILLS_PER_INSTALL = 100
 const MAX_SKILL_FILES = 10_000
 const MAX_SKILL_BYTES = 256 * 1024 * 1024
+const DASHBOARD_CACHE_TTL_MS = 3_000
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value))
@@ -148,6 +150,21 @@ function safeSourceLabel(value) {
   }
 }
 
+function mapSkillResourcePath(resource) {
+  const path = String(resource?.path || '')
+  if (!path) return ''
+  const metadata = resource?.metadata || {}
+  if (metadata.source !== 'auto' && metadata.origin !== 'package') return path
+  try {
+    const stats = statSync(path)
+    if (!stats.isDirectory()) return path
+  } catch {
+    return path
+  }
+  const skillFile = join(path, 'SKILL.md')
+  return existsSync(skillFile) ? skillFile : path
+}
+
 export class SkillsService {
   constructor({ path, agentDir, cwd, getSettingsManager, createPackageManager, extensionFactories = [] } = {}) {
     this.path = path
@@ -159,6 +176,8 @@ export class SkillsService {
     this.extensionFactories = extensionFactories
     this.state = { version: SKILLS_STATE_VERSION, overrides: {}, installed: {} }
     this.write = Promise.resolve()
+    this.dashboardCache = null
+    this.dashboardInflight = new Map()
   }
 
   async init() {
@@ -190,6 +209,10 @@ export class SkillsService {
     }
   }
 
+  invalidateDashboardCache() {
+    this.dashboardCache = null
+  }
+
   async createResourceLoader(cwd = this.cwd, { includeDisabled = false, appendSystemPrompt = '' } = {}) {
     const settingsManager = this.getSettingsManager()
     const loader = new DefaultResourceLoader({
@@ -206,9 +229,29 @@ export class SkillsService {
     return loader
   }
 
+  async resolveSkillPaths(cwd = this.cwd) {
+    try {
+      const resolved = await this.packageManager(cwd).resolve()
+      return resolved.skills
+        .filter((item) => item.enabled)
+        .map((item) => mapSkillResourcePath(item))
+        .filter(Boolean)
+    } catch {
+      // SettingsManager may not be ready during early bootstrap; fall back to default skill roots.
+      return []
+    }
+  }
+
   async discover(cwd = this.cwd) {
-    const loader = await this.createResourceLoader(cwd, { includeDisabled: true })
-    return loader.getSkills()
+    const skillPaths = await this.resolveSkillPaths(cwd)
+    const loaded = loadSkills({
+      cwd,
+      agentDir: this.agentDir,
+      skillPaths,
+      // package resolve already auto-discovers user/project skill roots when settings are available.
+      includeDefaults: skillPaths.length === 0,
+    })
+    return this.applySkillOverrides(loaded, { includeDisabled: true })
   }
 
   async publicSkill(skill) {
@@ -243,7 +286,7 @@ export class SkillsService {
     return this.createPackageManager({ cwd, agentDir: this.agentDir, settingsManager })
   }
 
-  async dashboard({ cwd = this.cwd } = {}) {
+  async buildDashboard(cwd = this.cwd) {
     const discovered = await this.discover(cwd)
     const skills = await Promise.all(discovered.skills.map((skill) => this.publicSkill(skill)))
     let packages = []
@@ -267,6 +310,29 @@ export class SkillsService {
     }
   }
 
+  async dashboard({ cwd = this.cwd, force = false } = {}) {
+    const key = normalizedPath(cwd)
+    const now = Date.now()
+    if (!force && this.dashboardCache?.key === key && this.dashboardCache.expiresAt > now) {
+      return clone(this.dashboardCache.value)
+    }
+    if (!force && this.dashboardInflight.has(key)) {
+      return clone(await this.dashboardInflight.get(key))
+    }
+
+    const pending = this.buildDashboard(cwd)
+      .then((value) => {
+        this.dashboardCache = { key, value, expiresAt: Date.now() + DASHBOARD_CACHE_TTL_MS }
+        return value
+      })
+      .finally(() => {
+        if (this.dashboardInflight.get(key) === pending) this.dashboardInflight.delete(key)
+      })
+
+    this.dashboardInflight.set(key, pending)
+    return clone(await pending)
+  }
+
   async findSkill(id, cwd = this.cwd) {
     const discovered = await this.discover(cwd)
     return discovered.skills.find((skill) => skillId(skill.filePath) === id) || null
@@ -282,6 +348,7 @@ export class SkillsService {
     if (Object.keys(current).length) this.state.overrides[key] = current
     else delete this.state.overrides[key]
     await this.save()
+    this.invalidateDashboardCache()
     return this.publicSkill(skill)
   }
 
@@ -346,7 +413,8 @@ export class SkillsService {
       await Promise.allSettled(installedPaths.map((path) => rm(basename(path).toLowerCase() === 'skill.md' ? dirname(path) : path, { recursive: true, force: true })))
       throw error
     }
-    const dashboard = await this.dashboard({ cwd })
+    this.invalidateDashboardCache()
+    const dashboard = await this.dashboard({ cwd, force: true })
     return {
       ...dashboard,
       installed: dashboard.skills.filter((skill) => installedPaths.some((path) => normalizedPath(path) === normalizedPath(skill.filePath))),
@@ -364,6 +432,7 @@ export class SkillsService {
     delete this.state.overrides[key]
     delete this.state.installed[key]
     await this.save()
+    this.invalidateDashboardCache()
     return true
   }
 }

@@ -1712,7 +1712,8 @@ export class AgentRuntimeService {
 
   async reloadSkills() {
     this.invalidateSessionRuntimes()
-    return this.skills.dashboard({ cwd: this.cwd })
+    this.skills.invalidateDashboardCache()
+    return this.skills.dashboard({ cwd: this.cwd, force: true })
   }
 
   async getProviderDiscovery() {
