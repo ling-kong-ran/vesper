@@ -588,8 +588,21 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .message.user .message-content > .markdown-body { border-radius: var(--r-lg) var(--r-lg) var(--r-xs) var(--r-lg); background: var(--user-bubble-bg); color: var(--user-bubble-text); padding: 10px 15px; box-shadow: 0 8px 20px -15px var(--shadow); }
 .message.user .markdown-body h1,.message.user .markdown-body h2,.message.user .markdown-body h3,.message.user .markdown-body h4,.message.user .markdown-body a { color: var(--user-bubble-text); }
 .message.user .markdown-body code { background: var(--user-bubble-code); }
-.message.agent .message-content > .markdown-body { width: 100%; max-width: 100%; border: 1px solid var(--stroke-soft); border-radius: var(--r-md); background: var(--solid); padding: 10px 16px; }
-.message.has-error .message-content > .markdown-body { background: var(--danger-soft); color: var(--danger); }
+.message.agent .message-content > .markdown-body,
+.message.agent .message-content > .stream-body > .markdown-body { width: 100%; max-width: 100%; border: 1px solid var(--stroke-soft); border-radius: var(--r-md); background: var(--solid); padding: 10px 16px; }
+.message.agent .message-content > .stream-lead > .markdown-body {
+  width: 100%;
+  max-width: 100%;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  padding: 2px 2px 10px;
+  color: var(--text-tertiary);
+}
+.message.agent .message-content.has-stream-split > .agent-run-activity { margin-top: 2px; }
+.message.agent .message-content.has-stream-split > .stream-body { margin-top: 8px; }
+.message.has-error .message-content > .markdown-body,
+.message.has-error .message-content > .stream-body > .markdown-body { background: var(--danger-soft); color: var(--danger); }
 .agent-status-avatar { --agent-avatar-size: 32px; --agent-gaze-x: 0px; --agent-gaze-y: 0px; display: inline-grid; width: var(--agent-avatar-size); height: var(--agent-avatar-size); flex: none; place-items: center; cursor: default; transition: transform var(--d1) var(--ease-out), filter var(--d1) var(--ease-out); }
 .agent-status-avatar:hover { transform: translateY(-1px) rotate(-2deg) scale(1.055); filter: saturate(1.06); }
 .agent-status-avatar:active { transform: translateY(0) rotate(1deg) scale(.94); }

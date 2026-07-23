@@ -43,27 +43,31 @@ function focusPropsEqual(prev, next) {
 export const FocusChatMessage = memo(function FocusChatMessage({ message, agentState, showRunActivity, runProps }) {
   const hasTools = Boolean(runProps?.tools?.length)
   const streaming = Boolean(message.streaming)
-  // While tools are running, keep preamble above tools and only stream the post-tool body below,
-  // so users don't see the same thinking text twice (once above tools and again in the full reply).
-  const { lead, body } = splitAssistantStreamText(message.text, message.streamPreamble, {
+  const fullText = message.text || ''
+  const split = splitAssistantStreamText(fullText, message.streamPreamble, {
     streaming,
     hasTools,
   })
-  const showLead = Boolean(lead)
-  const showBody = Boolean(body) || (!streaming && message.text) || (!showLead && (message.text || !streaming))
-  const activityProps = runProps && hasTools
-    ? { ...runProps, text: body || lead || runProps.text }
+  const showSplit = streaming && hasTools && split.mode === 'split' && Boolean(split.lead)
+  const activityProps = runProps
+    ? { ...runProps, text: showSplit ? (split.body || split.lead) : fullText }
     : runProps
 
   return <div className={`message ${message.role} ${message.error ? 'has-error' : ''}`}>
     <span>{message.role === 'agent' ? <AgentStatusAvatar state={agentState} /> : 'You'}</span>
-    <div className="message-content">
-      {showLead && <MarkdownMessage streaming={streaming && !body}>{lead}</MarkdownMessage>}
+    <div className={`message-content ${showSplit ? 'has-stream-split' : ''}`}>
+      {showSplit && (
+        <div className="stream-lead">
+          <MarkdownMessage streaming={false}>{split.lead}</MarkdownMessage>
+        </div>
+      )}
       {showRunActivity && activityProps && <AgentRunActivity {...activityProps} />}
-      {showBody && (
-        <MarkdownMessage streaming={streaming}>
-          {streaming ? (body || (!showLead ? message.text : '')) : message.text}
-        </MarkdownMessage>
+      {(split.body || (!streaming && fullText) || (!showSplit && (fullText || !streaming))) && (
+        <div className={showSplit ? 'stream-body' : undefined}>
+          <MarkdownMessage streaming={streaming}>
+            {streaming ? (showSplit ? split.body : fullText) : fullText}
+          </MarkdownMessage>
+        </div>
       )}
       {message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}
     </div>
