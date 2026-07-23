@@ -8,6 +8,8 @@ contextBridge.exposeInMainWorld('vesperDesktop', Object.freeze({
   installUpdate: () => ipcRenderer.invoke('vesper:install-update'),
   openReleases: () => ipcRenderer.invoke('vesper:open-releases'),
   openUpdateLog: () => ipcRenderer.invoke('vesper:open-update-log'),
+  getNotificationStatus: () => ipcRenderer.invoke('vesper:get-notification-status'),
+  openNotificationSettings: () => ipcRenderer.invoke('vesper:open-notification-settings'),
   showNotification: (notification) => ipcRenderer.invoke('vesper:show-notification', notification),
   onUpdateStatus(callback) {
     if (typeof callback !== 'function') return () => {}

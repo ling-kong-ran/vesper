@@ -5,6 +5,7 @@ import { app, autoUpdater as nativeAutoUpdater, BrowserWindow, dialog, ipcMain, 
 import updater from 'electron-updater'
 import { createVesperServer } from '../server/app-server.mjs'
 import { createElectronBrowserAutomationDriver } from './browser-automation.mjs'
+import { getDesktopNotificationStatus, WINDOWS_NOTIFICATION_SETTINGS_URL } from './desktop-notifications.mjs'
 import { enableResumableUpdateDownloads } from './resumable-update-download.mjs'
 import { createUpdateLogger, shutdownWithDeadline } from './update-lifecycle.mjs'
 import { LATEST_RELEASE_API, newerVersion, normalizedVersion, reconcileDesktopUpdateCheck, RELEASES_URL } from '../shared/app-update.mjs'
@@ -12,6 +13,7 @@ import { releaseNotesMarkdown } from '../shared/release-notes.mjs'
 
 const { autoUpdater } = updater
 const UPDATE_CHANNEL = 'vesper:update-status'
+const APP_USER_MODEL_ID = 'com.lingkongran.vesper'
 const NO_CACHE_HEADERS = Object.freeze({
   'Cache-Control': 'no-cache',
   Pragma: 'no-cache',
@@ -24,6 +26,7 @@ let updateState = { state: 'idle', checkedAt: null }
 let updateLogger = console
 let updateLogPath = ''
 let installingUpdate = false
+const activeDesktopNotifications = new Set()
 
 process.env.PI_SKIP_VERSION_CHECK ||= '1'
 process.env.PI_TELEMETRY ||= '0'
@@ -389,12 +392,29 @@ function registerIpc() {
     shell.showItemInFolder(updateLogPath)
     return true
   })
-  ipcMain.handle('vesper:show-notification', (_event, input = {}) => {
-    if (!ElectronNotification.isSupported()) return false
+  ipcMain.handle('vesper:get-notification-status', () => getDesktopNotificationStatus({
+    appUserModelId: APP_USER_MODEL_ID,
+    isSupported: ElectronNotification.isSupported(),
+  }))
+  ipcMain.handle('vesper:open-notification-settings', async () => {
+    if (process.platform !== 'win32') return false
+    await shell.openExternal(WINDOWS_NOTIFICATION_SETTINGS_URL)
+    return true
+  })
+  ipcMain.handle('vesper:show-notification', async (_event, input = {}) => {
+    const status = await getDesktopNotificationStatus({
+      appUserModelId: APP_USER_MODEL_ID,
+      isSupported: ElectronNotification.isSupported(),
+    })
+    if (status.permission !== 'granted') return { shown: false, ...status }
     const title = String(input.title || '').trim().slice(0, 120)
     const body = String(input.body || '').trim().slice(0, 2_000)
-    if (!title) return false
+    if (!title) return { shown: false, ...status, reason: 'invalid-title' }
     const notification = new ElectronNotification({ title, body })
+    activeDesktopNotifications.add(notification)
+    const cleanup = () => activeDesktopNotifications.delete(notification)
+    notification.once('close', cleanup)
+    notification.once('failed', cleanup)
     notification.on('click', () => {
       if (!mainWindow) return
       if (mainWindow.isMinimized()) mainWindow.restore()
@@ -402,7 +422,9 @@ function registerIpc() {
       mainWindow.focus()
     })
     notification.show()
-    return true
+    const cleanupTimer = setTimeout(cleanup, 30_000)
+    cleanupTimer.unref?.()
+    return { shown: true, ...status }
   })
 }
 
@@ -414,7 +436,7 @@ else {
     mainWindow.focus()
   })
   app.whenReady().then(async () => {
-    app.setAppUserModelId('com.lingkongran.vesper')
+    app.setAppUserModelId(APP_USER_MODEL_ID)
     configureUpdater()
     registerIpc()
     nativeTheme.on('updated', updateTitleBarOverlay)
