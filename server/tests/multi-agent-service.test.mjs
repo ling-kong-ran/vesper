@@ -5,7 +5,7 @@ import {
   MULTI_AGENT_TOOL_NAMES,
   MultiAgentService,
 } from '../services/multi-agent-service.mjs'
-import { TOOL_CATALOG, TOOL_PRESETS, createAppTools, toolsFromConfig } from '../tools/registry.mjs'
+import { TOOL_CATALOG, TOOL_PRESETS, createMultiAgentTools, toolsFromConfig } from '../tools/registry.mjs'
 
 function deferred() {
   let resolve
@@ -248,12 +248,11 @@ test('Agent output is UTF-8 safe and bounded to the tool-output limit', async ()
   assert.equal(completed.fullOutput, largeOutput)
 })
 
-test('Codex-style Agent tools replace delegate_task and spawn returns immediately through the tool contract', async () => {
+test('Codex-style Agent tools replace delegate_task and stay hidden from the plugins catalog', async () => {
   assert.equal(TOOL_CATALOG.some((tool) => tool.id === 'delegate_task'), false)
-  assert.ok(MULTI_AGENT_TOOL_NAMES.every((name) => TOOL_CATALOG.some((tool) => tool.id === name)))
+  assert.ok(MULTI_AGENT_TOOL_NAMES.every((name) => !TOOL_CATALOG.some((tool) => tool.id === name)))
   let input
-  const [tool] = createAppTools({
-    enabledTools: ['spawn_agent'],
+  const [tool] = createMultiAgentTools({
     multiAgentRuntime: {
       spawn: async (value) => {
         input = value
@@ -269,6 +268,7 @@ test('Codex-style Agent tools replace delegate_task and spawn returns immediatel
 test('new installations enable the complete tool catalog by default', () => {
   assert.deepEqual(toolsFromConfig({}), TOOL_PRESETS.full)
   assert.deepEqual(new Set(TOOL_PRESETS.full), new Set(TOOL_CATALOG.map((tool) => tool.id)))
+  assert.ok(MULTI_AGENT_TOOL_NAMES.every((name) => !TOOL_PRESETS.full.includes(name)))
 })
 
 test('interrupt then followup waits for the old run and preserves the new duration timer', async () => {

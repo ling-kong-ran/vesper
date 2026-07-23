@@ -1,7 +1,7 @@
-import { APP_TOOL_CATALOG, createAppToolDefinitions } from './app/index.mjs'
+import { APP_TOOL_CATALOG, createAppToolDefinitions, createMultiAgentTools } from './app/index.mjs'
 import { BUILTIN_TOOL_CATALOG, TOOL_PRESETS } from './builtin-catalog.mjs'
 
-export { TOOL_PRESETS }
+export { TOOL_PRESETS, createMultiAgentTools }
 
 export const TOOL_CATALOG = [...BUILTIN_TOOL_CATALOG, ...APP_TOOL_CATALOG]
 

@@ -144,3 +144,8 @@ export const factories = {
   wait_agent: createWaitAgentTool,
   interrupt_agent: createInterruptAgentTool,
 }
+
+// Internal runtime tools: always available to the primary Agent, never shown in the plugins UI.
+export function createMultiAgentTools(context = {}) {
+  return manifests.map((manifest) => factories[manifest.id](context))
+}

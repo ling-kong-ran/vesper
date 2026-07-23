@@ -9,7 +9,7 @@ export const BUILTIN_TOOL_CATALOG = [
 ]
 
 export const TOOL_PRESETS = {
-  'read-only': ['read', 'grep', 'find', 'ls', 'web_search', 'browser_automation', 'memory_search', 'memory_remember', 'spawn_agent', 'list_agents', 'send_message', 'followup_task', 'wait_agent', 'interrupt_agent', 'mcp_list', 'mcp_manage'],
-  workspace: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'web_search', 'browser_automation', 'memory_search', 'memory_remember', 'spawn_agent', 'list_agents', 'send_message', 'followup_task', 'wait_agent', 'interrupt_agent', 'mcp_list', 'mcp_manage'],
-  full: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'web_search', 'browser_automation', 'generate_visual', 'memory_search', 'memory_remember', 'spawn_agent', 'list_agents', 'send_message', 'followup_task', 'wait_agent', 'interrupt_agent', 'mcp_list', 'mcp_manage'],
+  'read-only': ['read', 'grep', 'find', 'ls', 'web_search', 'browser_automation', 'memory_search', 'memory_remember', 'mcp_list', 'mcp_manage'],
+  workspace: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'web_search', 'browser_automation', 'memory_search', 'memory_remember', 'mcp_list', 'mcp_manage'],
+  full: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'web_search', 'browser_automation', 'generate_visual', 'memory_search', 'memory_remember', 'mcp_list', 'mcp_manage'],
 }

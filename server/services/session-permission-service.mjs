@@ -7,7 +7,16 @@ export const DEFAULT_PERMISSION_MODE = 'auto'
 export const RESOLVED_APPROVAL_TTL_MS = 5 * 60_000
 export const MAX_RESOLVED_APPROVALS = 256
 
-const TOOL_RISKS = new Map(TOOL_CATALOG.map((tool) => [tool.id, tool.risk]))
+const TOOL_RISKS = new Map([
+  ...TOOL_CATALOG.map((tool) => [tool.id, tool.risk]),
+  // Internal multi-agent tools are not listed in the plugins catalog, but still need risk metadata.
+  ['spawn_agent', '中风险'],
+  ['list_agents', '低风险'],
+  ['send_message', '低风险'],
+  ['followup_task', '中风险'],
+  ['wait_agent', '低风险'],
+  ['interrupt_agent', '中风险'],
+])
 const SENSITIVE_RISKS = new Set(['中风险', '高风险'])
 const INTERNAL_SAFE_TOOLS = new Set(['get_goal', 'update_goal', 'get_task_list', 'update_task_list'])
 const DANGEROUS_COMMAND = /(?:\brm\s+-[^\r\n]*r[^\r\n]*f|\brmdir\s+\/s|\bdel\s+\/s|remove-item[^\r\n]*(?:-recurse|-force)|\bformat(?:\.com)?\b|\bshutdown(?:\.exe)?\b|\btaskkill[^\r\n]*\/f|\bgit\s+(?:reset\s+--hard|clean\s+-[^\r\n]*f)|\breg\s+delete\b|\bdrop\s+(?:database|table)\b|\btruncate\s+table\b)/i

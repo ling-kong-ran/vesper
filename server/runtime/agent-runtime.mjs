@@ -31,7 +31,7 @@ import { TaskListService } from '../services/task-list-service.mjs'
 import { BrowserAutomationService } from '../services/browser-automation-service.mjs'
 import { assetMessageAttachment, attachGeneratedAssets } from '../services/session-assets.mjs'
 import { forceNextToolCall, isVisualGenerationRequest } from '../services/visual-tool-routing.mjs'
-import { createAppTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry.mjs'
+import { createAppTools, createMultiAgentTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry.mjs'
 import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
 import { createTaskListTools, TASK_LIST_TOOL_NAMES } from '../tools/app/task-list.mjs'
 import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
@@ -368,7 +368,6 @@ export class AgentRuntimeService {
     await this.skills.init()
     await this.mcp.init()
     await this.toolPlugins.ensureDefaultTools(['memory_search', 'memory_remember'], 'memoryToolsV1')
-    await this.toolPlugins.ensureDefaultTools(MULTI_AGENT_TOOL_NAMES, 'multiAgentToolsV2')
     await this.toolPlugins.ensureDefaultTools(['mcp_list', 'mcp_manage'], 'mcpManagementToolsV1')
     await this.toolPlugins.ensureDefaultTools(['web_search'], 'webSearchToolV1')
     await this.toolPlugins.ensureDefaultTools(['browser_automation'], 'browserAutomationToolV1')
@@ -414,6 +413,7 @@ export class AgentRuntimeService {
     const names = [...new Set([
       ...(value.baseToolNames || []),
       ...TASK_LIST_TOOL_NAMES,
+      ...MULTI_AGENT_TOOL_NAMES,
       ...(goal?.status === 'active' ? GOAL_TOOL_NAMES : []),
     ])]
     value.session.setActiveToolsByName(names)
@@ -1088,6 +1088,7 @@ export class AgentRuntimeService {
       wait: (timeoutMs) => this.multiAgents.wait(runtimeSession.sessionId, timeoutMs),
       interrupt: (target) => this.multiAgents.interrupt(runtimeSession.sessionId, target),
     }
+    const multiAgentTools = createMultiAgentTools({ multiAgentRuntime })
     const createInheritedCustomTools = () => [
       ...createAppTools({
         cwd: effectiveCwd,
@@ -1100,7 +1101,6 @@ export class AgentRuntimeService {
         onGeneratedFile: ({ path }) => runtimeValue && runtimeSession
           ? this.recordGeneratedFile(runtimeSession.sessionId, runtimeValue, path)
           : undefined,
-        multiAgentRuntime,
         mcpRuntime: {
           list: (options) => this.getMcpDashboard(options),
           add: (input) => this.createMcpServer(input),
@@ -1120,8 +1120,8 @@ export class AgentRuntimeService {
       settingsManager: this.settingsManager,
       resourceLoader,
       sessionManager,
-      tools: [...baseToolNames, ...GOAL_TOOL_NAMES, ...TASK_LIST_TOOL_NAMES],
-      customTools: [...createInheritedCustomTools(), ...goalTools, ...taskListTools],
+      tools: [...baseToolNames, ...GOAL_TOOL_NAMES, ...TASK_LIST_TOOL_NAMES, ...MULTI_AGENT_TOOL_NAMES],
+      customTools: [...createInheritedCustomTools(), ...goalTools, ...taskListTools, ...multiAgentTools],
     })
     const now = new Date().toISOString()
     const value = {
