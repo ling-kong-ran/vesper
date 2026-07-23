@@ -8,11 +8,14 @@ import {
   DEFAULT_SANDBOX_DOMAINS,
   buildCommandSandboxOverrides,
   buildSandboxConfig,
+  canonicalSandboxPath,
   sandboxChildEnvironment,
   windowsSensitiveGuardPaths,
 } from '../security/local-sandbox-policy.mjs'
 import { LocalSandboxService } from '../services/local-sandbox-service.mjs'
 import { shouldRunBashOutsideSandbox } from '../tools/sandboxed-bash.mjs'
+
+const TEST_WINDOWS_SHELL = 'C:\\Program Files\\Git\\bin\\bash.exe'
 
 test('sandbox config accepts workspace sets and protects credentials', () => {
   const workspace = resolve('workspace')
@@ -44,7 +47,7 @@ test('Windows config avoids large home/workspace deny stamps and protects bounde
   const config = buildSandboxConfig({ workspaces: new Set([workspace]), dataDir, platform: 'win32', homeDir })
   assert.deepEqual(config.filesystem.allowWrite, [workspace])
   assert.deepEqual(config.filesystem.allowRead, [])
-  assert.deepEqual(config.filesystem.denyRead, [dataDir])
+  assert.deepEqual(config.filesystem.denyRead, [canonicalSandboxPath(dataDir)])
   assert.deepEqual(config.filesystem.denyWrite, [])
   assert.throws(
     () => buildSandboxConfig({ workspaces: new Set([workspace]), dataDir: join(workspace, 'agent-data'), platform: 'win32', homeDir }),
@@ -83,14 +86,14 @@ test('Windows command preflight guards readable credential paths before user cod
     cleanupAfterCommand: () => {},
     reset: async () => {},
   }
-  const service = new LocalSandboxService({ dataDir, homeDir, platform: 'win32', manager })
+  const service = new LocalSandboxService({ dataDir, homeDir, platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
 
   await service.createBashOperations().exec('printf USER_COMMAND', workspace, { onData: () => {}, timeout: 5 })
 
-  assert.deepEqual(initializedConfig.filesystem.denyRead, [resolve(dataDir)])
+  assert.deepEqual(initializedConfig.filesystem.denyRead, [canonicalSandboxPath(dataDir)])
   const guardedPaths = windowsSensitiveGuardPaths(dataDir, homeDir)
-  assert.ok(guardedPaths.includes(resolve(dataDir)))
-  assert.ok(guardedPaths.includes(resolve(homeDir, '.git-credentials')))
+  assert.ok(guardedPaths.includes(canonicalSandboxPath(dataDir)))
+  assert.ok(guardedPaths.includes(canonicalSandboxPath(resolve(homeDir, '.git-credentials'))))
   assert.match(wrappedCommand, /VESPER_SANDBOX_SENSITIVE_PATH_READABLE/)
   assert.match(wrappedCommand, /printf USER_COMMAND/)
   await service.dispose()
@@ -116,7 +119,7 @@ test('new credential files rotate the Windows sandbox policy before the next com
     cleanupAfterCommand: () => {},
     reset: async () => { enabled = false; resetCount += 1 },
   }
-  const service = new LocalSandboxService({ dataDir, homeDir, platform: 'win32', manager })
+  const service = new LocalSandboxService({ dataDir, homeDir, platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
   const operations = service.createBashOperations()
 
   await operations.exec('first', workspace, { onData: () => {}, timeout: 5 })
@@ -128,7 +131,7 @@ test('new credential files rotate the Windows sandbox policy before the next com
 
   assert.equal(resetCount, 1)
   assert.equal(configs.length, 2)
-  assert.ok(configs[1].filesystem.denyRead.includes(resolve(credentialFile)))
+  assert.ok(configs[1].filesystem.denyRead.includes(canonicalSandboxPath(credentialFile)))
   await service.dispose()
 })
 
@@ -184,7 +187,7 @@ test('sandbox operations spawn only the wrapper-owned environment', async (t) =>
   assert.equal(sandboxChildEnvironment({ SAFE: 'yes', BASH_ENV: 'unsafe', PROMPT_COMMAND: 'unsafe' }).SAFE, 'yes')
   assert.equal('BASH_ENV' in sandboxChildEnvironment({ BASH_ENV: 'unsafe' }), false)
   assert.equal('PROMPT_COMMAND' in sandboxChildEnvironment({ PROMPT_COMMAND: 'unsafe' }), false)
-  assert.deepEqual(initializedConfig.filesystem.allowWrite, [resolve(directory)])
+  assert.deepEqual(initializedConfig.filesystem.allowWrite, [canonicalSandboxPath(directory)])
   assert.deepEqual(wrappedConfig, { filesystem: { denyWrite: [] } })
   await service.dispose()
 })
@@ -211,15 +214,15 @@ test('Windows switches one granted workspace at a time instead of accumulating r
     cleanupAfterCommand: () => {},
     reset: async () => { enabled = false; resetCount += 1 },
   }
-  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-win-data'), platform: 'win32', manager })
+  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-win-data'), platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
   const operations = service.createBashOperations()
 
   await operations.exec('first', first, { onData: () => {}, timeout: 5 })
   await operations.exec('second', second, { onData: () => {}, timeout: 5 })
 
   assert.deepEqual(initialized.map((config) => config.filesystem.allowWrite), [
-    [resolve(first)],
-    [resolve(second)],
+    [canonicalSandboxPath(first)],
+    [canonicalSandboxPath(second)],
   ])
   assert.deepEqual(wrappedConfigs, [undefined, undefined])
   assert.equal(resetCount, 1)
@@ -242,7 +245,7 @@ test('same Windows workspace commands run concurrently without reinitializing SR
     cleanupAfterCommand: () => {},
     reset: async () => { enabled = false },
   }
-  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-shared-data'), platform: 'win32', manager })
+  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-shared-data'), platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
   const operations = service.createBashOperations()
 
   const first = operations.exec('first', workspace, { onData: () => {}, timeout: 5 })
@@ -279,7 +282,7 @@ test('an aborted cross-workspace waiter never resets or switches the active Wind
     cleanupAfterCommand: () => {},
     reset: async () => { enabled = false; resetCount += 1 },
   }
-  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-abort-data'), platform: 'win32', manager })
+  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-abort-data'), platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
   const operations = service.createBashOperations()
   const running = operations.exec('running', first, { onData: () => {}, timeout: 5 })
   for (let attempt = 0; attempt < 40 && service.activeCommands < 1; attempt += 1) await delay(10)
@@ -291,8 +294,8 @@ test('an aborted cross-workspace waiter never resets or switches the active Wind
 
   await assert.rejects(waiting, /aborted/)
   assert.equal(resetCount, 0)
-  assert.deepEqual(initialized, [[resolve(first)]])
-  assert.deepEqual([...service.workspaces], [resolve(first)])
+  assert.deepEqual(initialized, [[canonicalSandboxPath(first)]])
+  assert.deepEqual([...service.workspaces], [canonicalSandboxPath(first)])
   await running
   await service.dispose()
 })
@@ -317,7 +320,7 @@ test('workspace reset failures fail closed and keep the previous grant registere
     cleanupAfterCommand: () => {},
     reset: async () => { throw new Error('reset failed') },
   }
-  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-reset-data'), platform: 'win32', manager })
+  const service = new LocalSandboxService({ dataDir: join(tmpdir(), 'vesper-sandbox-reset-data'), platform: 'win32', manager, windowsShell: TEST_WINDOWS_SHELL })
   const operations = service.createBashOperations()
 
   await operations.exec('first', first, { onData: () => {}, timeout: 5 })
@@ -326,7 +329,7 @@ test('workspace reset failures fail closed and keep the previous grant registere
     /reset failed/,
   )
   assert.equal(wrapped, 1)
-  assert.deepEqual([...service.workspaces], [resolve(first)])
+  assert.deepEqual([...service.workspaces], [canonicalSandboxPath(first)])
   assert.equal(service.lastError?.message, 'reset failed')
   await service.dispose()
 })

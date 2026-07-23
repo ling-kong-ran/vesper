@@ -94,12 +94,13 @@ function terminateProcessTree(child, platform = process.platform) {
 }
 
 export class LocalSandboxService {
-  constructor({ dataDir, homeDir = homedir(), platform = process.platform, manager = SandboxManager, windowsExecutable = VENDORED_SRT_WIN_EXE, disposeGraceMs = 5_000 } = {}) {
+  constructor({ dataDir, homeDir = homedir(), platform = process.platform, manager = SandboxManager, windowsExecutable = VENDORED_SRT_WIN_EXE, windowsShell = '', disposeGraceMs = 5_000 } = {}) {
     this.homeDir = resolve(homeDir)
     this.dataDir = resolve(dataDir || join(this.homeDir, '.vesper', 'agent'))
     this.platform = platform
     this.manager = manager
     this.windowsExecutable = packagedSandboxExecutablePath(windowsExecutable)
+    this.windowsShell = String(windowsShell || '').trim()
     this.disposeGraceMs = disposeGraceMs
     this.workspaces = new Set()
     this.initializedSignature = ''
@@ -264,7 +265,7 @@ export class LocalSandboxService {
         let child
         let timedOut = false
         let timeoutHandle
-        const shellPath = this.platform === 'win32' ? resolveWindowsShell() : '/bin/bash'
+        const shellPath = this.platform === 'win32' ? (this.windowsShell || resolveWindowsShell()) : '/bin/bash'
         try {
           const wrapped = await this.manager.wrapWithSandboxArgv(
             this.platform === 'win32' ? buildWindowsSandboxCommand(command, shellPath, windowsSensitiveGuardPaths(this.dataDir, this.homeDir)) : command,
