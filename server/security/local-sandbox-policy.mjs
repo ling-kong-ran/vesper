@@ -240,11 +240,11 @@ export function buildCommandSandboxOverrides(workspaces, cwd, platform = process
   // Windows keeps exactly one granted workspace active at a time. Per-command
   // deny stamps would repeat expensive parent-ACL propagation.
   if (platform === 'win32') return undefined
-  const current = resolve(cwd)
+  const current = canonicalSandboxPath(cwd)
   return {
     filesystem: {
       denyWrite: [...(workspaces || [])]
-        .map((value) => resolve(value))
+        .map(canonicalSandboxPath)
         .filter((value) => value !== current),
     },
   }
