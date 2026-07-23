@@ -46,6 +46,33 @@ test('main and child Agent runtimes receive filtered Pi skills while MCP definit
   assert.ok(childLoader.getAppendSystemPrompt().includes('CHILD AGENT PROMPT'))
 })
 
+test('saving plugin tools keeps the current streaming session alive and invalidates idle runtimes', async () => {
+  const runtime = new AgentRuntimeService({ cwd: process.cwd(), dataDir: process.cwd() })
+  let streamingDisposed = 0
+  let idleDisposed = 0
+  runtime.sessions.set('streaming', {
+    runtimeVersion: 0,
+    session: { isStreaming: true, dispose: () => { streamingDisposed += 1 } },
+  })
+  runtime.sessions.set('idle', {
+    runtimeVersion: 0,
+    session: { isStreaming: false, dispose: () => { idleDisposed += 1 } },
+  })
+  runtime.toolPlugins.saveState = async () => ({ enabledTools: ['read'] })
+  runtime.pauseSessionGoal = async () => {}
+  runtime.multiAgents.abortParent = () => {}
+  runtime.permissions.resolveSession = () => {}
+
+  const result = await runtime.savePlugins({ enabledTools: ['read'] })
+
+  assert.deepEqual(result.enabledTools, ['read'])
+  assert.equal(runtime.sessionRuntimeVersion, 1)
+  assert.equal(streamingDisposed, 0)
+  assert.equal(idleDisposed, 1)
+  assert.equal(runtime.sessions.has('streaming'), true)
+  assert.equal(runtime.sessions.has('idle'), false)
+})
+
 test('resource changes keep the currently streaming session alive', async () => {
   const runtime = new AgentRuntimeService({ cwd: process.cwd(), dataDir: process.cwd() })
   let streamingDisposed = 0

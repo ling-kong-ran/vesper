@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { ChevronDown, ChevronRight, FileCode2, Pencil, Plus, RefreshCw, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { Check, ChevronDown, ChevronRight, FileCode2, Pencil, Plus, RefreshCw, Trash2, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { Panel, SectionTitle } from '../../components/ui.jsx'
 import { useI18n } from '../../app/use-i18n.js'
 import { StarOrbit } from '../../components/StarOrbit.jsx'
 import { apiJson } from '../../lib/api.js'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
+import { announceMemoryCandidatesChanged } from './events.js'
 
 const GALAXY_VIEW = { width: 600, height: 420, cx: 300, cy: 206 }
 const MAX_STARS = 24
@@ -72,7 +73,7 @@ function linkCurve(source, target, seed) {
 
 export function MemoryPage({ notify, query, registerPrimaryAction, requestConfirm }) {
   const { t, language } = useI18n()
-  const [data, setData] = useState({ spaces: [], nodes: [], links: [], selectedSpaceId: '' })
+  const [data, setData] = useState({ spaces: [], nodes: [], links: [], candidates: [], selectedSpaceId: '' })
   const [spaceId, setSpaceId] = useState('')
   const [selectedId, setSelectedId] = useState('')
   const [loading, setLoading] = useState(true)
@@ -81,6 +82,7 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
   const [nodeModal, setNodeModal] = useState(null)
   const [spaceModal, setSpaceModal] = useState(null)
   const [hoveredId, setHoveredId] = useState('')
+  const [resolvingCandidateId, setResolvingCandidateId] = useState('')
   const stageRef = useRef(null)
   const parallaxFrame = useRef(0)
   usePagePrimaryAction(registerPrimaryAction, () => setNodeModal({ spaceId: spaceId || data.selectedSpaceId }))
@@ -156,6 +158,19 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
     } catch (deleteError) { setError(deleteError.message) }
   }
 
+  const resolveCandidate = async (candidate, action) => {
+    if (resolvingCandidateId) return
+    setResolvingCandidateId(candidate.id)
+    setError('')
+    try {
+      await apiJson(`/api/memory/candidates/${encodeURIComponent(candidate.id)}/${action}`, { method: 'POST', body: '{}' })
+      notify(t(action === 'accept' ? '候选记忆已确认' : '候选记忆已忽略'))
+      announceMemoryCandidatesChanged()
+      await load(spaceId)
+    } catch (candidateError) { setError(candidateError.message) }
+    finally { setResolvingCandidateId('') }
+  }
+
   const deleteSpace = async () => {
     if (!selectedSpace) return
     const approved = await requestConfirm({ title: t('删除星域'), message: t('确定删除星域“{name}”及其全部星辰吗？', { name: spaceLabel(selectedSpace, t) }), confirmLabel: t('删除') })
@@ -179,6 +194,20 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
         <Panel className="memory-legend-panel">
           <SectionTitle title={t('星图类型')} />
           <div className="galaxy-legend">{Object.entries(TYPE_LABELS).map(([type, label]) => <span key={type}><i className={`g-dot g-${type}`} />{t(label)}</span>)}</div>
+        </Panel>
+        <Panel className="memory-candidates-panel">
+          <SectionTitle title={`${t('记忆待办')} · ${data.candidates?.length || 0}`} />
+          <p className="muted-copy">{t('候选只会在后台进入这里，不会暂停、阻止或打断当前会话。你可以有空时集中处理。')}</p>
+          <div className="memory-candidate-list">
+            {(data.candidates || []).map((candidate) => <div className="memory-candidate" key={candidate.id}>
+              <strong>{candidate.title}</strong>
+              <small>{spaceLabel(data.spaces.find((space) => space.id === candidate.spaceId), t)}</small>
+              <span>{candidate.content}</span>
+              {candidate.evidence && <small>{t('证据')}：{candidate.evidence}</small>}
+              <div><button disabled={Boolean(resolvingCandidateId)} title={t('确认')} onClick={() => resolveCandidate(candidate, 'accept')}><Check size={12} />{t('确认')}</button><button disabled={Boolean(resolvingCandidateId)} className="danger" title={t('忽略')} onClick={() => resolveCandidate(candidate, 'reject')}><X size={12} />{t('忽略')}</button></div>
+            </div>)}
+            {!data.candidates?.length && <small>{t('当前没有待处理的记忆候选。')}</small>}
+          </div>
         </Panel>
       </div>
       <Panel className="graph-panel galaxy-panel" onPointerMove={handleParallax} onPointerLeave={resetParallax}>
@@ -262,7 +291,9 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
             <h2>{selected.title}</h2>
             <p className="muted-copy">{selected.content}</p>
             <div className="key-value"><span>{t('星辰类型')}</span><strong className="type-with-dot"><i className={`g-dot g-${selected.type}`} />{t(TYPE_LABELS[selected.type] || selected.type)}</strong></div>
-            <div className="key-value"><span>{t('来源')}</span><strong>{t(selected.sourceType === 'conversation' ? '对话自动沉淀' : selected.sourceType === 'agent' ? 'Agent 点亮' : '手动添加')}</strong></div>
+            <div className="key-value"><span>{t('来源')}</span><strong>{t(selected.sourceType === 'conversation_confirmed' ? '用户确认的对话候选' : selected.sourceType === 'agent' ? 'Agent 点亮' : '手动添加')}</strong></div>
+            <div className="key-value"><span>{t('可信度')}</span><strong>{selected.authority ?? 0}/100</strong></div>
+            {selected.evidence && <div className="key-value"><span>{t('证据')}</span><strong>{selected.evidence}</strong></div>}
             <div className="key-value"><span>{t('创建时间')}</span><strong>{formatMemoryTime(selected.createdAt, language)}</strong></div>
             <div className="key-value"><span>{t('关联星辰')}</span><strong>{t('{count} 颗', { count: relatedNodeIds.size })}</strong></div>
             <div className="button-row"><button className="button primary" onClick={() => setNodeModal(selected)}><Pencil size={14} />{t('编辑')}</button><button className="button danger" onClick={() => deleteNode(selected)}><Trash2 size={14} />{t('删除')}</button></div>

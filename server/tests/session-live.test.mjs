@@ -109,6 +109,52 @@ test('stream completion publishes an authoritative terminal snapshot', async (t)
   assert.deepEqual(live.compaction, compactionEnd)
 })
 
+test('background memory candidate extraction never blocks or delays session completion', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-memory-background-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  runtime.archiveAttachments = async () => []
+  runtime.memory = { relevantContext: async () => ({ text: '' }) }
+  const timeline = []
+  runtime.captureConversationMemory = async () => {
+    timeline.push('candidate-extraction-started')
+    await new Promise(() => {})
+  }
+
+  const listeners = new Set()
+  const session = {
+    sessionId: 'session-memory-background',
+    isStreaming: false,
+    model: { provider: 'openai', id: 'gpt-5.4' },
+    thinkingLevel: 'medium',
+    messages: [{ role: 'user', content: 'Earlier turn', timestamp: 1 }],
+    agent: { state: { systemPrompt: '' } },
+    getActiveToolNames: () => [],
+    setActiveToolsByName: () => {},
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    async prompt() {
+      session.isStreaming = true
+      session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Current task completed.' }], timestamp: 2 })
+      session.isStreaming = false
+    },
+  }
+  const value = { session, cwd: directory, name: 'Background memory', baseToolNames: [], enabledTools: ['memory_remember'] }
+  runtime.sessions.set(session.sessionId, value)
+  runtime.getOrCreateSession = async () => value
+
+  await runtime.streamPrompt({
+    sessionId: session.sessionId,
+    message: 'Remember this preference and finish the current task.',
+    send: (event) => timeline.push(event),
+  })
+
+  assert.ok(timeline.includes('done'))
+  assert.ok(timeline.indexOf('done') < timeline.indexOf('candidate-extraction-started'))
+})
+
 test('unread background Agent results are injected once into the next parent run', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vesper-agent-mailbox-'))
   t.after(() => rm(directory, { recursive: true, force: true }))

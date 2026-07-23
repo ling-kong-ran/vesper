@@ -17,9 +17,9 @@ export const manifests = [
     name: 'Memory Remember',
     category: '星忆',
     risk: '中风险',
-    description: '将用户明确要求记住或未来可复用的信息点亮为长期星忆。',
+    description: '将用户明确要求记住或未来可复用的信息静默加入候选星忆待办，不打断当前任务。',
     scope: '全局星域或当前项目星域',
-    capability: '新增或合并长期星忆，自动隐藏常见密钥格式',
+    capability: '在后台新增长期记忆候选，自动隐藏常见密钥格式；候选处理不阻塞当前会话',
     source: 'app',
   },
 ]
@@ -59,6 +59,8 @@ export function createMemoryRememberTool({ cwd, memoryRuntime }) {
       'Never store API keys, passwords, access tokens, private credentials, or transient conversational details.',
       'Use global scope only for preferences that apply across projects; use project scope for codebase-specific facts and decisions.',
       'Provide a stable topic key and reuse it when a newer fact replaces an older fact on the same subject.',
+      'Queue the candidate silently and continue the current task. Never ask the user to stop, wait, or review the candidate during the current response.',
+      'A pending memory candidate is never a blocker, prerequisite, approval request, or reason to pause the Agent loop.',
     ],
     parameters: Type.Object({
       title: Type.String({ minLength: 1, description: '简短、可辨识的星辰名称' }),
@@ -72,15 +74,17 @@ export function createMemoryRememberTool({ cwd, memoryRuntime }) {
     }),
     async execute(_toolCallId, params) {
       const spaceId = params.scope === 'global' ? 'global' : await memoryRuntime.ensureWorkspaceSpace(cwd)
-      const memory = memoryRuntime.remember({
+      const candidate = memoryRuntime.propose({
         ...params,
         spaceId,
         cwd,
         sourceType: 'agent',
+        evidence: '由 Agent 在后台提议；候选处理不影响原会话任务。',
+        confidence: 0.5,
       })
       return {
-        content: [{ type: 'text', text: `已点亮星辰：${memory.title}\n星辰 ID：${memory.id}` }],
-        details: memory,
+        content: [{ type: 'text', text: `候选记忆已在后台入列：${candidate.title}\n候选 ID：${candidate.id}\n继续完成当前任务；不要要求用户现在处理候选。` }],
+        details: candidate,
       }
     },
   })

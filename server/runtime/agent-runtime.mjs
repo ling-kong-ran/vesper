@@ -1360,6 +1360,7 @@ export class AgentRuntimeService {
       modified: now,
       cwd: effectiveCwd,
       baseToolNames,
+      enabledTools,
       runtimeVersion: this.sessionRuntimeVersion,
     }
     runtimeValue = value
@@ -1562,7 +1563,10 @@ export class AgentRuntimeService {
       const archivedAttachments = await this.archiveAttachments(session.sessionId, value.name, safeAttachments)
       const images = []
       const contexts = []
-      const memoryContext = await this.memory.relevantContext(message, value.cwd)
+      const memoryContext = value.enabledTools?.includes('memory_search')
+        ? await this.memory.relevantContext(message, value.cwd)
+        : { text: '', memories: [] }
+      if (memoryContext.text) contexts.push(memoryContext.text)
       const agentMailbox = this.multiAgents.peekMailbox(session.sessionId)
       const mailboxPrompt = agentMailboxPrompt(agentMailbox)
       const activeGoal = this.goals.get(session.sessionId)
@@ -1593,8 +1597,7 @@ export class AgentRuntimeService {
       const restorePayloadHandler = shouldForceVisualTool ? forceNextToolCall(session.agent, 'generate_visual') : () => {}
       applyVesperSystemPrompt(session, session.model)
       const originalSystemPrompt = session.agent.state.systemPrompt
-      const transientSystemContext = [memoryContext.text, mailboxPrompt].filter(Boolean).join('\n\n')
-      if (transientSystemContext) session.agent.state.systemPrompt = `${originalSystemPrompt}\n\n${transientSystemContext}`
+      if (mailboxPrompt) session.agent.state.systemPrompt = `${originalSystemPrompt}\n\n${mailboxPrompt}`
       let mailboxAccepted = false
       let promptCompleted = false
       try {
@@ -1644,13 +1647,16 @@ export class AgentRuntimeService {
         startedAt: live.startedAt,
         finishedAt,
       })
-      void this.captureConversationMemory({
-        sessionId: session.sessionId,
-        cwd: value.cwd,
-        model: session.model,
-        user: message,
-        assistant: assistantText,
-      }).catch(() => {})
+      if (value.enabledTools?.includes('memory_remember')) {
+        void this.captureConversationMemory({
+          sessionId: session.sessionId,
+          cwd: value.cwd,
+          model: session.model,
+          user: message,
+          assistant: assistantText,
+          sourceTimestamp: live.startedAt,
+        }).catch(() => {})
+      }
     } catch (error) {
       flushText()
       session.clearQueue?.()
@@ -1709,23 +1715,28 @@ export class AgentRuntimeService {
     return cleanSessionTitle(textFromContent(result.content)) || fallback
   }
 
-  async captureConversationMemory({ sessionId, cwd, model, user, assistant }) {
+  async captureConversationMemory({ sessionId, cwd, model, user, assistant, sourceTimestamp = '' }) {
     const result = await extractConversationMemories({ modelRuntime: this.modelRuntime, model, user, assistant })
     if (result.usage) await this.recordUsage(localDayKey(result.timestamp || Date.now()), `memory:${sessionId}:${result.timestamp || Date.now()}`, result.usage)
     if (!result.memories.length) return []
     const projectSpaceId = await this.memory.ensureWorkspaceSpace(cwd)
-    return result.memories.map((item) => this.memory.remember({
+    return result.memories.map((item, index) => this.memory.propose({
       ...item,
       spaceId: item.scope === 'global' ? 'global' : projectSpaceId,
       cwd,
       sessionId,
       sourceType: 'conversation',
-      sourceId: sessionId,
+      sourceId: `${sessionId}:${sourceTimestamp || result.timestamp || Date.now()}:${index}`,
+      sourceTimestamp: sourceTimestamp || new Date(result.timestamp || Date.now()).toISOString(),
     }))
   }
 
   getMemoryDashboard(input) {
     return this.memory.getDashboard(input)
+  }
+
+  getMemoryCandidateInbox(input) {
+    return this.memory.candidateInbox(input)
   }
 
   createMemorySpace(input) {
@@ -1750,6 +1761,14 @@ export class AgentRuntimeService {
 
   deleteMemory(id) {
     return this.memory.forget(id)
+  }
+
+  acceptMemoryCandidate(id) {
+    return this.memory.acceptCandidate(id)
+  }
+
+  rejectMemoryCandidate(id) {
+    return this.memory.rejectCandidate(id)
   }
 
   async abortSession(id) {
@@ -2008,7 +2027,7 @@ export class AgentRuntimeService {
 
   async savePlugins(input) {
     const result = await this.toolPlugins.saveState(input)
-    await this.disposeSessions()
+    this.invalidateSessionRuntimes()
     return result
   }
 

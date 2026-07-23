@@ -67,6 +67,7 @@ import { createToolUpdateScheduler, createTypewriterDisplay } from './lib/stream
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
 import { useAppUpdate } from './features/updates/useAppUpdate.js'
+import { MEMORY_CANDIDATES_CHANGED_EVENT } from './features/memory/events.js'
 
 const PluginsPage = lazy(() => import('./features/plugins/PluginsPage.jsx').then((module) => ({ default: module.PluginsPage })))
 const ChannelsPage = lazy(() => import('./features/channels/ChannelsPage.jsx').then((module) => ({ default: module.ChannelsPage })))
@@ -464,6 +465,7 @@ function Sidebar({ page, navigation, navigate, open, onClose, collapsed, onToggl
   const [sessions, setSessions] = useState([])
   const [historyExpanded, setHistoryExpanded] = useState(true)
   const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
+  const [memoryCandidateCount, setMemoryCandidateCount] = useState(0)
   const active = page === 'workflowCreate' ? 'workflows' : page === 'chatHistory' ? 'chat' : page
 
   const refreshSessions = useCallback(async () => {
@@ -490,6 +492,26 @@ function Sidebar({ page, navigation, navigate, open, onClose, collapsed, onToggl
       window.removeEventListener(ACTIVE_SESSION_CHANGED_EVENT, syncActive)
     }
   }, [refreshSessions])
+
+  const refreshMemoryCandidates = useCallback(async () => {
+    try {
+      const result = await apiJson('/api/memory/candidates?limit=1')
+      setMemoryCandidateCount(Number(result.count) || 0)
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    void refreshMemoryCandidates()
+    const timer = window.setInterval(refreshMemoryCandidates, 15_000)
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void refreshMemoryCandidates() }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener(MEMORY_CANDIDATES_CHANGED_EVENT, refreshMemoryCandidates)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener(MEMORY_CANDIDATES_CHANGED_EVENT, refreshMemoryCandidates)
+    }
+  }, [refreshMemoryCandidates])
 
   const openRecentSession = (id) => {
     setActiveSessionId(id)
@@ -523,6 +545,7 @@ function Sidebar({ page, navigation, navigate, open, onClose, collapsed, onToggl
           </section>
         </div>
         <div className="mt-auto grid gap-2">
+          {memoryCandidateCount > 0 && <button className="memory-inbox-button" title={t('{count} 条候选记忆待处理，不影响当前会话', { count: memoryCandidateCount })} onClick={() => navigate('memory')}><ListChecks size={16} /><span><strong>{t('记忆待办')}</strong><small>{t('有空时处理')}</small></span><em>{memoryCandidateCount > 99 ? '99+' : memoryCandidateCount}</em></button>}
           <SidebarUpdateStatus update={update} collapsed={collapsed} onOpen={onOpenUpdates} />
           <button className="sidebar-collapse !mt-0" title={t(collapsed ? '展开侧栏' : '收起侧栏')} aria-label={t(collapsed ? '展开侧栏' : '收起侧栏')} onClick={onToggleCollapse}>{collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}<span>{t(collapsed ? '展开侧栏' : '收起侧栏')}</span></button>
         </div>

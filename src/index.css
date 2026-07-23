@@ -381,6 +381,12 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .nav-list .nav-history-item.active-session { box-shadow: inset 2px 0 var(--brand-blue); }
 .nav-history-empty { padding: 8px; color: var(--muted); font-size: 11px; }
 .nav-scrim { display: none; }
+.memory-inbox-button { display: grid; width: 100%; min-height: 46px; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 9px; border: 1px solid var(--stroke); border-radius: var(--r-sm); background: var(--surface-subtle); padding: 6px 8px; color: var(--text-secondary); text-align: left; cursor: pointer; transition: var(--d1) var(--ease-out); }
+.memory-inbox-button:hover { border-color: var(--accent-border); background: var(--star-soft); color: var(--text); }
+.memory-inbox-button > span { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
+.memory-inbox-button strong { font-size: 12px; font-weight: 650; }
+.memory-inbox-button small { color: var(--muted); font-size: 10px !important; }
+.memory-inbox-button em { display: grid; min-width: 22px; height: 20px; place-items: center; border-radius: var(--r-pill); background: var(--star-strong); color: var(--on-accent); padding: 0 6px; font-size: 10px; font-style: normal; font-weight: 700; }
 .sidebar-collapse { display: flex; height: 34px; flex: none; align-items: center; gap: 8px; margin-top: auto; border: 1px solid var(--stroke); border-radius: var(--r-sm); background: transparent; padding: 0 10px; color: var(--muted); font-size: 12px; cursor: pointer; transition: var(--d1) var(--ease-out); }
 .sidebar-collapse:hover { background: var(--surface-hover); color: var(--text); }
 .status-bar { display: flex; height: 28px; flex: none; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--stroke); background: var(--sidebar-bg); padding: 0 14px; color: var(--muted); font-size: 11px; backdrop-filter: blur(20px); }
@@ -400,6 +406,9 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
   .sidebar.collapsed .nav-list button { justify-content: center; gap: 0; padding: 0; }
   .sidebar.collapsed .nav-list button span { display: none; }
   .sidebar.collapsed .nav-list button.active::before { left: 0; }
+  .sidebar.collapsed .memory-inbox-button { position: relative; display: flex; min-height: 38px; justify-content: center; padding: 0; }
+  .sidebar.collapsed .memory-inbox-button > span { display: none; }
+  .sidebar.collapsed .memory-inbox-button em { position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; font-size: 9px; }
   .sidebar.collapsed .sidebar-collapse { justify-content: center; gap: 0; padding: 0; }
   .sidebar.collapsed .sidebar-collapse span { display: none; }
 }
@@ -1124,5 +1133,11 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
   .button-row { flex-wrap: wrap; }.toast { right: 12px; bottom: 12px; left: 12px; justify-content: center; }
   .modal-backdrop { padding: 8px; }.palette-backdrop { padding-top: 8vh; }.command-palette { width: 100%; }.palette-item-hint { max-width: 34vw; }.provider-discovery-list,.language-choice-grid { grid-template-columns: 1fr; }.provider-discovery-head { flex-wrap: wrap; }
 }
+
+.memory-candidates-panel { min-height: 0; }
+.memory-candidate-list { display: flex; max-height: 300px; flex-direction: column; gap: 8px; overflow: auto; }
+.memory-candidate { display: flex; flex-direction: column; gap: 5px; border: 1px solid var(--stroke-soft); border-radius: 8px; background: var(--surface-muted); padding: 8px; }
+.memory-candidate > strong { font-size: 12px; }.memory-candidate > span,.memory-candidate > small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.memory-candidate > div { display: flex; gap: 6px; }.memory-candidate button { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--stroke-soft); border-radius: 6px; background: transparent; padding: 4px 7px; color: var(--text); font-size: 11px; }.memory-candidate button.danger { color: var(--danger); }
 
 @media (prefers-reduced-motion: reduce) { *,*::before,*::after { scroll-behavior: auto!important; animation-duration: .01ms!important; transition-duration: .01ms!important; } }

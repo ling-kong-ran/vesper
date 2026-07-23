@@ -134,6 +134,10 @@ export function createApiHandler(runtime, { updates } = {}) {
         }))
         return true
       }
+      if (req.method === 'GET' && url.pathname === '/api/memory/candidates') {
+        json(res, 200, runtime.getMemoryCandidateInbox({ limit: url.searchParams.get('limit') }))
+        return true
+      }
       if (req.method === 'POST' && url.pathname === '/api/memory/spaces') {
         json(res, 201, runtime.createMemorySpace(await bodyJson(req)))
         return true
@@ -166,6 +170,16 @@ export function createApiHandler(runtime, { updates } = {}) {
         const deleted = runtime.deleteMemory(decodeURIComponent(memoryNodeMatch[1]))
         if (!deleted) json(res, 404, { error: '星辰不存在。' })
         else json(res, 200, { deleted: true })
+        return true
+      }
+      const memoryCandidateActionMatch = url.pathname.match(/^\/api\/memory\/candidates\/([^/]+)\/(accept|reject)$/)
+      if (req.method === 'POST' && memoryCandidateActionMatch) {
+        const id = decodeURIComponent(memoryCandidateActionMatch[1])
+        const result = memoryCandidateActionMatch[2] === 'accept'
+          ? runtime.acceptMemoryCandidate(id)
+          : runtime.rejectMemoryCandidate(id)
+        if (!result) json(res, 404, { error: '候选记忆不存在或已处理。' })
+        else json(res, 200, result)
         return true
       }
       if (req.method === 'GET' && url.pathname === '/api/channels') {
