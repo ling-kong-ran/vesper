@@ -1,6 +1,8 @@
 import { randomUUID } from 'node:crypto'
 import { createAgentSession, DefaultResourceLoader, estimateTokens, SessionManager } from '@earendil-works/pi-coding-agent'
 import { applyVesperSystemPrompt, vesperPromptExtension } from '../prompts/vesper-system-prompt.mjs'
+import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
+import { redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
 
 export const DEFAULT_AGENT_MAX_DURATION_SECONDS = 180
 export const MAX_AGENT_MAX_DURATION_SECONDS = 600
@@ -30,6 +32,10 @@ const PARENT_ONLY_TOOL_NAMES = new Set([
   'mcp_list',
   'mcp_manage',
 ])
+
+const ACTIVE_AGENT_STATUSES = new Set(['starting', 'running'])
+const TERMINAL_AGENT_STATUSES = new Set(['completed', 'failed', 'interrupted'])
+const RESTART_INTERRUPTION_REASON = 'Agent was interrupted because Vesper restarted.'
 
 export const MULTI_AGENT_SYSTEM_PROMPT = `You are a Vesper subagent working in an isolated context on one delegated task.
 
@@ -67,6 +73,99 @@ function usageDifference(total, baseline) {
 
 function modelLabel(model) {
   return model?.provider && model?.id ? `${model.provider}/${model.id}` : ''
+}
+
+function modelFromLabel(value) {
+  const label = String(value || '')
+  const separator = label.indexOf('/')
+  return separator > 0 ? { provider: label.slice(0, separator), id: label.slice(separator + 1) } : null
+}
+
+function emptyUsage() {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, totalTokens: 0 }
+}
+
+function durableRecord(record) {
+  return {
+    id: record.id,
+    taskName: record.taskName,
+    canonicalName: record.canonicalName,
+    parentSessionId: record.parentSessionId,
+    cwd: record.cwd,
+    model: modelLabel(record.model),
+    thinkingLevel: record.thinkingLevel,
+    message: redactSecretText(record.message),
+    availableTools: [...record.availableTools],
+    maxDurationSeconds: record.maxDurationSeconds,
+    maxToolCalls: record.maxToolCalls,
+    toolCallCount: record.toolCallCount,
+    tools: redactSecretValue(record.tools.map((tool) => ({ ...tool }))),
+    output: redactSecretText(record.output),
+    outputTruncated: record.outputTruncated,
+    usage: { ...record.usage },
+    runUsage: { ...record.runUsage },
+    runNumber: record.runNumber,
+    resultVersion: record.resultVersion,
+    deliveredVersion: record.deliveredVersion,
+    error: redactSecretText(record.error),
+    startedAt: record.startedAt,
+    lastActivityAt: record.lastActivityAt,
+    completedAt: record.completedAt,
+    durationMs: record.durationMs,
+    status: record.status,
+  }
+}
+
+function restoredRecord(value) {
+  const id = String(value?.id || '').trim()
+  const parentSessionId = String(value?.parentSessionId || '').trim()
+  const model = modelFromLabel(value?.model)
+  if (!id || !parentSessionId || !model) return null
+  const status = TERMINAL_AGENT_STATUSES.has(value?.status) || ACTIVE_AGENT_STATUSES.has(value?.status) ? value.status : 'failed'
+  const output = String(value?.output || '')
+  return {
+    id,
+    taskName: normalizeTaskName(value?.taskName),
+    canonicalName: String(value?.canonicalName || `/root/${normalizeTaskName(value?.taskName)}_restored`),
+    parentSessionId,
+    cwd: String(value?.cwd || ''),
+    model,
+    thinkingLevel: String(value?.thinkingLevel || 'medium'),
+    message: String(value?.message || ''),
+    availableTools: childTools(value?.availableTools),
+    customTools: [],
+    maxDurationSeconds: boundedInteger(value?.maxDurationSeconds, DEFAULT_AGENT_MAX_DURATION_SECONDS, MAX_AGENT_MAX_DURATION_SECONDS),
+    maxToolCalls: boundedInteger(value?.maxToolCalls, DEFAULT_AGENT_MAX_TOOL_CALLS, MAX_AGENT_MAX_TOOL_CALLS),
+    toolCallCount: positiveInteger(value?.toolCallCount) || 0,
+    tools: Array.isArray(value?.tools) ? value.tools.map((tool) => ({ ...tool })) : [],
+    output,
+    fullOutput: output,
+    outputTruncated: Boolean(value?.outputTruncated),
+    usage: { ...emptyUsage(), ...(value?.usage || {}) },
+    runUsage: { ...emptyUsage(), ...(value?.runUsage || {}) },
+    runNumber: positiveInteger(value?.runNumber) || 0,
+    runGeneration: 0,
+    timerGeneration: 0,
+    resultVersion: positiveInteger(value?.resultVersion) || 0,
+    deliveredVersion: positiveInteger(value?.deliveredVersion) || 0,
+    error: String(value?.error || ''),
+    startedAt: value?.startedAt || new Date().toISOString(),
+    lastActivityAt: value?.lastActivityAt || null,
+    completedAt: value?.completedAt || null,
+    durationMs: Number.isFinite(value?.durationMs) ? value.durationMs : null,
+    status,
+    session: null,
+    unsubscribe: () => {},
+    timer: null,
+    aborted: false,
+    abortReason: '',
+    runningPromise: Promise.resolve(),
+    restartChain: Promise.resolve(),
+    pendingMessages: [],
+    onProgress: null,
+    onSession: null,
+    onCompleted: null,
+  }
 }
 
 function positiveInteger(value) {
@@ -140,38 +239,6 @@ function normalizeTaskName(value) {
   return normalized || 'task'
 }
 
-function forkTurnCount(value) {
-  if (value == null || value === '' || String(value).toLowerCase() === 'all') return Infinity
-  if (String(value).toLowerCase() === 'none') return 0
-  const number = positiveInteger(value)
-  if (!number) throw new Error('forkTurns must be `none`, `all`, or a positive integer.')
-  return number
-}
-
-function forkedMessages(messages, forkTurns) {
-  const count = forkTurnCount(forkTurns)
-  if (count === 0 || !Array.isArray(messages)) return []
-  const safe = messages.filter((message) => ['user', 'assistant', 'toolResult'].includes(message?.role))
-  if (!Number.isFinite(count)) return safe
-  let remaining = count
-  let start = safe.length
-  while (start > 0 && remaining > 0) {
-    start -= 1
-    if (safe[start]?.role === 'user') remaining -= 1
-  }
-  return safe.slice(start)
-}
-
-function snapshotParentMessages(messages, forkTurns) {
-  return forkedMessages(messages, forkTurns).map((message) => {
-    try {
-      return structuredClone(message)
-    } catch {
-      return message
-    }
-  })
-}
-
 async function createAgentResourceLoader({ cwd, agentDir, settingsManager, appendSystemPrompt = MULTI_AGENT_SYSTEM_PROMPT }) {
   const loader = new DefaultResourceLoader({
     cwd,
@@ -209,12 +276,15 @@ function publicRecord(record) {
     usage: { ...record.usage },
     runUsage: { ...record.runUsage },
     runNumber: record.runNumber,
+    resultVersion: record.resultVersion,
+    deliveredVersion: record.deliveredVersion,
     error: record.error,
   }
 }
 
 export class MultiAgentService {
   constructor({
+    path,
     agentDir,
     getModelRuntime,
     getSettingsManager,
@@ -224,7 +294,9 @@ export class MultiAgentService {
     maxConcurrent = MAX_CONCURRENT_AGENTS,
     setTimer = setTimeout,
     clearTimer = clearTimeout,
+    now = () => Date.now(),
   } = {}) {
+    this.path = path
     this.agentDir = agentDir
     this.getModelRuntime = getModelRuntime || (() => null)
     this.getSettingsManager = getSettingsManager || (() => null)
@@ -234,9 +306,69 @@ export class MultiAgentService {
     this.maxConcurrent = Math.max(1, Number(maxConcurrent) || MAX_CONCURRENT_AGENTS)
     this.setTimer = setTimer
     this.clearTimer = clearTimer
+    this.now = now
     this.records = new Map()
     this.waiters = new Map()
     this.sequence = 0
+    this.write = Promise.resolve()
+  }
+
+  async init() {
+    if (!this.path) return
+    const state = await readJson(this.path, { version: 1, sequence: 0, records: [] })
+    this.sequence = Math.max(0, Number(state?.sequence) || 0)
+    this.records.clear()
+    let changed = false
+    for (const value of Array.isArray(state?.records) ? state.records : []) {
+      const record = restoredRecord(value)
+      if (!record) continue
+      if (ACTIVE_AGENT_STATUSES.has(record.status)) {
+        const completedAt = new Date(this.now()).toISOString()
+        record.status = 'interrupted'
+        record.error = RESTART_INTERRUPTION_REASON
+        record.tools = record.tools.map((tool) => tool.status === 'running' ? { ...tool, status: 'error', message: RESTART_INTERRUPTION_REASON } : tool)
+        record.completedAt = completedAt
+        record.lastActivityAt = completedAt
+        record.durationMs = Math.max(0, this.now() - new Date(record.startedAt).getTime())
+        record.resultVersion += 1
+        changed = true
+      }
+      this.records.set(record.id, record)
+    }
+    if (changed) await this.save()
+  }
+
+  save() {
+    if (!this.path) return Promise.resolve()
+    const snapshot = {
+      version: 1,
+      sequence: this.sequence,
+      records: [...this.records.values()].map(durableRecord),
+    }
+    this.write = this.write.catch(() => {}).then(() => writeJsonAtomic(this.path, snapshot))
+    return this.write
+  }
+
+  flush() {
+    return this.write
+  }
+
+  peekMailbox(parentSessionId) {
+    return this.list(parentSessionId).filter((record) => TERMINAL_AGENT_STATUSES.has(record.status) && record.resultVersion > record.deliveredVersion)
+  }
+
+  async acknowledge(parentSessionId, agents = []) {
+    const versions = new Map((Array.isArray(agents) ? agents : []).map((agent) => [agent.id, Number(agent.resultVersion) || 0]))
+    let changed = false
+    for (const record of this.records.values()) {
+      if (record.parentSessionId !== parentSessionId || !TERMINAL_AGENT_STATUSES.has(record.status)) continue
+      const version = versions.get(record.id)
+      if (!version || version <= record.deliveredVersion) continue
+      record.deliveredVersion = Math.min(record.resultVersion, version)
+      changed = true
+    }
+    if (changed) await this.save()
+    return changed
   }
 
   list(parentSessionId) {
@@ -244,6 +376,13 @@ export class MultiAgentService {
       .filter((record) => !parentSessionId || record.parentSessionId === parentSessionId)
       .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
       .map(publicRecord)
+  }
+
+  summaries(parentSessionId) {
+    return this.list(parentSessionId).map((record) => {
+      const { fullOutput: _fullOutput, ...summary } = record
+      return { ...summary, output: String(record.output || '').slice(0, 1_000) }
+    })
   }
 
   find(parentSessionId, target) {
@@ -254,7 +393,7 @@ export class MultiAgentService {
 
   prune(parentSessionId) {
     const records = [...this.records.values()].filter((record) => record.parentSessionId === parentSessionId)
-    const removable = records.filter((record) => !['starting', 'running'].includes(record.status))
+    const removable = records.filter((record) => !ACTIVE_AGENT_STATUSES.has(record.status))
     while (records.length > MAX_AGENTS_PER_PARENT && removable.length) {
       const record = removable.shift()
       try { record.unsubscribe?.() } catch {}
@@ -267,48 +406,59 @@ export class MultiAgentService {
   notify(parentSessionId) {
     const waiters = this.waiters.get(parentSessionId)
     if (!waiters?.size) return
-    this.waiters.delete(parentSessionId)
-    for (const resolve of waiters) resolve(this.list(parentSessionId))
+    const agents = this.list(parentSessionId)
+    for (const waiter of [...waiters]) {
+      if (waiter.predicate(agents)) waiter.finish(agents, false)
+    }
   }
 
   emit(record, onProgress) {
-    record.lastActivityAt = new Date().toISOString()
+    record.lastActivityAt = new Date(this.now()).toISOString()
     try { onProgress?.(publicRecord(record)) } catch {}
     this.notify(record.parentSessionId)
+    void this.save().catch(() => {})
   }
 
-  async wait(parentSessionId, timeoutMs = 15_000) {
+  async wait(parentSessionId, timeoutMs = 15_000, target = '') {
     const current = this.list(parentSessionId)
-    if (!current.some((record) => ['starting', 'running'].includes(record.status))) return { timedOut: false, agents: current }
+    const targetRecord = target ? this.find(parentSessionId, target) : null
+    if (target && !targetRecord) throw new Error(`Unknown agent: ${target}`)
+    if (targetRecord && TERMINAL_AGENT_STATUSES.has(targetRecord.status)) return { timedOut: false, agents: current }
+    const activeIds = new Set(current.filter((record) => ACTIVE_AGENT_STATUSES.has(record.status)).map((record) => record.id))
+    if (!activeIds.size) return { timedOut: false, agents: current }
+    const predicate = targetRecord
+      ? (agents) => agents.some((record) => record.id === targetRecord.id && TERMINAL_AGENT_STATUSES.has(record.status))
+      : (agents) => agents.some((record) => activeIds.has(record.id) && TERMINAL_AGENT_STATUSES.has(record.status))
     return new Promise((resolve) => {
       let settled = false
       let timer = null
+      let waiter = null
       const finish = (agents, timedOut) => {
         if (settled) return
         settled = true
         this.clearTimer(timer)
         const waiters = this.waiters.get(parentSessionId)
-        waiters?.delete(onUpdate)
+        waiters?.delete(waiter)
         if (!waiters?.size) this.waiters.delete(parentSessionId)
         resolve({ timedOut, agents })
       }
-      const onUpdate = (agents) => finish(agents, false)
+      waiter = { predicate, finish }
       const waiters = this.waiters.get(parentSessionId) || new Set()
-      waiters.add(onUpdate)
+      waiters.add(waiter)
       this.waiters.set(parentSessionId, waiters)
       timer = this.setTimer(() => finish(this.list(parentSessionId), true), Math.max(250, Math.min(30_000, Number(timeoutMs) || 15_000)))
       timer?.unref?.()
     })
   }
 
-  async spawn({ parentSessionId, cwd, model, thinkingLevel, taskName, message, forkTurns = 'all', parentMessages, allowedTools, customTools, maxDurationSeconds, maxToolCalls, onProgress, onSession, onCompleted } = {}) {
+  async spawn({ parentSessionId, cwd, model, thinkingLevel, taskName, message, allowedTools, customTools, maxDurationSeconds, maxToolCalls, onProgress, onSession, onCompleted } = {}) {
     if (!parentSessionId) throw new Error('Agent requires a parent session.')
     if (!cwd) throw new Error('Agent requires a workspace directory.')
     if (!model) throw new Error('Agent requires an active parent model.')
     const normalizedMessage = String(message || '').trim()
     if (!normalizedMessage) throw new Error('Agent task cannot be empty.')
     if (normalizedMessage.length > MAX_AGENT_TASK_CHARS) throw new Error(`Agent task is limited to ${MAX_AGENT_TASK_CHARS} characters.`)
-    const active = [...this.records.values()].filter((record) => record.parentSessionId === parentSessionId && ['starting', 'running'].includes(record.status)).length
+    const active = [...this.records.values()].filter((record) => ACTIVE_AGENT_STATUSES.has(record.status)).length
     if (active >= this.maxConcurrent) throw new Error(`Agent concurrency limit reached (${this.maxConcurrent}).`)
 
     const id = randomUUID()
@@ -324,8 +474,6 @@ export class MultiAgentService {
       message: normalizedMessage,
       availableTools: childTools(allowedTools),
       customTools,
-      // Snapshot at spawn time so later parent turns cannot change the forked context.
-      parentMessages: snapshotParentMessages(parentMessages, forkTurns),
       maxDurationSeconds: boundedInteger(maxDurationSeconds, DEFAULT_AGENT_MAX_DURATION_SECONDS, MAX_AGENT_MAX_DURATION_SECONDS),
       maxToolCalls: boundedInteger(maxToolCalls, DEFAULT_AGENT_MAX_TOOL_CALLS, MAX_AGENT_MAX_TOOL_CALLS),
       toolCallCount: 0,
@@ -334,12 +482,14 @@ export class MultiAgentService {
       fullOutput: '',
       outputTruncated: false,
       usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, totalTokens: 0 },
-      runUsage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, totalTokens: 0 },
+      runUsage: emptyUsage(),
       runNumber: 0,
       runGeneration: 0,
+      resultVersion: 0,
+      deliveredVersion: 0,
       timerGeneration: 0,
       error: '',
-      startedAt: new Date().toISOString(),
+      startedAt: new Date(this.now()).toISOString(),
       lastActivityAt: null,
       completedAt: null,
       durationMs: null,
@@ -351,6 +501,7 @@ export class MultiAgentService {
       abortReason: '',
       runningPromise: Promise.resolve(),
       restartChain: Promise.resolve(),
+      pendingMessages: [],
       onProgress,
       onSession,
       onCompleted,
@@ -359,6 +510,7 @@ export class MultiAgentService {
     this.prune(parentSessionId)
     this.emit(record, onProgress)
     record.runningPromise = this.startRun(record, normalizedMessage).catch(() => {})
+    await this.save()
     return publicRecord(record)
   }
 
@@ -371,8 +523,15 @@ export class MultiAgentService {
 
   async startRun(record, message) {
     const generation = ++record.runGeneration
-    const startedAt = Date.now()
+    const startedAt = this.now()
     const isCurrent = () => record.runGeneration === generation
+    this.clearRunTimer(record, record.timerGeneration)
+    record.timerGeneration = generation
+    record.timer = this.setTimer(() => {
+      if (record.runGeneration !== generation) return
+      this.interrupt(record.parentSessionId, record.id, `Agent exceeded its ${record.maxDurationSeconds}-second duration limit.`)
+    }, record.maxDurationSeconds * 1000)
+    record.timer?.unref?.()
     try {
       if (!isCurrent()) return
       if (record.aborted) throw new Error(record.abortReason || 'Agent was interrupted.')
@@ -382,7 +541,6 @@ export class MultiAgentService {
         if (!isCurrent()) return
         if (record.aborted) throw new Error(record.abortReason || 'Agent was interrupted.')
         const sessionManager = this.createSessionManager(record.cwd)
-        for (const parentMessage of record.parentMessages) sessionManager.appendMessage?.(parentMessage)
         const childCustomTools = inheritedCustomTools(record.availableTools, record.customTools)
         const result = await this.createSession({
           cwd: record.cwd,
@@ -433,20 +591,22 @@ export class MultiAgentService {
       record.output = ''
       record.fullOutput = ''
       record.outputTruncated = false
-      record.runUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, reasoning: 0, totalTokens: 0 }
+      record.runUsage = emptyUsage()
       record.status = 'running'
       record.error = ''
       record.completedAt = null
       record.durationMs = null
       this.emit(record, record.onProgress)
-      this.clearRunTimer(record, record.timerGeneration)
-      record.timerGeneration = generation
-      record.timer = this.setTimer(() => {
-        if (record.runGeneration !== generation) return
-        this.interrupt(record.parentSessionId, record.id, `Agent exceeded its ${record.maxDurationSeconds}-second duration limit.`)
-      }, record.maxDurationSeconds * 1000)
-      record.timer?.unref?.()
-      await record.session.prompt(message)
+      const promptPromise = record.session.prompt(message)
+      try {
+        const pendingMessages = record.pendingMessages.splice(0)
+        for (const pending of pendingMessages) await record.session[pending.behavior](pending.text)
+      } catch (error) {
+        try { await record.session.abort?.() } catch {}
+        await promptPromise.catch(() => {})
+        throw error
+      }
+      await promptPromise
       if (!isCurrent()) return
       if (record.aborted) throw new Error(record.abortReason || 'Agent was interrupted.')
       const last = [...record.session.messages].reverse().find((item) => item?.role === 'assistant')
@@ -458,17 +618,24 @@ export class MultiAgentService {
       record.usage = usageTotal(record.session.messages)
       record.runUsage = usageDifference(record.usage, usageBeforeRun)
       record.status = 'completed'
-      record.completedAt = new Date().toISOString()
-      record.durationMs = Date.now() - startedAt
+      record.completedAt = new Date(this.now()).toISOString()
+      record.durationMs = this.now() - startedAt
+      record.resultVersion += 1
       this.emit(record, record.onProgress)
+      await this.save()
       try { await record.onCompleted?.(publicRecord(record)) } catch {}
     } catch (error) {
       if (!isCurrent()) return
+      const wasTerminal = TERMINAL_AGENT_STATUSES.has(record.status) && Boolean(record.completedAt)
       record.error = error instanceof Error ? error.message : String(error)
       record.status = record.aborted ? 'interrupted' : 'failed'
-      record.completedAt = new Date().toISOString()
-      record.durationMs = Date.now() - startedAt
+      record.tools = record.tools.map((tool) => tool.status === 'running' ? { ...tool, status: 'error', message: record.error } : tool)
+      record.completedAt ||= new Date(this.now()).toISOString()
+      record.durationMs ??= this.now() - startedAt
+      if (!wasTerminal) record.resultVersion += 1
+      record.pendingMessages = []
       this.emit(record, record.onProgress)
+      await this.save()
     } finally {
       this.clearRunTimer(record, generation)
     }
@@ -479,8 +646,13 @@ export class MultiAgentService {
     if (!record) throw new Error(`Unknown agent: ${target}`)
     const text = String(message || '').trim()
     if (!text) throw new Error('Agent message cannot be empty.')
-    if (!record.session) throw new Error('Agent session is still starting.')
-    if (record.status !== 'running') throw new Error('Agent is not running. Use followup_task to start another run.')
+    if (text.length > MAX_AGENT_TASK_CHARS) throw new Error(`Agent message is limited to ${MAX_AGENT_TASK_CHARS} characters.`)
+    if (record.status === 'starting') {
+      record.pendingMessages.push({ behavior: 'steer', text })
+      this.emit(record, record.onProgress)
+      return publicRecord(record)
+    }
+    if (record.status !== 'running' || !record.session) throw new Error('Agent is not running. Use followup_task to start another run.')
     await record.session.steer(text)
     this.emit(record, record.onProgress)
     return publicRecord(record)
@@ -491,9 +663,15 @@ export class MultiAgentService {
     if (!record) throw new Error(`Unknown agent: ${target}`)
     const text = String(message || '').trim()
     if (!text) throw new Error('Follow-up task cannot be empty.')
+    if (text.length > MAX_AGENT_TASK_CHARS) throw new Error(`Follow-up task is limited to ${MAX_AGENT_TASK_CHARS} characters.`)
 
-    if (['starting', 'running'].includes(record.status)) {
-      if (!record.session) throw new Error('Agent session is still starting.')
+    if (record.status === 'starting') {
+      record.pendingMessages.push({ behavior: 'followUp', text })
+      this.emit(record, record.onProgress)
+      return publicRecord(record)
+    }
+    if (record.status === 'running') {
+      if (!record.session) throw new Error('Agent session is not available.')
       await record.session.followUp(text)
       this.emit(record, record.onProgress)
       return publicRecord(record)
@@ -502,8 +680,13 @@ export class MultiAgentService {
     // Serialize restarts and wait for the previous run to fully settle before clearing abort state.
     const restart = async () => {
       await (record.runningPromise || Promise.resolve()).catch(() => {})
-      if (['starting', 'running'].includes(record.status)) {
-        if (!record.session) throw new Error('Agent session is still starting.')
+      if (record.status === 'starting') {
+        record.pendingMessages.push({ behavior: 'followUp', text })
+        this.emit(record, record.onProgress)
+        return publicRecord(record)
+      }
+      if (record.status === 'running') {
+        if (!record.session) throw new Error('Agent session is not available.')
         await record.session.followUp(text)
         this.emit(record, record.onProgress)
         return publicRecord(record)
@@ -511,7 +694,7 @@ export class MultiAgentService {
       if (!record.session) throw new Error('Agent session is not available for follow-up.')
       record.aborted = false
       record.abortReason = ''
-      record.startedAt = new Date().toISOString()
+      record.startedAt = new Date(this.now()).toISOString()
       record.status = 'starting'
       record.error = ''
       record.completedAt = null
@@ -528,11 +711,16 @@ export class MultiAgentService {
   interrupt(parentSessionId, target, reason = 'Agent was interrupted.') {
     const record = this.find(parentSessionId, target)
     if (!record) throw new Error(`Unknown agent: ${target}`)
-    if (!['starting', 'running'].includes(record.status)) return publicRecord(record)
+    if (!ACTIVE_AGENT_STATUSES.has(record.status)) return publicRecord(record)
     record.aborted = true
     record.abortReason = reason
     record.status = 'interrupted'
     record.error = reason
+    record.tools = record.tools.map((tool) => tool.status === 'running' ? { ...tool, status: 'error', message: reason } : tool)
+    record.completedAt = new Date(this.now()).toISOString()
+    record.durationMs = Math.max(0, this.now() - new Date(record.startedAt).getTime())
+    record.resultVersion += 1
+    record.pendingMessages = []
     try {
       const aborting = record.session?.abort?.()
       if (aborting?.catch) void aborting.catch(() => {})
@@ -544,21 +732,33 @@ export class MultiAgentService {
   abortParent(parentSessionId) {
     let count = 0
     for (const record of this.records.values()) {
-      if (record.parentSessionId !== parentSessionId || !['starting', 'running'].includes(record.status)) continue
+      if (record.parentSessionId !== parentSessionId || !ACTIVE_AGENT_STATUSES.has(record.status)) continue
       this.interrupt(parentSessionId, record.id, 'Agent was cancelled because the parent session stopped.')
       count += 1
     }
     return count
   }
 
+  async removeParent(parentSessionId) {
+    this.abortParent(parentSessionId)
+    for (const [id, record] of this.records) {
+      if (record.parentSessionId !== parentSessionId) continue
+      try { record.unsubscribe?.() } catch {}
+      try { record.session?.dispose?.() } catch {}
+      this.records.delete(id)
+    }
+    await this.save()
+  }
+
   async dispose() {
     for (const record of this.records.values()) {
-      if (['starting', 'running'].includes(record.status)) this.interrupt(record.parentSessionId, record.id, 'Agent service is shutting down.')
+      if (ACTIVE_AGENT_STATUSES.has(record.status)) this.interrupt(record.parentSessionId, record.id, 'Agent service is shutting down.')
       try { record.unsubscribe?.() } catch {}
       try { record.session?.dispose?.() } catch {}
     }
+    await this.flush()
     this.records.clear()
-    for (const waiters of this.waiters.values()) for (const resolve of waiters) resolve([])
+    for (const waiters of this.waiters.values()) for (const waiter of [...waiters]) waiter.finish([], false)
     this.waiters.clear()
   }
 }

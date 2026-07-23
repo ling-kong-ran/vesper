@@ -2,6 +2,8 @@ export const DEFAULT_SESSION_STATE = Object.freeze({
   messages: [],
   tools: [],
   approvals: [],
+  agents: [],
+  queuedInputs: [],
   taskList: null,
   executionMode: null,
   contextUsage: null,

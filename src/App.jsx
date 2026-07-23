@@ -672,6 +672,8 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           contextUsage: data.contextUsage ?? current.contextUsage ?? null,
           compaction: data.compaction ?? current.compaction ?? null,
           approvals: data.approvals || [],
+          agents: data.agents || [],
+          queuedInputs: data.queuedInputs?.length ? data.queuedInputs : current.queuedInputs || [],
         }
       })
       setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, executionMode: data.executionMode || session.executionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
@@ -850,7 +852,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           sessionsRef.current = next
           return next
         })
-        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', executionMode: created.executionMode || 'workspace', goal: created.goal || null, taskList: created.taskList || null, contextUsage: created.contextUsage || null, compaction: null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
+        updateSessionState(created.id, { messages: [], tools: [], approvals: [], queuedInputs: [], permissionMode: created.permissionMode || 'auto', executionMode: created.executionMode || 'workspace', goal: created.goal || null, taskList: created.taskList || null, contextUsage: created.contextUsage || null, compaction: null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
         try {
           await refreshSessions(created.id)
         } catch (caught) {
@@ -910,7 +912,10 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         })
         announceSessionsUpdated()
         for (const session of list) {
-          if (session.streaming) updateSessionState(session.id, { streaming: true, recovering: true, loaded: false, error: '' })
+          updateSessionState(session.id, {
+            agents: session.agents || [],
+            ...(session.streaming ? { streaming: true, recovering: true, loaded: false, error: '' } : {}),
+          })
         }
         const storedId = localStorage.getItem(STORAGE_KEYS.activeSession)
         const knownIds = new Set([...list.map((session) => session.id), ...Object.keys(sessionStatesRef.current)])
@@ -987,7 +992,8 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     const poll = () => {
       if (!active) return
       for (const [id, state] of Object.entries(sessionStatesRef.current)) {
-        if (state.recovering || state.approvals?.length) void syncLiveSession(id)
+        const hasActiveAgents = state.agents?.some((agent) => ['starting', 'running'].includes(agent.status))
+        if (state.recovering || state.approvals?.length || hasActiveAgents) void syncLiveSession(id)
       }
     }
     poll()
@@ -1008,6 +1014,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     const agentId = `agent-${Date.now()}`
     const runStartedAt = new Date().toISOString()
     let responseText = ''
+    let queuedDuringRun = false
     const typewriter = createTypewriterDisplay((text, activityAt) => {
       updateSessionState(sessionId, (current) => ({
         ...current,
@@ -1071,6 +1078,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             goal: data.goal ?? null,
             // Prefer explicit meta.taskList (including empty) over leftover client state.
             taskList: data.taskList !== undefined ? data.taskList : current.taskList,
+            agents: data.agents || current.agents || [],
             contextUsage: data.contextUsage ?? current.contextUsage ?? null,
             runStartedAt: data.startedAt || current.runStartedAt,
             lastActivityAt: data.lastActivityAt || eventAt,
@@ -1085,6 +1093,8 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
               taskList: data.taskList !== undefined ? data.taskList : session.taskList,
             } : session))
           }
+        } else if (event === 'agent_update') {
+          updateSessionState(sessionId, { agents: data.agents || [] })
         } else if (event === 'context_usage') {
           updateSessionState(sessionId, { contextUsage: data })
         } else if (event === 'compaction_start') {
@@ -1173,6 +1183,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         } else if (event === 'retry') {
           updateSessionState(sessionId, { runNotice: t('正在重试 {attempt}/{maxAttempts}：{message}', { attempt: data.attempt, maxAttempts: data.maxAttempts, message: data.message }), lastActivityAt: eventAt })
         } else if (event === 'done') {
+          queuedDuringRun ||= Boolean(sessionStatesRef.current[sessionId]?.queuedInputs?.length)
           const finishedAt = data.finishedAt || eventAt
           if (typeof data.text === 'string') responseText = data.text
           typewriter.setTarget(responseText, finishedAt)
@@ -1186,6 +1197,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             runNotice: '',
             goal: data.goal ?? current.goal ?? null,
             taskList: data.taskList !== undefined ? data.taskList : current.taskList,
+            agents: data.agents || current.agents || [],
             contextUsage: data.contextUsage ?? current.contextUsage ?? null,
             compaction: data.compaction ?? current.compaction ?? null,
             approvals: data.approvals || [],
@@ -1206,6 +1218,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           } : session))
           return false
         } else if (event === 'error') {
+          queuedDuringRun ||= Boolean(sessionStatesRef.current[sessionId]?.queuedInputs?.length)
           const finishedAt = data.finishedAt || eventAt
           if (typeof data.text === 'string') responseText = data.text
           typewriter.setTarget(responseText, finishedAt)
@@ -1216,6 +1229,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             streaming: false,
             runFinishedAt: finishedAt,
             lastActivityAt: finishedAt,
+            agents: data.agents || current.agents || [],
             contextUsage: data.contextUsage ?? current.contextUsage ?? null,
             compaction: data.compaction ?? current.compaction ?? null,
             approvals: [],
@@ -1241,10 +1255,11 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           return { ...current, streaming: false, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, text: responseText || item.text } : item) }
         })
       }
-      // Avoid a full message reload after every run — done already carries authoritative text/tools.
-      // Only reload when goal state may have changed server-side history pagination.
-      if (goalMode || sessionStatesRef.current[sessionId]?.goal) {
+      // Steering and follow-up inputs can create multiple user/assistant turns inside one SSE run.
+      // Reload the persisted transcript once the run settles so those turns render as separate bubbles.
+      if (goalMode || queuedDuringRun || sessionStatesRef.current[sessionId]?.goal || sessionStatesRef.current[sessionId]?.queuedInputs?.length) {
         await loadSessionMessages(sessionId, { force: true })
+        updateSessionState(sessionId, { queuedInputs: [] })
       }
       let completed
       try {
@@ -1259,6 +1274,10 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
       toolScheduler.cancel()
       const runFinishedAt = new Date().toISOString()
       updateSessionState(sessionId, (current) => ({ ...current, streaming: false, error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: caught.message }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || responseText || caught.message } : item) }))
+      if (queuedDuringRun || sessionStatesRef.current[sessionId]?.queuedInputs?.length) {
+        try { await loadSessionMessages(sessionId, { force: true }) } catch {}
+        updateSessionState(sessionId, { queuedInputs: [] })
+      }
       setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false } : session))
     } finally {
       typewriter.cancel()
@@ -1268,11 +1287,37 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     }
   }
 
+  const queuePrompt = async (text, sessionId, behavior = 'steer') => {
+    const message = String(text || '').trim()
+    if (!sessionId || !message) return false
+    try {
+      const result = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/input`, {
+        method: 'POST',
+        body: JSON.stringify({ message, behavior }),
+      })
+      const queuedAt = new Date().toISOString()
+      updateSessionState(sessionId, (current) => ({
+        ...current,
+        queuedInputs: [...(current.queuedInputs || []), {
+          id: `queued-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          text: message,
+          behavior: result.behavior || behavior,
+          queuedAt,
+        }],
+        lastActivityAt: queuedAt,
+      }))
+      return true
+    } catch (caught) {
+      notify(caught.message, 'error')
+      return false
+    }
+  }
+
   const abort = async (sessionId) => {
     if (!sessionId) return
     const result = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', body: '{}' })
     const runFinishedAt = new Date().toISOString()
-    updateSessionState(sessionId, (current) => ({ ...current, streaming: false, goal: result.goal ?? null, compaction: current.compaction?.active ? { ...current.compaction, active: false, status: 'aborted', aborted: true, finishedAt: runFinishedAt } : current.compaction, runFinishedAt, lastActivityAt: runFinishedAt, runStopped: true, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: t('已停止') }), messages: current.messages.map((item) => item.streaming ? { ...item, streaming: false } : item) }))
+    updateSessionState(sessionId, (current) => ({ ...current, streaming: false, queuedInputs: [], goal: result.goal ?? null, compaction: current.compaction?.active ? { ...current.compaction, active: false, status: 'aborted', aborted: true, finishedAt: runFinishedAt } : current.compaction, runFinishedAt, lastActivityAt: runFinishedAt, runStopped: true, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: t('已停止') }), messages: current.messages.map((item) => item.streaming ? { ...item, streaming: false } : item) }))
     setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false, goal: result.goal ?? session.goal ?? null } : session))
     notify(t('已停止当前运行'), 'info')
   }
@@ -1457,6 +1502,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     loadSessionMessages,
     loadOlderMessages,
     sendPrompt,
+    queuePrompt,
     abort,
     pauseGoal,
     switchSessionModel,
@@ -1524,6 +1570,8 @@ function SessionDockPanel({ params, api }) {
       sandboxStatus={context.sandboxStatus}
       goal={state.goal ?? session.goal ?? null}
       taskList={resolveSessionTaskList(state, session)}
+      agents={state.agents?.length ? state.agents : (session.agents || EMPTY_LIST)}
+      queuedInputs={state.queuedInputs || EMPTY_LIST}
       compaction={state.compaction}
       contextUsage={state.contextUsage}
       cwd={state.cwd || session.cwd}
@@ -1554,6 +1602,7 @@ function SessionDockPanel({ params, api }) {
       onClosePanel={() => context.closeDockPanel(api.id)}
       canSplit={!context.compactDock && api.group.size > 1}
       onSend={(value, attachments, goalMode) => context.sendPrompt(value, sessionId, attachments, goalMode)}
+      onQueue={(value, behavior) => context.queuePrompt(value, sessionId, behavior)}
       onAbort={() => context.abort(sessionId)}
       onOpenRail={context.openRail}
     />
@@ -1635,6 +1684,41 @@ function TaskListPanel({ taskList, compact = false, streaming = false }) {
         </div>
       })}
       {compact && items.length > visibleItems.length && <small className="task-list-more">{t('还有 {count} 项', { count: items.length - visibleItems.length })}</small>}
+    </div>}
+  </section>
+}
+
+function SubagentStatusPanel({ agents = EMPTY_LIST }) {
+  const { t } = useI18n()
+  const activeCount = agents.filter((agent) => ['starting', 'running'].includes(agent.status)).length
+  const [expanded, setExpanded] = useState(activeCount > 0)
+  useEffect(() => { if (activeCount > 0) setExpanded(true) }, [activeCount])
+  if (!agents.length) return null
+  const visibleAgents = [...agents].reverse().slice(0, 8)
+  const statusMeta = {
+    starting: { label: t('启动中'), icon: <RefreshCw className="spin" size={13} />, tone: 'text-[var(--accent-strong)]' },
+    running: { label: t('运行中'), icon: <RefreshCw className="spin" size={13} />, tone: 'text-[var(--accent-strong)]' },
+    completed: { label: t('已完成'), icon: <Check size={13} />, tone: 'text-[var(--success)]' },
+    failed: { label: t('失败'), icon: <AlertTriangle size={13} />, tone: 'text-[var(--danger)]' },
+    interrupted: { label: t('已中断'), icon: <Square size={11} />, tone: 'text-[var(--muted)]' },
+  }
+  return <section className="task-list-panel subagent-status-panel" aria-label={t('子 Agent')}>
+    <button type="button" className="task-list-panel-summary" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+      <Bot size={14} className="shrink-0 text-[var(--muted)]" />
+      <strong className="min-w-0 flex-1 truncate">{t('子 Agent')}</strong>
+      <small className="text-[11px] text-[var(--muted)]">{activeCount ? t('{count} 项运行中', { count: activeCount }) : t('{count} 项已记录', { count: agents.length })}</small>
+      <ChevronRight size={13} className={`text-[var(--muted)] transition-transform ${expanded ? 'rotate-90' : ''}`} />
+    </button>
+    {expanded && <div className="task-list-panel-body">
+      {visibleAgents.map((agent) => {
+        const meta = statusMeta[agent.status] || statusMeta.failed
+        const detail = agent.error || agent.output || agent.message
+        return <div className="task-list-item subagent-status-item" key={agent.id}>
+          <span className={`task-list-item-status ${meta.tone}`} title={meta.label}>{meta.icon}</span>
+          <span className="subagent-status-copy"><strong>{agent.canonicalName}</strong><small title={detail}>{meta.label}{detail ? ` · ${detail}` : ''}</small></span>
+        </div>
+      })}
+      {agents.length > visibleAgents.length && <small className="task-list-more">{t('还有 {count} 项', { count: agents.length - visibleAgents.length })}</small>}
     </div>}
   </section>
 }
@@ -1836,10 +1920,11 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, executionMode, sandboxStatus, goal, taskList, compaction, contextUsage, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onExecutionModeChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onAbort, onOpenRail }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, executionMode, sandboxStatus, goal, taskList, agents, queuedInputs, compaction, contextUsage, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onExecutionModeChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onQueue, onAbort, onOpenRail }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const [goalArmed, setGoalArmed] = useState(false)
+  const [queueing, setQueueing] = useState(false)
   const selection = useAttachmentSelection()
   const addSelectedAttachments = selection.addAttachments
   const promptRef = useRef(null)
@@ -1882,6 +1967,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   }, [messageStart, transcriptRef])
   useEffect(() => {
     setGoalArmed(false)
+    setQueueing(false)
   }, [session?.id])
   useEffect(() => {
     if (!pendingAsset) return
@@ -1901,6 +1987,17 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   const submit = async (event) => {
     event.preventDefault()
     if (!value.trim() && !selection.attachments.length) return
+    if (streaming) {
+      if (!value.trim() || queueing) return
+      setQueueing(true)
+      const queued = await onQueue?.(value, 'steer')
+      setQueueing(false)
+      if (!queued) return
+      setValue('')
+      setGoalArmed(false)
+      if (promptRef.current) promptRef.current.style.height = 'auto'
+      return
+    }
     if (executionMode === 'workspace' && !['ready', 'active'].includes(sandboxStatus?.state)) {
       const ready = await onExecutionModeChange('workspace')
       if (!ready) return
@@ -1917,6 +2014,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
       <div className="card-head"><div className="session-runtime-meta">{onOpenRail && <button className="icon-button session-rail-open-btn" title={t('展开会话列表')} aria-label={t('展开会话列表')} onClick={onOpenRail}><PanelLeftOpen size={15} /></button>}<span className={streaming ? 'success' : ''}>{t(compaction?.active ? '正在压缩上下文' : streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} canSplit={canSplit} streaming={streaming} switchingCwd={switchingCwd} onSplitLeft={onSplitLeft} onSplitRight={onSplitRight} onClosePanel={onClosePanel} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
       {/* Keep the plan/task list outside the auto-scrolling transcript so it stays visible while tokens stream. */}
       <TaskListPanel taskList={taskList} streaming={streaming} />
+      <SubagentStatusPanel agents={agents} />
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
         {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />{t('重试加载更早消息')}</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />{t('正在加载更早消息…')}</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />{t('加载更早消息')}</button>}</div>}
         {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>{t('让我们从一束想法开始')}</h2><p>{t('Vesper 已准备好读取当前工作区、搜索代码，并陪你把任务推进到完成。默认在工作区沙箱中运行。')}</p><div className="welcome-chips">{welcomeChips(t).map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
@@ -1935,7 +2033,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
       {hasUnread && <button type="button" className="button secondary jump-to-latest" onClick={() => scrollToBottom('smooth')}><ArrowDown size={14} />{t('有新内容')}</button>}
-      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title={t('添加附件')} aria-label={t('添加附件')} onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><ExecutionModeSelect value={executionMode} sandboxStatus={sandboxStatus} onChange={onExecutionModeChange} disabled={streaming || switchingPermission} /><div className="focus-composer-secondary"><ContextUsageIndicator usage={contextUsage} /><GoalModeControl goal={goal} armed={goalArmed} onChange={(enabled) => { if (!enabled && goal?.status === 'active') void onGoalPause?.(); else setGoalArmed(enabled) }} /></div><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onPaste={selection.pasteImages} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={t(streaming ? 'Agent 正在运行，可停止后继续输入' : '写下你想完成的事，Shift + Enter 换行')} disabled={streaming} /><button className="send-button" title={t('发送消息')} aria-label={t('发送消息')} disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
+      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} />{streaming && queuedInputs.length > 0 && <div className="queued-input-tray"><span>{t('已发送给运行中的 Agent')}</span>{queuedInputs.slice(-3).map((item, index) => <small key={item.id || `${item.behavior}-${index}`} title={item.text}>{item.text}</small>)}{queuedInputs.length > 3 && <em>{t('另有 {count} 条', { count: queuedInputs.length - 3 })}</em>}</div>}<AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title={t('添加附件')} aria-label={t('添加附件')} onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><ExecutionModeSelect value={executionMode} sandboxStatus={sandboxStatus} onChange={onExecutionModeChange} disabled={streaming || switchingPermission} /><div className="focus-composer-secondary"><ContextUsageIndicator usage={contextUsage} /><GoalModeControl goal={goal} armed={goalArmed} onChange={(enabled) => { if (!enabled && goal?.status === 'active') void onGoalPause?.(); else setGoalArmed(enabled) }} /></div><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onPaste={streaming ? undefined : selection.pasteImages} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={t(streaming ? '向正在运行的 Agent 追加说明，Shift + Enter 换行' : '写下你想完成的事，Shift + Enter 换行')} /><button className="send-button" title={t(streaming ? '发送给正在运行的 Agent' : '发送消息')} aria-label={t(streaming ? '发送给正在运行的 Agent' : '发送消息')} disabled={queueing || (streaming ? !value.trim() : (!value.trim() && !selection.attachments.length))}>{queueing ? <RefreshCw className="spin" size={17} /> : <Send size={18} />}</button></div></form>
     </Panel>
   )
 }

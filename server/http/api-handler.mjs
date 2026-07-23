@@ -477,6 +477,15 @@ export function createApiHandler(runtime, { updates } = {}) {
         json(res, 200, await runtime.getSessionLive(decodeURIComponent(liveSessionMatch[1])))
         return true
       }
+      const inputMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/input$/)
+      if (req.method === 'POST' && inputMatch) {
+        const body = await bodyJson(req)
+        json(res, 200, await runtime.queueSessionMessage(decodeURIComponent(inputMatch[1]), {
+          message: body.message,
+          behavior: body.behavior,
+        }))
+        return true
+      }
       const abortMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/abort$/)
       if (req.method === 'POST' && abortMatch) {
         const id = decodeURIComponent(abortMatch[1])

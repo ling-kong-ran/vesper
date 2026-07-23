@@ -9,6 +9,7 @@ test('live session snapshot restores partial assistant output and tool state', a
   const directory = await mkdtemp(join(tmpdir(), 'vesper-live-session-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  runtime.multiAgents = { summaries: () => [{ id: 'agent-live', canonicalName: '/root/live_1', status: 'running' }] }
   runtime.sessions.set('session-live', {
     cwd: directory,
     session: {
@@ -34,6 +35,7 @@ test('live session snapshot restores partial assistant output and tool state', a
   assert.equal(live.startedAt, '2026-07-20T10:00:00.000Z')
   assert.equal(live.lastActivityAt, '2026-07-20T10:00:05.000Z')
   assert.equal(live.model, 'openai/gpt-5.4')
+  assert.deepEqual(live.agents, [{ id: 'agent-live', canonicalName: '/root/live_1', status: 'running' }])
 })
 
 test('stream completion publishes an authoritative terminal snapshot', async (t) => {
@@ -105,6 +107,72 @@ test('stream completion publishes an authoritative terminal snapshot', async (t)
   assert.equal(live.finishedAt, done.finishedAt)
   assert.equal(live.tools[0].status, 'done')
   assert.deepEqual(live.compaction, compactionEnd)
+})
+
+test('unread background Agent results are injected once into the next parent run', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-agent-mailbox-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  runtime.archiveAttachments = async () => []
+  runtime.captureConversationMemory = async () => []
+  runtime.memory = { relevantContext: async () => ({ text: '' }) }
+  const mailbox = [{
+    id: 'agent-1',
+    canonicalName: '/root/review_1',
+    parentSessionId: 'session-mailbox',
+    status: 'completed',
+    message: 'Review the runtime.',
+    output: 'Found a race in startup handling.',
+    error: '',
+    resultVersion: 1,
+    deliveredVersion: 0,
+  }]
+  let acknowledged = null
+  runtime.multiAgents = {
+    summaries: () => mailbox,
+    peekMailbox: () => mailbox,
+    acknowledge: async (sessionId, agents) => { acknowledged = { sessionId, agents } },
+  }
+
+  const listeners = new Set()
+  let observedSystemPrompt = ''
+  const session = {
+    sessionId: 'session-mailbox',
+    isStreaming: false,
+    model: { provider: 'openai', id: 'gpt-5.4' },
+    thinkingLevel: 'medium',
+    messages: [{ role: 'user', content: 'Earlier context', timestamp: 1 }],
+    agent: { state: { systemPrompt: 'Base prompt' } },
+    getActiveToolNames: () => [],
+    setActiveToolsByName: () => {},
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    async prompt(_message, options) {
+      session.isStreaming = true
+      observedSystemPrompt = session.agent.state.systemPrompt
+      options?.preflightResult?.(true)
+      session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Used the background result.' }], timestamp: 2 })
+      session.isStreaming = false
+    },
+  }
+  const value = { session, cwd: directory, name: 'Mailbox', baseToolNames: [] }
+  runtime.sessions.set(session.sessionId, value)
+  runtime.getOrCreateSession = async () => value
+
+  await runtime.streamPrompt({
+    sessionId: session.sessionId,
+    message: 'Continue.',
+    send: () => {},
+  })
+
+  assert.match(observedSystemPrompt, /vesper_agent_mailbox/)
+  assert.match(observedSystemPrompt, /Found a race in startup handling/)
+  assert.match(session.agent.state.systemPrompt, /Base prompt/)
+  assert.doesNotMatch(session.agent.state.systemPrompt, /vesper_agent_mailbox/)
+  assert.equal(acknowledged.sessionId, session.sessionId)
+  assert.equal(acknowledged.agents[0].id, 'agent-1')
 })
 
 test('generated session title is emitted before the terminal done event', async (t) => {
