@@ -15,6 +15,8 @@ test('English interface translations resolve static and interpolated messages', 
   assert.equal(translateText('需要 Codex CLI 登录', 'en-US'), 'Codex CLI login required')
   assert.equal(translateText('连接 MCP 服务', 'en-US'), 'Connect MCP server')
   assert.equal(translateText('让我们从一束想法开始', 'en-US'), 'Let’s begin with a spark of an idea')
+  assert.equal(translateText('拆分到左侧', 'en-US'), 'Split to left')
+  assert.equal(translateText('将 {name} 拆分到右侧', 'en-US', { name: 'Research' }), 'Split Research to the right')
   assert.equal(translateText('这片星域尚未点亮。点击左上角 +，种下第一颗星。', 'en-US'), 'This memory space is still unlit. Click + in the top-left to plant the first star.')
   assert.equal(translateText('{count} 个技能包', 'en-US', { count: 2 }), '2 skill packages')
   assert.equal(translateText('Web 源码落后 main 3 个提交，请查看更新内容后自行更新。', 'en-US'), 'The Web source is 3 commits behind main. Review the changes before updating.')

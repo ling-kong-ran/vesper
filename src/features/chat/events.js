@@ -1,13 +1,22 @@
 import { STORAGE_KEYS } from '../../app/storage.js'
+import { createSessionOpenRequest, parseSessionOpenRequest } from './dock-layout.js'
 
 export const SESSION_SELECTED_EVENT = 'vesper:session-selected'
 export const ACTIVE_SESSION_CHANGED_EVENT = 'vesper:active-session-changed'
 export const SESSIONS_UPDATED_EVENT = 'vesper:sessions-updated'
 
-export function requestSessionSelection(id) {
-  if (!id) return
+export function requestSessionSelection(id, disposition = 'open') {
+  const request = createSessionOpenRequest(id, disposition)
+  if (!request) return
   localStorage.setItem(STORAGE_KEYS.activeSession, id)
-  window.dispatchEvent(new CustomEvent(SESSION_SELECTED_EVENT, { detail: { id } }))
+  localStorage.setItem(STORAGE_KEYS.sessionOpenRequest, JSON.stringify(request))
+  window.dispatchEvent(new CustomEvent(SESSION_SELECTED_EVENT, { detail: request }))
+}
+
+export function consumeSessionSelectionRequest() {
+  const request = parseSessionOpenRequest(localStorage.getItem(STORAGE_KEYS.sessionOpenRequest))
+  localStorage.removeItem(STORAGE_KEYS.sessionOpenRequest)
+  return request
 }
 
 export function announceActiveSession(id, model = '') {

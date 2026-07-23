@@ -1,6 +1,7 @@
-import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
+import { Suspense, createContext, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useContext } from 'react'
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom'
 import { createPortal } from 'react-dom'
+import { DockviewReact } from 'dockview-react'
 import {
   AlertTriangle,
   ArrowDown,
@@ -12,7 +13,6 @@ import {
   ExternalLink,
   File,
   FolderOpen,
-  Grid2X2,
   Link2,
   ListChecks,
   Menu,
@@ -20,8 +20,10 @@ import {
   Monitor,
   Moon,
   MoreHorizontal,
+  PanelLeft,
   PanelLeftClose,
   PanelLeftOpen,
+  PanelRight,
   Paperclip,
   Pencil,
   Play,
@@ -44,14 +46,13 @@ import { getNavigation, getPageMeta } from './app/navigation.jsx'
 import { PAGE_IDS, PAGE_PATHS, pageFromPath, pagePath } from './app/routes.js'
 import { useI18n } from './app/use-i18n.js'
 import { BrandLogo } from './components/BrandLogo.jsx'
-import { StarOrbit } from './components/StarOrbit.jsx'
-import { AppDialog, InputLabel, Panel, Segmented, SelectLabel, Toast, Toggle } from './components/ui.jsx'
+import { AppDialog, InputLabel, Panel, SelectLabel, Toast, Toggle } from './components/ui.jsx'
 import { useAttachmentSelection } from './features/chat/attachments.js'
 import { ChatHistoryPage } from './features/chat/ChatHistoryPage.jsx'
-import { ACTIVE_SESSION_CHANGED_EVENT, SESSION_SELECTED_EVENT, SESSIONS_UPDATED_EVENT, announceActiveSession, announceSessionsUpdated, requestSessionSelection } from './features/chat/events.js'
-import { FocusChatMessage, MiniChatMessage } from './features/chat/ChatMessage.jsx'
-import AgentRunActivity from './features/chat/AgentRunActivity.jsx'
-import { mergeSessionLists, toggleTiledSession } from './features/chat/session-list.js'
+import { ACTIVE_SESSION_CHANGED_EVENT, SESSION_SELECTED_EVENT, SESSIONS_UPDATED_EVENT, announceActiveSession, announceSessionsUpdated, consumeSessionSelectionRequest, requestSessionSelection } from './features/chat/events.js'
+import { FocusChatMessage } from './features/chat/ChatMessage.jsx'
+import { mergeSessionLists } from './features/chat/session-list.js'
+import { createDockLayoutEnvelope, initialDockSessionIds, panelIdForSession, parseDockLayoutEnvelope, sessionIdFromPanel } from './features/chat/dock-layout.js'
 import { settleToolCalls } from './features/chat/run-activity.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
@@ -75,7 +76,6 @@ const WorkflowBuilder = lazy(() => import('./features/workflows/WorkflowsPage.js
 const EMPTY_LIST = []
 const USAGE_UPDATED_EVENT = 'vesper:usage-updated'
 const FOCUS_MESSAGE_PAGE_SIZE = 40
-const GRID_MESSAGE_PAGE_SIZE = 16
 
 function latestPageState(current, data) {
   const incomingStart = Number(data.pageInfo?.start) || 0
@@ -133,7 +133,6 @@ function App() {
   const navigation = useMemo(() => getNavigation(t), [t])
   const pageMeta = useMemo(() => getPageMeta(t), [t])
   const page = pageFromPath(location.pathname) || 'chat'
-  const [chatMode, setChatModeState] = useState(() => localStorage.getItem(STORAGE_KEYS.chatMode) || 'focus')
   const [query, setQuery] = useState('')
   const [mobileNav, setMobileNav] = useState(false)
   const [paletteOpen, setPaletteOpen] = useState(false)
@@ -191,12 +190,6 @@ function App() {
       // Keep the rest of the application usable if the plugin catalog is unavailable.
     }
   }, [])
-
-  const setChatMode = (nextMode) => {
-    setChatModeState(nextMode)
-    localStorage.setItem(STORAGE_KEYS.chatMode, nextMode)
-    if (nextMode === 'focus') setQuery('')
-  }
 
   const notify = useCallback((message, tone = 'success') => {
     setToast({ message, tone })
@@ -260,7 +253,7 @@ function App() {
 
   useEffect(() => {
     const focusSearch = () => {
-      if (page === 'chat' && chatMode === 'focus') {
+      if (page === 'chat') {
         navigate('chatHistory')
         requestAnimationFrame(() => requestAnimationFrame(() => searchInputRef.current?.focus()))
       } else searchInputRef.current?.focus()
@@ -284,7 +277,7 @@ function App() {
     }
     window.addEventListener('keydown', onKeyDown)
     return () => window.removeEventListener('keydown', onKeyDown)
-  }, [appDialog.dialog, chatMode, handlePrimary, modal, mobileNav, navigate, page, paletteOpen])
+  }, [appDialog.dialog, handlePrimary, modal, mobileNav, navigate, page, paletteOpen])
 
   useEffect(() => {
     let active = true
@@ -327,8 +320,8 @@ function App() {
     return () => { active = false; window.clearInterval(timer) }
   }, [showSystemNotification])
 
-  const activeMeta = page === 'chat' && chatMode === 'focus'
-    ? [t('会话'), '']
+  const activeMeta = page === 'chat'
+    ? [t('会话'), t('拖动标签，或从会话列表拆分到左侧或右侧')]
     : pageMeta[page]
 
   if (!startupReady) return <div className="app-startup"><BrandLogo size={30} className="startup-logo" /><strong>{t('正在唤醒 Vesper…')}</strong></div>
@@ -336,15 +329,13 @@ function App() {
   return (
     <div className="app-shell">
       <div className="app-body">
-        <Sidebar page={page} navigation={navigation} navigate={navigate} setChatMode={setChatMode} open={mobileNav} onClose={() => setMobileNav(false)} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebarCollapsed} update={appUpdate} onOpenUpdates={openUpdateSettings} />
+        <Sidebar page={page} navigation={navigation} navigate={navigate} open={mobileNav} onClose={() => setMobileNav(false)} collapsed={sidebarCollapsed} onToggleCollapse={toggleSidebarCollapsed} update={appUpdate} onOpenUpdates={openUpdateSettings} />
         <main className="main-surface">
           <PageHeader
             meta={activeMeta}
             page={page}
             query={query}
             setQuery={setQuery}
-            chatMode={chatMode}
-            setChatMode={setChatMode}
             configSection={configSection}
             onMenu={() => setMobileNav(true)}
             onPrimary={handlePrimary}
@@ -356,9 +347,9 @@ function App() {
           />
           <div className={`page-content page-${page}`} key={page}>
             <Routes>
-              <Route path={PAGE_PATHS.chat} element={<ChatPage mode={chatMode} setMode={setChatMode} query={query} notify={notify} browserNotify={browserNotify} registerPrimaryAction={registerPrimaryAction} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestText={appDialog.prompt} />} />
-              <Route path={PAGE_PATHS.chatHistory} element={<ChatHistoryPage query={query} navigate={navigate} setChatMode={setChatMode} notify={notify} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />} />
-              <Route path={PAGE_PATHS.assets} element={<Suspense fallback={<PageLoader />}><AssetsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} onUse={(asset) => { setPendingAsset(asset); setChatMode('focus'); navigate('chat') }} /></Suspense>} />
+              <Route path={PAGE_PATHS.chat} element={<ChatPage notify={notify} browserNotify={browserNotify} registerPrimaryAction={registerPrimaryAction} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestText={appDialog.prompt} />} />
+              <Route path={PAGE_PATHS.chatHistory} element={<ChatHistoryPage query={query} navigate={navigate} notify={notify} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />} />
+              <Route path={PAGE_PATHS.assets} element={<Suspense fallback={<PageLoader />}><AssetsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} onUse={(asset) => { const targetSessionId = localStorage.getItem(STORAGE_KEYS.activeSession) || ''; setPendingAsset({ asset, targetSessionId }); if (targetSessionId) requestSessionSelection(targetSessionId); navigate('chat') }} /></Suspense>} />
               <Route path={PAGE_PATHS.channels} element={<Suspense fallback={<PageLoader />}><ChannelsPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>} />
               <Route path={PAGE_PATHS.schedules} element={<Suspense fallback={<PageLoader />}><SchedulesPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} openNotificationSettings={() => { setConfigSection('notifications'); navigate('config') }} /></Suspense>} />
               <Route path={PAGE_PATHS.config} element={<Suspense fallback={<PageLoader />}><ConfigPage notify={notify} registerPrimaryAction={registerPrimaryAction} section={configSection} setSection={setConfigSection} onBrowserNotificationChange={setNotificationSettings} requestConfirm={appDialog.confirm} update={appUpdate} /></Suspense>} />
@@ -377,7 +368,7 @@ function App() {
       <StatusBar page={page} pluginStats={pluginStats} />
       {toast && <Toast message={toast.message} tone={toast.tone} />}
       <AppDialog dialog={appDialog.dialog} onClose={appDialog.close} onFinish={appDialog.finish} />
-      {paletteOpen && <CommandPalette navigation={navigation} onClose={() => setPaletteOpen(false)} onNavigate={navigate} onOpenSession={(id) => { setChatMode('focus'); requestSessionSelection(id); navigate('chat') }} onNewChat={() => { setChatMode('focus'); navigate('chat'); requestAnimationFrame(() => requestAnimationFrame(invokePrimaryAction)) }} />}
+      {paletteOpen && <CommandPalette navigation={navigation} onClose={() => setPaletteOpen(false)} onNavigate={navigate} onOpenSession={(id) => { requestSessionSelection(id); navigate('chat') }} onNewChat={() => { navigate('chat'); requestAnimationFrame(() => requestAnimationFrame(invokePrimaryAction)) }} />}
       {modal && <QuickCreate type={modal} close={() => setModal(null)} notify={notify} />}
     </div>
   )
@@ -460,7 +451,7 @@ function PageLoader() {
   return <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在点亮此页')}</h2><p>{t('所需能力正在依次就位…')}</p></Panel>
 }
 
-function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, collapsed, onToggleCollapse, update, onOpenUpdates }) {
+function Sidebar({ page, navigation, navigate, open, onClose, collapsed, onToggleCollapse, update, onOpenUpdates }) {
   const { t, language } = useI18n()
   const [sessions, setSessions] = useState([])
   const [historyExpanded, setHistoryExpanded] = useState(true)
@@ -494,7 +485,6 @@ function Sidebar({ page, navigation, navigate, setChatMode, open, onClose, colla
 
   const openRecentSession = (id) => {
     setActiveSessionId(id)
-    setChatMode('focus')
     requestSessionSelection(id)
     navigate('chat')
   }
@@ -557,7 +547,7 @@ function SidebarUpdateStatus({ update, collapsed, onOpen }) {
   </button>
 }
 
-function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, configSection, onMenu, onPrimary, theme, onCycleTheme, searchInputRef, workflowActions, desktopPlatform }) {
+function PageHeader({ meta, page, query, setQuery, configSection, onMenu, onPrimary, theme, onCycleTheme, searchInputRef, workflowActions, desktopPlatform }) {
   const { t } = useI18n()
   const primary = page === 'config' && configSection !== 'models' ? null : ({
     chat: [t('新会话'), Plus], chatHistory: [t('新会话'), Plus], assets: [t('添加链接'), Link2], channels: [t('连接渠道'), Plus], schedules: [t('新建任务'), Plus],
@@ -567,22 +557,19 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
   const PrimaryIcon = primary?.[1]
   const ThemeIcon = THEME_META[theme] || THEME_META.system
   const themeLabel = t(theme === 'light' ? '浅色' : theme === 'dark' ? '深色' : '跟随系统')
-  const gridLabel = t('平铺')
-  const focusLabel = t('聚集')
   const desktop = Boolean(desktopPlatform)
   return (
     <header className={`page-header ${desktop ? '[-webkit-app-region:drag]' : ''} ${desktopPlatform === 'darwin' ? 'pl-[74px]' : ''}`}>
       <button className={`mobile-menu ${desktop ? '[-webkit-app-region:no-drag]' : ''}`} onClick={onMenu}><Menu size={19} /></button>
       <div className="title-block"><h1>{meta[0]}</h1><p>{meta[1]}</p></div>
       <div className={`header-actions ${desktop ? '[-webkit-app-region:no-drag]' : ''} ${desktopPlatform && desktopPlatform !== 'darwin' ? 'pr-[138px]' : ''}`}>
-        {page === 'chat' && <Segmented options={[gridLabel, focusLabel]} value={chatMode === 'grid' ? gridLabel : focusLabel} onChange={(value) => setChatMode(value === gridLabel ? 'grid' : 'focus')} compact />}
         {page === 'workflowCreate' ? (
           <>
             <button className="button secondary" disabled={!workflowActions || workflowActions.busy || workflowActions.running} onClick={() => workflowActions?.save()}><Save size={15} />{t('保存草稿')}</button>
             <button className="button dark" disabled={!workflowActions || workflowActions.busy} onClick={() => workflowActions?.run()}>{workflowActions?.running ? <Square size={15} /> : <Play size={15} />}{t(workflowActions?.running ? '停止' : '试运行')}</button>
           </>
-        ) : page === 'chat' && chatMode === 'focus' ? null : (
-          <label className="search-box" title={t('搜索（/）')}><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'chat' ? t('搜索平铺会话') : page === 'mcp' ? t('搜索服务或工具') : page === 'memory' ? t('搜索星辰或文件') : t('搜索{page}', { page: meta[0] })} /></label>
+        ) : page === 'chat' ? null : (
+          <label className="search-box" title={t('搜索（/）')}><Search size={15} /><input ref={searchInputRef} value={query} onChange={(e) => setQuery(e.target.value)} placeholder={page === 'mcp' ? t('搜索服务或工具') : page === 'memory' ? t('搜索星辰或文件') : t('搜索{page}', { page: meta[0] })} /></label>
         )}
         {primary && <button className="button primary" title={t('{action}（Ctrl/⌘ N）', { action: primary[0] })} onClick={onPrimary}><PrimaryIcon size={15} />{primary[0]}</button>}
         <button className="icon-button theme-toggle" title={t('主题：{theme}（点击切换）', { theme: themeLabel })} aria-label={t('主题：{theme}，点击切换主题', { theme: themeLabel })} onClick={onCycleTheme}><ThemeIcon size={16} /></button>
@@ -591,7 +578,9 @@ function PageHeader({ meta, page, query, setQuery, chatMode, setChatMode, config
   )
 }
 
-function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimaryAction, pendingAsset, onAssetConsumed, requestText }) {
+const ChatDockContext = createContext(null)
+
+function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, onAssetConsumed, requestText }) {
   const { t } = useI18n()
   const [remoteSessions, setRemoteSessions] = useState([])
   const [activeId, setActiveId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
@@ -601,19 +590,39 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   const [model, setModel] = useState(() => t('等待配置'))
   const [availableModels, setAvailableModels] = useState([])
   const [workspaceSession, setWorkspaceSession] = useState(null)
-  const [tiledSessionIds, setTiledSessionIds] = useState(() => readStoredArray(STORAGE_KEYS.tiledSessions))
+  const [dockReady, setDockReady] = useState(0)
+  const [compactDock, setCompactDock] = useState(() => window.matchMedia('(max-width: 900px)').matches)
   const [railOpen, setRailOpenState] = useState(() => localStorage.getItem(STORAGE_KEYS.sessionRail) !== '0')
   const setRailOpen = useCallback((open) => {
     setRailOpenState(open)
     localStorage.setItem(STORAGE_KEYS.sessionRail, open ? '1' : '0')
   }, [])
-  const tiledStorageWasEmpty = useRef(localStorage.getItem(STORAGE_KEYS.tiledSessions) === null)
   const creatingSessionRef = useRef(null)
   const sessionStatesRef = useRef(sessionStates)
+  const sessionsRef = useRef(remoteSessions)
+  const dockApiRef = useRef(null)
+  const dockInitializedRef = useRef(false)
+  const dockDisposablesRef = useRef([])
+  const layoutSaveTimerRef = useRef(null)
+  const pendingDockRequestRef = useRef(null)
+  const compactDockRef = useRef(compactDock)
+  const legacyTiledSessionIdsRef = useRef(readStoredArray(STORAGE_KEYS.tiledSessions))
 
   useEffect(() => {
     sessionStatesRef.current = sessionStates
   }, [sessionStates])
+
+  useEffect(() => {
+    sessionsRef.current = remoteSessions
+  }, [remoteSessions])
+
+  useEffect(() => {
+    const media = window.matchMedia('(max-width: 900px)')
+    const update = () => { compactDockRef.current = media.matches; setCompactDock(media.matches) }
+    update()
+    media.addEventListener('change', update)
+    return () => media.removeEventListener('change', update)
+  }, [])
 
   const updateSessionState = useCallback((id, update) => {
     if (!id) return
@@ -701,27 +710,115 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     }
   }, [updateSessionState])
 
+  const scheduleDockLayoutSave = useCallback((api = dockApiRef.current) => {
+    if (!api || !dockInitializedRef.current) return
+    window.clearTimeout(layoutSaveTimerRef.current)
+    layoutSaveTimerRef.current = window.setTimeout(() => {
+      const envelope = createDockLayoutEnvelope(api.toJSON(), api.activePanel?.id || '')
+      localStorage.setItem(STORAGE_KEYS.chatDockLayout, JSON.stringify(envelope))
+    }, 180)
+  }, [])
+
+  const openSessionInDock = useCallback((sessionId, disposition = 'open') => {
+    const session = sessionsRef.current.find((item) => item.id === sessionId)
+    const api = dockApiRef.current
+    if (!session || !api || !dockInitializedRef.current) {
+      pendingDockRequestRef.current = { sessionId, disposition }
+      return false
+    }
+    const effectiveDisposition = compactDockRef.current ? 'open' : disposition
+    const panelId = panelIdForSession(sessionId)
+    const existing = api.getPanel(panelId)
+    const referencePanel = api.activePanel
+    if (existing) {
+      if (effectiveDisposition !== 'open') {
+        if (referencePanel && existing.id !== referencePanel.id) existing.api.moveTo({ group: referencePanel.group, position: effectiveDisposition })
+        else if (existing.group.size > 1) existing.api.moveTo({ group: existing.group, position: effectiveDisposition })
+      }
+      existing.api.setActive()
+      setActiveId(sessionId)
+      return true
+    }
+    const position = effectiveDisposition === 'open'
+      ? (api.activeGroup ? { referenceGroup: api.activeGroup } : undefined)
+      : (referencePanel ? { referencePanel, direction: effectiveDisposition } : { direction: effectiveDisposition })
+    api.addPanel({
+      id: panelId,
+      component: 'session',
+      title: session.name || t('未命名会话'),
+      params: { sessionId },
+      renderer: 'always',
+      minimumWidth: 300,
+      ...(position ? { position } : {}),
+    })
+    setActiveId(sessionId)
+    void loadSessionMessages(sessionId, { limit: FOCUS_MESSAGE_PAGE_SIZE })
+    return true
+  }, [loadSessionMessages, t])
+
+  const splitDockPanel = useCallback((panelId, direction) => {
+    const panel = dockApiRef.current?.getPanel(panelId)
+    if (!panel) return
+    if (compactDockRef.current) {
+      notify(t('窄屏模式下会话将保留在同一标签组中。'), 'info')
+      return
+    }
+    if (panel.group.size <= 1) {
+      notify(t('当前分组只有一个会话，请从左侧会话列表选择其他会话进行拆分。'), 'info')
+      return
+    }
+    panel.api.moveTo({ group: panel.group, position: direction })
+    panel.api.setActive()
+  }, [notify, t])
+
+  const closeDockPanel = useCallback((panelId) => {
+    dockApiRef.current?.getPanel(panelId)?.api.close()
+  }, [])
+
+  const onDockReady = useCallback(({ api }) => {
+    if (dockApiRef.current && dockApiRef.current !== api) dockInitializedRef.current = false
+    for (const disposable of dockDisposablesRef.current) disposable.dispose()
+    dockDisposablesRef.current = []
+    dockApiRef.current = api
+    dockDisposablesRef.current.push(
+      api.onDidActivePanelChange(({ panel }) => {
+        const sessionId = sessionIdFromPanel(panel)
+        setActiveId(sessionId)
+      }),
+      api.onDidLayoutChange(() => scheduleDockLayoutSave(api)),
+      api.onDidAddPanel((panel) => {
+        const sessionId = sessionIdFromPanel(panel)
+        if (sessionId) void loadSessionMessages(sessionId, { limit: FOCUS_MESSAGE_PAGE_SIZE })
+      }),
+    )
+    setDockReady((generation) => generation + 1)
+  }, [loadSessionMessages, scheduleDockLayoutSave])
+
   useEffect(() => {
     const selectSession = (event) => {
-      const id = event.detail?.id
-      if (!id) return
-      setActiveId(id)
-      setMode('focus')
+      const sessionId = event.detail?.sessionId || event.detail?.id
+      if (!sessionId) return
+      localStorage.removeItem(STORAGE_KEYS.sessionOpenRequest)
+      openSessionInDock(sessionId, event.detail?.disposition || 'open')
     }
     window.addEventListener(SESSION_SELECTED_EVENT, selectSession)
     return () => window.removeEventListener(SESSION_SELECTED_EVENT, selectSession)
-  }, [setMode])
+  }, [openSessionInDock])
+
+  useEffect(() => () => {
+    window.clearTimeout(layoutSaveTimerRef.current)
+    for (const disposable of dockDisposablesRef.current) disposable.dispose()
+    dockDisposablesRef.current = []
+    dockApiRef.current = null
+  }, [])
 
   useEffect(() => {
     if (activeId) localStorage.setItem(STORAGE_KEYS.activeSession, activeId)
   }, [activeId])
 
-  useEffect(() => {
-    localStorage.setItem(STORAGE_KEYS.tiledSessions, JSON.stringify(tiledSessionIds))
-  }, [tiledSessionIds])
-
   const refreshSessions = async (preferredId) => {
     const data = await apiJson('/api/sessions')
+    sessionsRef.current = data.sessions
     setRemoteSessions(data.sessions)
     if (preferredId) setActiveId(preferredId)
     else setActiveId((current) => data.sessions.some((session) => session.id === current) ? current : (data.sessions[0]?.id || ''))
@@ -736,15 +833,18 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         setError('')
         const created = await apiJson('/api/sessions', { method: 'POST', body: JSON.stringify({ name: t('新会话') }) })
         setActiveId(created.id)
-        setRemoteSessions((current) => mergeSessionLists(current, [created]))
+        setRemoteSessions((current) => {
+          const next = mergeSessionLists(current, [created])
+          sessionsRef.current = next
+          return next
+        })
         updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', goal: created.goal || null, taskList: created.taskList || null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
-        setTiledSessionIds((current) => current.includes(created.id) ? current : [...current, created.id])
-        setMode('focus')
         try {
           await refreshSessions(created.id)
         } catch (caught) {
           setError(t('会话已创建，但刷新列表失败：{error}', { error: caught.message }))
         }
+        openSessionInDock(created.id)
         notify(t('新会话已创建'))
         return created.id
       } catch (caught) {
@@ -786,7 +886,11 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
           list = [created]
         }
         if (!active) return
-        setRemoteSessions((current) => mergeSessionLists(current, list))
+        setRemoteSessions((current) => {
+          const next = mergeSessionLists(current, list)
+          sessionsRef.current = next
+          return next
+        })
         announceSessionsUpdated()
         for (const session of list) {
           if (session.streaming) updateSessionState(session.id, { streaming: true, recovering: true, loaded: false, error: '' })
@@ -794,14 +898,6 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         const storedId = localStorage.getItem(STORAGE_KEYS.activeSession)
         const knownIds = new Set([...list.map((session) => session.id), ...Object.keys(sessionStatesRef.current)])
         setActiveId((current) => knownIds.has(current) ? current : (knownIds.has(storedId) ? storedId : (list[0]?.id || '')))
-        setTiledSessionIds((current) => {
-          const valid = current.filter((id) => knownIds.has(id))
-          if (tiledStorageWasEmpty.current) {
-            tiledStorageWasEmpty.current = false
-            return [...knownIds].slice(0, 4)
-          }
-          return valid
-        })
       })
       .catch((caught) => active && setError(caught.message))
       .finally(() => active && setLoading(false))
@@ -809,12 +905,65 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   }, [t, updateSessionState])
 
   useEffect(() => {
-    loadSessionMessages(activeId, { limit: FOCUS_MESSAGE_PAGE_SIZE })
-  }, [activeId, loadSessionMessages])
+    if (!dockReady || loading || dockInitializedRef.current || !dockApiRef.current || !remoteSessions.length) return
+    const api = dockApiRef.current
+    const validIds = new Set(remoteSessions.map((session) => session.id))
+    const storedLayout = parseDockLayoutEnvelope(localStorage.getItem(STORAGE_KEYS.chatDockLayout))
+    if (storedLayout) {
+      try {
+        api.fromJSON(storedLayout.layout)
+        for (const panel of [...api.panels]) {
+          const sessionId = sessionIdFromPanel(panel)
+          if (!validIds.has(sessionId)) api.removePanel(panel)
+        }
+      } catch {
+        api.clear()
+        localStorage.removeItem(STORAGE_KEYS.chatDockLayout)
+      }
+    }
+    if (!api.panels.length) {
+      const initialIds = initialDockSessionIds({
+        activeSessionId: activeId || localStorage.getItem(STORAGE_KEYS.activeSession) || '',
+        legacyTiledSessionIds: legacyTiledSessionIdsRef.current.slice(0, 4),
+        validSessionIds: remoteSessions.map((session) => session.id),
+      })
+      let referenceGroup
+      for (const sessionId of initialIds) {
+        const session = remoteSessions.find((item) => item.id === sessionId)
+        if (!session) continue
+        const panel = api.addPanel({
+          id: panelIdForSession(sessionId),
+          component: 'session',
+          title: session.name || t('未命名会话'),
+          params: { sessionId },
+          renderer: 'always',
+          minimumWidth: 300,
+          ...(referenceGroup ? { position: { referenceGroup } } : {}),
+          inactive: Boolean(referenceGroup),
+        })
+        referenceGroup ||= panel.group
+      }
+    }
+    for (const panel of api.panels) {
+      const session = remoteSessions.find((item) => item.id === sessionIdFromPanel(panel))
+      if (session) panel.api.setTitle(session.name || t('未命名会话'))
+    }
+    dockInitializedRef.current = true
+    localStorage.removeItem(STORAGE_KEYS.chatMode)
+    const request = pendingDockRequestRef.current || consumeSessionSelectionRequest()
+    pendingDockRequestRef.current = null
+    if (request) openSessionInDock(request.sessionId, request.disposition)
+    else {
+      const preferredPanel = api.getPanel(storedLayout?.activePanelId || panelIdForSession(activeId)) || api.panels[0]
+      preferredPanel?.api.setActive()
+    }
+    scheduleDockLayoutSave(api)
+  }, [activeId, dockReady, loading, openSessionInDock, remoteSessions, scheduleDockLayoutSave, t])
 
   useEffect(() => {
-    for (const id of tiledSessionIds) loadSessionMessages(id, { limit: GRID_MESSAGE_PAGE_SIZE })
-  }, [tiledSessionIds, loadSessionMessages])
+    if (!dockInitializedRef.current || !dockApiRef.current) return
+    for (const session of remoteSessions) dockApiRef.current.getPanel(panelIdForSession(session.id))?.api.setTitle(session.name || t('未命名会话'))
+  }, [remoteSessions, t])
 
   useEffect(() => {
     let active = true
@@ -829,7 +978,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     return () => { active = false; window.clearInterval(timer) }
   }, [syncLiveSession])
 
-  const sendPrompt = async (text, requestedSessionId = activeId, attachments = [], goalMode = false) => {
+  const sendPrompt = async (text, requestedSessionId, attachments = [], goalMode = false) => {
     const prompt = text.trim() || (attachments.length ? t('请分析这些附件。') : '')
     if (!prompt) return
     let sessionId = requestedSessionId
@@ -1078,7 +1227,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     }
   }
 
-  const abort = async (sessionId = activeId) => {
+  const abort = async (sessionId) => {
     if (!sessionId) return
     const result = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', body: '{}' })
     const runFinishedAt = new Date().toISOString()
@@ -1087,7 +1236,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     notify(t('已停止当前运行'), 'info')
   }
 
-  const pauseGoal = async (sessionId = activeId) => {
+  const pauseGoal = async (sessionId) => {
     if (!sessionId) return
     try {
       const result = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/goal`, {
@@ -1185,20 +1334,15 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     }
   }
 
-  const visible = useMemo(() => remoteSessions.filter((session) =>
-    tiledSessionIds.includes(session.id) && `${session.name} ${session.firstMessage}`.toLowerCase().includes(query.toLowerCase()),
-  ), [remoteSessions, query, tiledSessionIds])
-  const toggleTiled = useCallback((session) => {
-    setTiledSessionIds((current) => {
-      const selected = current.includes(session.id)
-      const next = toggleTiledSession(current, session.id)
-      notify(t(selected ? '已将「{name}」移出平铺' : '已将「{name}」加入平铺', { name: session.name }), 'info')
-      return next
-    })
-  }, [notify, t])
+  const dockComponents = useMemo(() => ({ session: SessionDockPanel }), [])
+  const getTabContextMenuItems = useCallback(({ panel }) => [
+    { label: t('拆分到左侧'), action: () => splitDockPanel(panel.id, 'left'), disabled: compactDock || panel.group.size <= 1 },
+    { label: t('拆分到右侧'), action: () => splitDockPanel(panel.id, 'right'), disabled: compactDock || panel.group.size <= 1 },
+    'separator',
+    'close',
+  ], [compactDock, splitDockPanel, t])
   const activeSession = remoteSessions.find((session) => session.id === activeId)
   const activeState = sessionStates[activeId] || { messages: [], tools: [], approvals: [], taskList: null, streaming: false, error: '', loading: false, switchingModel: false, switchingCwd: false, switchingPermission: false, messageStart: null, hasOlder: false, olderCursor: null }
-  const activeModel = activeState.model || activeSession?.model || model
   const announcedModel = activeState.model || activeSession?.model || ''
 
   useEffect(() => {
@@ -1210,23 +1354,125 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     return () => { document.title = APP_NAME }
   }, [activeSession?.name])
 
+  const dockContextValue = {
+    sessions: remoteSessions,
+    sessionStates,
+    defaultModel: model,
+    availableModels,
+    globalError: error,
+    activeId,
+    compactDock,
+    pendingAsset,
+    onAssetConsumed,
+    loadSessionMessages,
+    loadOlderMessages,
+    sendPrompt,
+    abort,
+    pauseGoal,
+    switchSessionModel,
+    switchSessionPermission,
+    resolveToolApproval,
+    setWorkspaceSession,
+    renameSession,
+    splitDockPanel,
+    closeDockPanel,
+    openRail: railOpen ? null : () => setRailOpen(true),
+  }
+
   return (
     <>
-    <div className={`chat-layout mode-${mode} ${mode === 'focus' && railOpen ? 'rail-open' : ''}`}>
-      {loading ? <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在唤醒 Agent')}</h2><p>{t('模型、会话与上下文正在依次归位…')}</p></Panel> : mode === 'grid' ? (
-        <div className="session-grid">
-          {visible.length ? visible.map((session) => <SessionCard key={session.id} session={session} state={sessionStates[session.id]} model={sessionStates[session.id]?.model || session.model || model} permissionMode={sessionStates[session.id]?.permissionMode || session.permissionMode || 'auto'} availableModels={availableModels} onModelChange={(nextModel) => switchSessionModel(session.id, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(session.id, nextMode)} onApproval={(approvalId, approved) => resolveToolApproval(session.id, approvalId, approved)} onWorkspace={() => setWorkspaceSession(session)} onOpen={() => { setActiveId(session.id); setMode('focus') }} onRename={() => renameSession(session)} onRemoveFromTiled={() => toggleTiled(session)} onSend={(value, attachments) => sendPrompt(value, session.id, attachments)} onAbort={() => abort(session.id)} />) : <TiledEmptyState hasQuery={Boolean(query)} />}
+    <div className={`chat-layout dock-layout ${railOpen ? 'rail-open' : ''}`}>
+      {loading ? <Panel className="empty-state"><RefreshCw className="spin" size={24} /><h2>{t('正在唤醒 Agent')}</h2><p>{t('模型、会话与上下文正在依次归位…')}</p></Panel> : <>
+        {railOpen && <SessionRail sessions={remoteSessions} states={sessionStates} activeId={activeId} splitEnabled={!compactDock} onSelect={(id) => openSessionInDock(id, 'open')} onSplit={(id, direction) => openSessionInDock(id, direction)} onCreate={createSession} onClose={() => setRailOpen(false)} />}
+        <div className="chat-dock-workspace">
+          <ChatDockContext.Provider value={dockContextValue}>
+            <DockviewReact
+              className="dockview-theme-light dockview-theme-vesper"
+              components={dockComponents}
+              watermarkComponent={ChatDockWatermark}
+              onReady={onDockReady}
+              getTabContextMenuItems={getTabContextMenuItems}
+              disableFloatingGroups
+              disableDnd={compactDock}
+              noPanelsOverlay="watermark"
+            />
+          </ChatDockContext.Provider>
         </div>
-      ) : (<>
-        {railOpen && <SessionRail sessions={remoteSessions} states={sessionStates} activeId={activeId} onSelect={setActiveId} onCreate={createSession} onClose={() => setRailOpen(false)} />}
-        <FocusSession session={activeSession} messages={activeState.messages} messageStart={activeState.messageStart} hasOlder={activeState.hasOlder} loadingOlder={activeState.loadingOlder} olderError={activeState.olderError} model={activeModel} permissionMode={activeState.permissionMode || activeSession?.permissionMode || 'auto'} goal={activeState.goal ?? activeSession?.goal ?? null} taskList={resolveSessionTaskList(activeState, activeSession)} cwd={activeState.cwd || activeSession?.cwd} availableModels={availableModels} switchingModel={activeState.switchingModel} switchingCwd={activeState.switchingCwd} switchingPermission={activeState.switchingPermission} streaming={activeState.streaming} tools={activeState.tools} runStartedAt={activeState.runStartedAt} lastActivityAt={activeState.lastActivityAt} runFinishedAt={activeState.runFinishedAt} runStopped={activeState.runStopped} runNotice={activeState.runNotice} approvals={activeState.approvals || []} error={activeState.error || error} pendingAsset={pendingAsset} tiled={Boolean(activeSession && tiledSessionIds.includes(activeSession.id))} onAssetConsumed={onAssetConsumed} onLoadOlder={() => loadOlderMessages(activeId)} onModelChange={(nextModel) => switchSessionModel(activeId, nextModel)} onPermissionChange={(nextMode) => switchSessionPermission(activeId, nextMode)} onGoalPause={() => pauseGoal(activeId)} onApproval={(approvalId, approved) => resolveToolApproval(activeId, approvalId, approved)} onWorkspace={() => activeSession && setWorkspaceSession(activeSession)} onRename={() => activeSession && renameSession(activeSession)} onToggleTiled={() => activeSession && toggleTiled(activeSession)} onSend={sendPrompt} onAbort={() => abort(activeId)} onOpenRail={railOpen ? null : () => setRailOpen(true)} /></>)}
+      </>}
     </div>
     {workspaceSession && <WorkspacePicker session={workspaceSession} onClose={() => setWorkspaceSession(null)} onSelect={(cwd) => switchSessionCwd(workspaceSession, cwd)} />}
     </>
   )
 }
 
-function SessionRail({ sessions, states, activeId, onSelect, onCreate, onClose }) {
+function SessionDockPanel({ params, api }) {
+  const context = useContext(ChatDockContext)
+  const sessionId = params?.sessionId || sessionIdFromPanel(api?.id)
+  const session = context?.sessions.find((item) => item.id === sessionId)
+  const state = context?.sessionStates[sessionId] || DEFAULT_SESSION_STATE
+  const loadMessages = context?.loadSessionMessages
+
+  useEffect(() => {
+    if (sessionId) void loadMessages?.(sessionId, { limit: FOCUS_MESSAGE_PAGE_SIZE })
+  }, [loadMessages, sessionId])
+
+  if (!context || !session) return <div className="session-dock-missing"><AlertTriangle size={16} />{context ? 'Session unavailable' : 'Loading session'}</div>
+  const pending = context.pendingAsset?.asset && (!context.pendingAsset.targetSessionId || context.pendingAsset.targetSessionId === sessionId)
+    ? context.pendingAsset.asset
+    : null
+  return <div className="session-dock-panel" onFocusCapture={() => api.setActive()}>
+    <FocusSession
+      session={session}
+      messages={state.messages || EMPTY_LIST}
+      messageStart={state.messageStart}
+      hasOlder={state.hasOlder}
+      loadingOlder={state.loadingOlder}
+      olderError={state.olderError}
+      model={state.model || session.model || context.defaultModel}
+      permissionMode={state.permissionMode || session.permissionMode || 'auto'}
+      goal={state.goal ?? session.goal ?? null}
+      taskList={resolveSessionTaskList(state, session)}
+      cwd={state.cwd || session.cwd}
+      availableModels={context.availableModels}
+      switchingModel={state.switchingModel}
+      switchingCwd={state.switchingCwd}
+      switchingPermission={state.switchingPermission}
+      streaming={state.streaming}
+      tools={state.tools || EMPTY_LIST}
+      runStartedAt={state.runStartedAt}
+      lastActivityAt={state.lastActivityAt}
+      runFinishedAt={state.runFinishedAt}
+      runStopped={state.runStopped}
+      runNotice={state.runNotice}
+      approvals={state.approvals || EMPTY_LIST}
+      error={state.error || (context.activeId === sessionId ? context.globalError : '')}
+      pendingAsset={pending}
+      onAssetConsumed={context.onAssetConsumed}
+      onLoadOlder={() => context.loadOlderMessages(sessionId)}
+      onModelChange={(nextModel) => context.switchSessionModel(sessionId, nextModel)}
+      onPermissionChange={(nextMode) => context.switchSessionPermission(sessionId, nextMode)}
+      onGoalPause={() => context.pauseGoal(sessionId)}
+      onApproval={(approvalId, approved) => context.resolveToolApproval(sessionId, approvalId, approved)}
+      onWorkspace={() => context.setWorkspaceSession(session)}
+      onRename={() => context.renameSession(session)}
+      onSplitLeft={() => context.splitDockPanel(api.id, 'left')}
+      onSplitRight={() => context.splitDockPanel(api.id, 'right')}
+      onClosePanel={() => context.closeDockPanel(api.id)}
+      canSplit={!context.compactDock && api.group.size > 1}
+      onSend={(value, attachments, goalMode) => context.sendPrompt(value, sessionId, attachments, goalMode)}
+      onAbort={() => context.abort(sessionId)}
+      onOpenRail={context.openRail}
+    />
+  </div>
+}
+
+function ChatDockWatermark() {
+  const context = useContext(ChatDockContext)
+  const { t } = useI18n()
+  return <div className="chat-dock-watermark"><MessageSquare size={34} /><strong>{t('打开一个会话开始工作')}</strong><span>{t('从左侧会话列表打开，或拆分到左侧或右侧。')}</span>{context?.openRail && <button type="button" className="button secondary" onClick={context.openRail}><PanelLeftOpen size={14} />{t('展开会话列表')}</button>}</div>
+}
+
+function SessionRail({ sessions, states, activeId, splitEnabled, onSelect, onSplit, onCreate, onClose }) {
   const { t, language } = useI18n()
   const [railQuery, setRailQuery] = useState('')
   const filtered = useMemo(() => {
@@ -1246,10 +1492,16 @@ function SessionRail({ sessions, states, activeId, onSelect, onCreate, onClose }
       <div className="session-rail-list">
         {filtered.map((session) => {
           const streaming = Boolean(states[session.id]?.streaming)
-          return <button className={`session-rail-item ${session.id === activeId ? 'active' : ''}`} key={session.id} onClick={() => onSelect(session.id)}>
-            <span className="session-rail-item-name">{streaming && <i className="session-rail-live" />}{session.name || t('未命名会话')}</span>
-            <span className="session-rail-item-meta">{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || 0 })} · {relativeTime(session.modified, language)}</span>
-          </button>
+          return <div className={`session-rail-row ${session.id === activeId ? 'active' : ''}`} key={session.id}>
+            <button className="session-rail-item" onClick={() => onSelect(session.id)}>
+              <span className="session-rail-item-name">{streaming && <i className="session-rail-live" />}{session.name || t('未命名会话')}</span>
+              <span className="session-rail-item-meta">{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || 0 })} · {relativeTime(session.modified, language)}</span>
+            </button>
+            {splitEnabled && <div className="session-rail-split-actions">
+              <button type="button" title={t('拆分到左侧')} aria-label={t('将 {name} 拆分到左侧', { name: session.name })} onClick={() => onSplit(session.id, 'left')}><PanelLeft size={13} /></button>
+              <button type="button" title={t('拆分到右侧')} aria-label={t('将 {name} 拆分到右侧', { name: session.name })} onClick={() => onSplit(session.id, 'right')}><PanelRight size={13} /></button>
+            </div>}
+          </div>
         })}
         {!filtered.length && <span className="session-rail-empty">{t(railQuery.trim() ? '没有匹配的会话' : '暂无历史会话')}</span>}
       </div>
@@ -1289,45 +1541,6 @@ function TaskListPanel({ taskList, compact = false, streaming = false }) {
       {compact && items.length > visibleItems.length && <small className="task-list-more">{t('还有 {count} 项', { count: items.length - visibleItems.length })}</small>}
     </div>}
   </section>
-}
-
-function SessionCard({ session, state, model, permissionMode, availableModels, onModelChange, onPermissionChange, onApproval, onWorkspace, onOpen, onRename, onRemoveFromTiled, onSend, onAbort }) {
-  const { t, language } = useI18n()
-  const [value, setValue] = useState('')
-  const selection = useAttachmentSelection()
-  const messages = (state?.messages || EMPTY_LIST).slice(-GRID_MESSAGE_PAGE_SIZE)
-  const tools = state?.tools || EMPTY_LIST
-  const streaming = Boolean(state?.streaming)
-  const taskList = resolveSessionTaskList(state, session)
-  const lastMessage = messages[messages.length - 1]
-  const liveTextBucket = Math.floor((lastMessage?.text?.length || 0) / 64)
-  const liveVersion = `${session.id}:${lastMessage?.id || ''}:${liveTextBucket}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${taskList?.updatedAt || ''}:${state?.error || ''}:${streaming ? '1' : '0'}`
-  const { scrollRef: liveRef, onScroll: onLiveScroll, scrollToBottom } = useAutoScroll(liveVersion)
-  const submit = (event) => {
-    event.preventDefault()
-    if ((!value.trim() && !selection.attachments.length) || streaming) return
-    onSend(value, selection.attachments)
-    scrollToBottom('smooth')
-    setValue('')
-    selection.clearAttachments()
-  }
-  return (
-    <Panel className="session-card">
-      <div className="card-head"><button className="session-title-button" onClick={onOpen}><h3 title={session.name}>{session.name}</h3><span className={streaming ? 'success' : ''}>{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || messages.length })} · {relativeTime(session.modified, language)}</span><small className="workspace-summary" title={state?.cwd || session.cwd}><FolderOpen size={10} />{workspaceName(state?.cwd || session.cwd, language)}</small></button><div className="card-head-actions"><button className="icon-button" title={t('设置工作目录')} onClick={onWorkspace} disabled={streaming || state?.switchingCwd}><FolderOpen size={14} /></button><button className="icon-button" title={t('重命名会话')} onClick={onRename}><Pencil size={14} /></button><button className="icon-button" title={t('移出平铺')} aria-label={t('将 {name} 移出平铺', { name: session.name })} onClick={onRemoveFromTiled}><X size={14} /></button>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={11} />{t('停止')}</button> : <button className="icon-button" onClick={onOpen}><MoreHorizontal size={17} /></button>}</div></div>
-      <TaskListPanel taskList={taskList} compact streaming={streaming} />
-      <div className="session-live-body" ref={liveRef} onScroll={onLiveScroll}>
-        {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />{t('加载消息…')}</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />{t('从一束新的想法开始')}</button> : messages.map((message) => <MiniChatMessage key={message.id} message={message} />)}
-        {(streaming || state?.runStartedAt) && <AgentRunActivity compact streaming={streaming} text={lastMessage?.role === 'agent' ? lastMessage.text : ''} tools={tools} error={state?.error} stopped={state?.runStopped} notice={state?.runNotice} startedAt={state?.runStartedAt} lastActivityAt={state?.lastActivityAt} finishedAt={state?.runFinishedAt} />}
-        {state?.error && <div className="mini-session-error"><AlertTriangle size={11} />{state.error}</div>}
-      </div>
-      <form className="mini-composer-shell" onSubmit={submit}>
-        <ToolApproval approvals={state?.approvals || EMPTY_LIST} onResolve={onApproval} compact />
-        <AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} compact />
-        {selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}
-        <div className="mini-composer"><button type="button" className="attach-trigger" title={t('添加附件')} aria-label={t('添加附件')} onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={14} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><input value={value} onChange={(event) => setValue(event.target.value)} onPaste={selection.pasteImages} placeholder={t(streaming ? 'Agent 正在运行…' : '写下你的想法，或带上一份附件…')} disabled={streaming} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || state?.switchingModel} compact /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={state?.switchingPermission} compact />{streaming ? <button type="button" className="send-mini stop" title={t('停止运行')} aria-label={t('停止运行')} onClick={onAbort}><Square size={12} /></button> : <button className="send-mini" title={t('发送消息')} aria-label={t('发送消息')} disabled={!value.trim() && !selection.attachments.length}><Send size={13} /></button>}</div>
-      </form>
-    </Panel>
-  )
 }
 
 function SessionModelSelect({ value, models, onChange, disabled, compact = false }) {
@@ -1484,7 +1697,7 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, taskList, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort, onOpenRail }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, taskList, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onAbort, onOpenRail }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const [goalArmed, setGoalArmed] = useState(false)
@@ -1548,7 +1761,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   const submit = (event) => {
     event.preventDefault()
     if (!value.trim() && !selection.attachments.length) return
-    onSend(value, undefined, selection.attachments, goalArmed)
+    onSend(value, selection.attachments, goalArmed)
     scrollToBottom('smooth')
     setValue('')
     setGoalArmed(false)
@@ -1557,7 +1770,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   }
   return (
     <Panel className="focus-session">
-      <div className="card-head"><div className="session-runtime-meta">{onOpenRail && <button className="icon-button session-rail-open-btn" title={t('展开会话列表')} aria-label={t('展开会话列表')} onClick={onOpenRail}><PanelLeftOpen size={15} /></button>}<span className={streaming ? 'success' : ''}>{t(streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} tiled={tiled} streaming={streaming} switchingCwd={switchingCwd} onToggleTiled={onToggleTiled} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
+      <div className="card-head"><div className="session-runtime-meta">{onOpenRail && <button className="icon-button session-rail-open-btn" title={t('展开会话列表')} aria-label={t('展开会话列表')} onClick={onOpenRail}><PanelLeftOpen size={15} /></button>}<span className={streaming ? 'success' : ''}>{t(streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} canSplit={canSplit} streaming={streaming} switchingCwd={switchingCwd} onSplitLeft={onSplitLeft} onSplitRight={onSplitRight} onClosePanel={onClosePanel} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
       {/* Keep the plan/task list outside the auto-scrolling transcript so it stays visible while tokens stream. */}
       <TaskListPanel taskList={taskList} streaming={streaming} />
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
@@ -1625,7 +1838,7 @@ function GoalModeControl({ goal, armed, onChange }) {
   return <div ref={rootRef} className={`goal-mode-select ${open ? 'open' : ''} ${active || armed ? 'active' : ''}`}><button type="button" className="goal-mode-trigger" title={label} aria-label={label} aria-haspopup="dialog" aria-expanded={open} onClick={() => setOpen((visible) => !visible)}><Target size={14} /></button>{open && <div className="goal-mode-menu" role="dialog" aria-label={t('Goal 模式')}><div className="goal-mode-menu-row"><span className="goal-mode-menu-icon"><Target size={15} /></span><span><strong>{t('Goal 模式')}</strong><small title={detail}>{detail}</small></span><Toggle value={enabled} onChange={change} ariaLabel={label} title={label} /></div>{active && <p>{usage}</p>}</div>}</div>
 }
 
-function SessionActionsMenu({ session, tiled, streaming, switchingCwd, onToggleTiled, onWorkspace, onRename }) {
+function SessionActionsMenu({ session, canSplit, streaming, switchingCwd, onSplitLeft, onSplitRight, onClosePanel, onWorkspace, onRename }) {
   const { t, language } = useI18n()
   const [open, setOpen] = useState(false)
   const rootRef = useRef(null)
@@ -1647,7 +1860,7 @@ function SessionActionsMenu({ session, tiled, streaming, switchingCwd, onToggleT
     action?.()
   }
 
-  return <div ref={rootRef} className="session-actions-menu-root"><button type="button" className="icon-button" title={t('会话操作')} aria-label={t('打开会话操作菜单')} aria-haspopup="menu" aria-expanded={open} disabled={!session} onClick={() => setOpen((visible) => !visible)}><MoreHorizontal size={17} /></button>{open && <div className="permission-mode-menu session-actions-menu" role="menu"><button type="button" role="menuitem" onClick={() => run(onToggleTiled)}><Grid2X2 size={15} /><span><strong>{t(tiled ? '移出平铺' : '加入平铺')}</strong><small>{t(tiled ? '保留历史记录，仅从平铺视图移除' : '在平铺模式中并行关注此会话')}</small></span>{tiled && <Check size={13} />}</button><button type="button" role="menuitem" disabled={streaming || switchingCwd} onClick={() => run(onWorkspace)}><FolderOpen size={15} /><span><strong>{t('设置工作目录')}</strong><small>{streaming ? t('Agent 运行期间不能切换') : workspaceName(session?.cwd, language)}</small></span></button><button type="button" role="menuitem" onClick={() => run(onRename)}><Pencil size={15} /><span><strong>{t('重命名会话')}</strong><small>{session?.name || t('新会话')}</small></span></button></div>}</div>
+  return <div ref={rootRef} className="session-actions-menu-root"><button type="button" className="icon-button" title={t('会话操作')} aria-label={t('打开会话操作菜单')} aria-haspopup="menu" aria-expanded={open} disabled={!session} onClick={() => setOpen((visible) => !visible)}><MoreHorizontal size={17} /></button>{open && <div className="permission-mode-menu session-actions-menu" role="menu"><button type="button" role="menuitem" disabled={!canSplit} onClick={() => run(onSplitLeft)}><PanelLeft size={15} /><span><strong>{t('拆分到左侧')}</strong><small>{t(canSplit ? '将当前标签移动到左侧新分组' : '当前分组只有一个会话')}</small></span></button><button type="button" role="menuitem" disabled={!canSplit} onClick={() => run(onSplitRight)}><PanelRight size={15} /><span><strong>{t('拆分到右侧')}</strong><small>{t(canSplit ? '将当前标签移动到右侧新分组' : '当前分组只有一个会话')}</small></span></button><button type="button" role="menuitem" disabled={streaming || switchingCwd} onClick={() => run(onWorkspace)}><FolderOpen size={15} /><span><strong>{t('设置工作目录')}</strong><small>{streaming ? t('Agent 运行期间不能切换') : workspaceName(session?.cwd, language)}</small></span></button><button type="button" role="menuitem" onClick={() => run(onRename)}><Pencil size={15} /><span><strong>{t('重命名会话')}</strong><small>{session?.name || t('新会话')}</small></span></button><button type="button" role="menuitem" onClick={() => run(onClosePanel)}><X size={15} /><span><strong>{t('关闭标签')}</strong><small>{t('保留历史记录，仅关闭当前视图')}</small></span></button></div>}</div>
 }
 
 function CommandPalette({ navigation, onClose, onNavigate, onOpenSession, onNewChat }) {
@@ -1728,7 +1941,5 @@ function AttachmentTray({ attachments, onRemove, compact = false }) {
   if (!attachments.length) return null
   return <div className={`attachment-tray ${compact ? 'compact' : ''}`}>{attachments.map((attachment) => <div className="attachment-chip" key={attachment.id}>{attachment.kind === 'image' ? <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="" /> : <span className="attachment-icon"><File size={13} /></span>}<span><strong>{attachment.name}</strong><small>{t(attachment.kind === 'image' ? '图片' : attachment.kind === 'document' ? '文档' : '文本')} · {formatFileSize(attachment.size)}{attachment.truncated ? ` · ${t('已截断')}` : ''}</small></span><button type="button" aria-label={t('移除 {name}', { name: attachment.name })} onClick={() => onRemove(attachment.id)}><X size={12} /></button></div>)}</div>
 }
-
-function TiledEmptyState({ hasQuery }) { const { t } = useI18n(); return <Panel className="empty-state"><StarOrbit size={48} /><h2>{t(hasQuery ? '没有匹配的平铺会话' : '这片视野里还没有会话')}</h2><p>{t(hasQuery ? '更换搜索关键词，或从历史会话中加入其他会话。' : '从历史会话点亮「平铺」，让不同任务在同一片视野中并行前行。')}</p></Panel> }
 
 export default App

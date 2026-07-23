@@ -27,6 +27,7 @@
     "@larksuiteoapi/node-sdk": "^1.71.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@tailwindcss/vite": "^4.3.3",
+    "dockview-react": "^7.0.4",
     "electron-updater": "^6.8.9",
     "i18next": "^26.3.6",
     "lucide-react": "^1.24.0",

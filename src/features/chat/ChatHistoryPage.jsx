@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { Check, ChevronRight, Grid2X2, History, MessageSquare, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { ChevronRight, History, MessageSquare, PanelLeft, PanelRight, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 import { APP_NAME } from '../../app/brand.js'
 import { useI18n } from '../../app/use-i18n.js'
 import { STORAGE_KEYS } from '../../app/storage.js'
@@ -9,19 +9,9 @@ import { apiJson } from '../../lib/api.js'
 import { relativeTime, workspaceName } from '../../lib/format.js'
 import { ACTIVE_SESSION_CHANGED_EVENT, SESSIONS_UPDATED_EVENT, announceActiveSession, announceSessionsUpdated, requestSessionSelection } from './events.js'
 
-function readTiledSessions() {
-  try {
-    const value = JSON.parse(localStorage.getItem(STORAGE_KEYS.tiledSessions) || '[]')
-    return Array.isArray(value) ? value.filter((id) => typeof id === 'string') : []
-  } catch {
-    return []
-  }
-}
-
-export function ChatHistoryPage({ query, navigate, setChatMode, notify, requestConfirm, requestText }) {
+export function ChatHistoryPage({ query, navigate, notify, requestConfirm, requestText }) {
   const { t, language } = useI18n()
   const [sessions, setSessions] = useState([])
-  const [tiledIds, setTiledIds] = useState(readTiledSessions)
   const [activeId, setActiveId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -62,20 +52,9 @@ export function ChatHistoryPage({ query, navigate, setChatMode, notify, requestC
     return sessions.filter((session) => `${session.name || ''} ${session.firstMessage || ''} ${session.cwd || ''} ${session.model || ''}`.toLowerCase().includes(needle))
   }, [query, sessions])
 
-  const openSession = (id) => {
-    setChatMode('focus')
-    requestSessionSelection(id)
+  const openSession = (id, disposition = 'open') => {
+    requestSessionSelection(id, disposition)
     navigate('chat')
-  }
-
-  const toggleTiled = (session) => {
-    setTiledIds((current) => {
-      const selected = current.includes(session.id)
-      const next = selected ? current.filter((id) => id !== session.id) : [...current, session.id]
-      localStorage.setItem(STORAGE_KEYS.tiledSessions, JSON.stringify(next))
-      notify(t(selected ? '已将「{name}」移出平铺' : '已将「{name}」加入平铺', { name: session.name }), 'info')
-      return next
-    })
   }
 
   const renameSession = async (session) => {
@@ -100,10 +79,7 @@ export function ChatHistoryPage({ query, navigate, setChatMode, notify, requestC
     try {
       await apiJson(`/api/sessions/${encodeURIComponent(session.id)}`, { method: 'DELETE' })
       const remaining = sessions.filter((item) => item.id !== session.id)
-      const nextTiled = tiledIds.filter((id) => id !== session.id)
       setSessions(remaining)
-      setTiledIds(nextTiled)
-      localStorage.setItem(STORAGE_KEYS.tiledSessions, JSON.stringify(nextTiled))
       if (activeId === session.id) {
         const nextId = remaining[0]?.id || ''
         setActiveId(nextId)
@@ -130,7 +106,6 @@ export function ChatHistoryPage({ query, navigate, setChatMode, notify, requestC
       ) : visible.length ? (
         <Panel className="chat-history-list">
           {visible.map((session) => {
-            const tiled = tiledIds.includes(session.id)
             return <div className={`chat-history-row ${session.id === activeId ? 'active' : ''}`} key={session.id}>
               <button className="chat-history-open" onClick={() => openSession(session.id)}>
                 <span className="chat-history-icon"><MessageSquare size={15} /></span>
@@ -139,7 +114,8 @@ export function ChatHistoryPage({ query, navigate, setChatMode, notify, requestC
                 <ChevronRight size={15} />
               </button>
               <div className="chat-history-actions">
-                <button className={tiled ? 'active' : ''} title={t(tiled ? '移出平铺' : '加入平铺')} aria-label={t(tiled ? '移出平铺' : '加入平铺')} onClick={() => toggleTiled(session)}>{tiled ? <Check size={14} /> : <Grid2X2 size={14} />}</button>
+                <button title={t('拆分到左侧')} aria-label={t('将 {name} 拆分到左侧', { name: session.name })} onClick={() => openSession(session.id, 'left')}><PanelLeft size={14} /></button>
+                <button title={t('拆分到右侧')} aria-label={t('将 {name} 拆分到右侧', { name: session.name })} onClick={() => openSession(session.id, 'right')}><PanelRight size={14} /></button>
                 <button title={t('重命名会话')} aria-label={t('重命名会话')} onClick={() => renameSession(session)}><Pencil size={14} /></button>
                 <button className="danger" title={t('删除会话')} aria-label={t('删除会话')} onClick={() => deleteSession(session)}><Trash2 size={14} /></button>
               </div>
