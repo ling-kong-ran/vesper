@@ -915,8 +915,14 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
           updateSessionState(sessionId, { goal: data.goal ?? null })
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, goal: data.goal ?? null } : session))
         } else if (event === 'task_list_update') {
-          updateSessionState(sessionId, { taskList: data.taskList ?? null })
-          setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, taskList: data.taskList ?? null } : session))
+          textScheduler.flush()
+          toolScheduler.flush()
+          updateSessionState(sessionId, (current) => ({
+            ...current,
+            lastActivityAt: eventAt,
+            taskList: data.taskList ?? current.taskList ?? null,
+          }))
+          setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, taskList: data.taskList ?? session.taskList ?? null } : session))
         } else if (event === 'session_title') {
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, name: data.name } : session))
         } else if (event === 'retry') {
@@ -1191,22 +1197,22 @@ function TaskListPanel({ taskList, compact = false }) {
     completed: { label: t('已完成'), icon: <Check size={compact ? 11 : 13} />, tone: 'text-[var(--success)]' },
     blocked: { label: t('已阻塞'), icon: <AlertTriangle size={compact ? 11 : 13} />, tone: 'text-[var(--danger)]' },
   }
-  return <section className={`${compact ? 'mx-2 my-2' : 'mx-4 mt-3'} overflow-hidden rounded-[var(--r-sm)] border border-[var(--stroke)] bg-[var(--surface-subtle)]`}>
-    <button type="button" className="flex min-h-8 w-full items-center gap-2 px-3 py-2 text-left text-[12px] text-[var(--text)] hover:bg-[var(--surface-hover)]" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
+  return <section className={`task-list-panel ${compact ? 'compact' : ''}`} aria-label={t('任务清单')}>
+    <button type="button" className="task-list-panel-summary" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
       <ListChecks size={14} className="shrink-0 text-[var(--muted)]" />
       <strong className="min-w-0 flex-1 truncate">{t('任务清单')}</strong>
       <small className="text-[11px] text-[var(--muted)]">{t('{completed}/{total} 已完成', { completed, total: items.length })}</small>
       <ChevronRight size={13} className={`text-[var(--muted)] transition-transform ${expanded ? 'rotate-90' : ''}`} />
     </button>
-    {expanded && <div className={`${compact ? 'max-h-28' : 'max-h-52'} overflow-y-auto border-t border-[var(--stroke)] px-3 py-2`}>
+    {expanded && <div className={`task-list-panel-body ${compact ? 'compact' : ''}`}>
       {visibleItems.map((item) => {
         const meta = statusMeta[item.status] || statusMeta.pending
-        return <div className="flex min-h-7 items-start gap-2 py-1 text-[12px]" key={item.id}>
-          <span className={`mt-0.5 shrink-0 ${meta.tone}`} title={meta.label}>{meta.icon}</span>
-          <span className={`min-w-0 flex-1 leading-5 ${item.status === 'completed' ? 'text-[var(--muted)] line-through' : 'text-[var(--text)]'}`} title={item.note || item.title}>{item.title}</span>
+        return <div className="task-list-item" key={item.id}>
+          <span className={`task-list-item-status ${meta.tone}`} title={meta.label}>{meta.icon}</span>
+          <span className={`task-list-item-title ${item.status === 'completed' ? 'is-completed' : ''}`} title={item.note || item.title}>{item.title}</span>
         </div>
       })}
-      {compact && items.length > visibleItems.length && <small className="block py-1 text-[11px] text-[var(--muted)]">{t('还有 {count} 项', { count: items.length - visibleItems.length })}</small>}
+      {compact && items.length > visibleItems.length && <small className="task-list-more">{t('还有 {count} 项', { count: items.length - visibleItems.length })}</small>}
     </div>}
   </section>
 }
@@ -1234,8 +1240,8 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
   return (
     <Panel className="session-card">
       <div className="card-head"><button className="session-title-button" onClick={onOpen}><h3 title={session.name}>{session.name}</h3><span className={streaming ? 'success' : ''}>{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || messages.length })} · {relativeTime(session.modified, language)}</span><small className="workspace-summary" title={state?.cwd || session.cwd}><FolderOpen size={10} />{workspaceName(state?.cwd || session.cwd, language)}</small></button><div className="card-head-actions"><button className="icon-button" title={t('设置工作目录')} onClick={onWorkspace} disabled={streaming || state?.switchingCwd}><FolderOpen size={14} /></button><button className="icon-button" title={t('重命名会话')} onClick={onRename}><Pencil size={14} /></button><button className="icon-button" title={t('移出平铺')} aria-label={t('将 {name} 移出平铺', { name: session.name })} onClick={onRemoveFromTiled}><X size={14} /></button>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={11} />{t('停止')}</button> : <button className="icon-button" onClick={onOpen}><MoreHorizontal size={17} /></button>}</div></div>
+      <TaskListPanel taskList={taskList} compact />
       <div className="session-live-body" ref={liveRef} onScroll={onLiveScroll}>
-        <TaskListPanel taskList={taskList} compact />
         {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />{t('加载消息…')}</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />{t('从一束新的想法开始')}</button> : messages.map((message) => <MiniChatMessage key={message.id} message={message} />)}
         {(streaming || state?.runStartedAt) && <AgentRunActivity compact streaming={streaming} text={lastMessage?.role === 'agent' ? lastMessage.text : ''} tools={tools} error={state?.error} stopped={state?.runStopped} notice={state?.runNotice} startedAt={state?.runStartedAt} lastActivityAt={state?.lastActivityAt} finishedAt={state?.runFinishedAt} />}
         {state?.error && <div className="mini-session-error"><AlertTriangle size={11} />{state.error}</div>}
@@ -1478,8 +1484,9 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   return (
     <Panel className="focus-session">
       <div className="card-head"><div className="session-runtime-meta">{onOpenRail && <button className="icon-button session-rail-open-btn" title={t('展开会话列表')} aria-label={t('展开会话列表')} onClick={onOpenRail}><PanelLeftOpen size={15} /></button>}<span className={streaming ? 'success' : ''}>{t(streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} tiled={tiled} streaming={streaming} switchingCwd={switchingCwd} onToggleTiled={onToggleTiled} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
+      {/* Keep the plan/task list outside the auto-scrolling transcript so it stays visible while tokens stream. */}
+      <TaskListPanel taskList={taskList} />
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
-        <TaskListPanel taskList={taskList} />
         {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />{t('重试加载更早消息')}</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />{t('正在加载更早消息…')}</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />{t('加载更早消息')}</button>}</div>}
         {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>{t('让我们从一束想法开始')}</h2><p>{t('Vesper 已准备好读取当前工作区、搜索代码，并陪你把任务推进到完成。默认从只读权限开始。')}</p><div className="welcome-chips">{welcomeChips(t).map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
         {messages.map((message, index) => {

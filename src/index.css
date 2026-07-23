@@ -561,6 +561,19 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .mode-focus .focus-session { overflow: hidden; border: 1px solid var(--stroke-soft); border-radius: var(--r-md); background: var(--panel); padding: 0; box-shadow: none; }
 .mode-focus .focus-session > .card-head { position: relative; z-index: 4; min-height: 54px; flex: none; align-items: center; border-bottom: 1px solid var(--stroke-soft); background: var(--panel); padding: 8px 14px; }
 .mode-focus .focus-session > .card-head .session-runtime-meta { margin-top: 0; }
+.mode-focus .focus-session > .task-list-panel { flex: none; z-index: 3; margin: 0; border: 0; border-bottom: 1px solid var(--stroke-soft); border-radius: 0; background: color-mix(in srgb, var(--panel) 92%, var(--surface-subtle)); }
+.session-card > .task-list-panel { flex: none; margin: 0; border: 0; border-bottom: 1px solid var(--stroke-soft); border-radius: 0; }
+.task-list-panel { overflow: hidden; border: 1px solid var(--stroke); border-radius: var(--r-sm); background: var(--surface-subtle); }
+.task-list-panel-summary { display: flex; min-height: 34px; width: 100%; align-items: center; gap: 8px; padding: 8px 14px; border: 0; background: transparent; color: var(--text); text-align: left; font-size: 12px; }
+.task-list-panel.compact .task-list-panel-summary { min-height: 30px; padding: 6px 10px; }
+.task-list-panel-summary:hover { background: var(--surface-hover); }
+.task-list-panel-body { max-height: 12.5rem; overflow-y: auto; border-top: 1px solid var(--stroke); padding: 8px 14px; }
+.task-list-panel-body.compact { max-height: 7rem; padding: 6px 10px; }
+.task-list-item { display: flex; min-height: 28px; align-items: start; gap: 8px; padding: 4px 0; font-size: 12px; }
+.task-list-item-status { margin-top: 2px; flex: none; }
+.task-list-item-title { min-width: 0; flex: 1; line-height: 1.45; color: var(--text); }
+.task-list-item-title.is-completed { color: var(--muted); text-decoration: line-through; }
+.task-list-more { display: block; padding: 4px 0; color: var(--muted); font-size: 11px; }
 .transcript { min-height: 0; flex: 1; overflow: auto; margin: 0; border: 0; padding: 26px max(24px,calc((100% - 960px)/2)); scroll-padding-bottom: 28px; }
 .history-page-loader { display: flex; width: min(960px,100%); min-height: 42px; align-items: center; justify-content: center; gap: 7px; margin: 0 auto 18px; color: var(--muted); font-size: 12px; }.history-page-loader .history-up-arrow { transform: rotate(180deg); }
 .message { display: flex; width: min(960px,100%); flex-direction: column; align-items: flex-start; gap: 6px; margin: 0 auto 24px; content-visibility: auto; contain-intrinsic-size: auto 120px; }
