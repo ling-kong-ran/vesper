@@ -4,6 +4,7 @@ import { useI18n } from '../../app/use-i18n.js'
 import { AgentStatusAvatar } from '../../components/AgentStatusAvatar.jsx'
 import MarkdownMessage from '../../components/MarkdownMessage.jsx'
 import AgentRunActivity from './AgentRunActivity.jsx'
+import { splitAssistantStreamText } from './stream-text.js'
 
 function ImageLightbox({ attachment, source, onClose }) {
   const { t } = useI18n()
@@ -40,11 +41,30 @@ function focusPropsEqual(prev, next) {
 }
 
 export const FocusChatMessage = memo(function FocusChatMessage({ message, agentState, showRunActivity, runProps }) {
+  const hasTools = Boolean(runProps?.tools?.length)
+  const streaming = Boolean(message.streaming)
+  // While tools are running, keep preamble above tools and only stream the post-tool body below,
+  // so users don't see the same thinking text twice (once above tools and again in the full reply).
+  const { lead, body } = splitAssistantStreamText(message.text, message.streamPreamble, {
+    streaming,
+    hasTools,
+  })
+  const showLead = Boolean(lead)
+  const showBody = Boolean(body) || (!streaming && message.text) || (!showLead && (message.text || !streaming))
+  const activityProps = runProps && hasTools
+    ? { ...runProps, text: body || lead || runProps.text }
+    : runProps
+
   return <div className={`message ${message.role} ${message.error ? 'has-error' : ''}`}>
     <span>{message.role === 'agent' ? <AgentStatusAvatar state={agentState} /> : 'You'}</span>
     <div className="message-content">
-      {showRunActivity && runProps && <AgentRunActivity {...runProps} />}
-      {(message.text || !message.streaming) && <MarkdownMessage streaming={message.streaming}>{message.text}</MarkdownMessage>}
+      {showLead && <MarkdownMessage streaming={streaming && !body}>{lead}</MarkdownMessage>}
+      {showRunActivity && activityProps && <AgentRunActivity {...activityProps} />}
+      {showBody && (
+        <MarkdownMessage streaming={streaming}>
+          {streaming ? (body || (!showLead ? message.text : '')) : message.text}
+        </MarkdownMessage>
+      )}
       {message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}
     </div>
   </div>

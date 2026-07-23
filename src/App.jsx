@@ -926,7 +926,20 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         } else if (event === 'tool_start') {
           typewriter.flush()
           toolScheduler.flush()
-          updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, runNotice: '', tools: [...current.tools, { id: data.id, name: data.name, status: 'running', startedAt: data.startedAt || eventAt, updatedAt: eventAt }] }))
+          updateSessionState(sessionId, (current) => ({
+            ...current,
+            lastActivityAt: eventAt,
+            runNotice: '',
+            tools: [...current.tools, { id: data.id, name: data.name, status: 'running', startedAt: data.startedAt || eventAt, updatedAt: eventAt }],
+            // Freeze the pre-tool preamble once, so the UI can render: preamble → tools → post-tool text.
+            messages: current.messages.map((item) => item.id === agentId
+              ? {
+                  ...item,
+                  text: responseText || item.text,
+                  streamPreamble: item.streamPreamble ?? responseText ?? item.text ?? '',
+                }
+              : item),
+          }))
         } else if (event === 'tool_update') {
           toolScheduler.push(data.id, {
             message: data.message || '',
@@ -993,6 +1006,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
               ...item,
               text: typeof data.text === 'string' ? data.text : responseText || item.text,
               streaming: false,
+              streamPreamble: undefined,
               ...(data.assets?.length ? { attachments: data.assets } : {}),
             } : item),
           }))
@@ -1016,7 +1030,12 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
             lastActivityAt: finishedAt,
             approvals: [],
             tools: settleToolCalls(data.tools || current.tools, { finishedAt, error: data.message }),
-            messages: current.messages.map((item) => item.id === agentId ? { ...item, text: typeof data.text === 'string' ? data.text : responseText || item.text, streaming: false } : item),
+            messages: current.messages.map((item) => item.id === agentId ? {
+              ...item,
+              text: typeof data.text === 'string' ? data.text : responseText || item.text,
+              streaming: false,
+              streamPreamble: undefined,
+            } : item),
           }))
           throw new Error(data.message)
         }
