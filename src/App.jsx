@@ -8,7 +8,6 @@ import {
   Check,
   Circle,
   ChevronRight,
-  Clock3,
   Download,
   ExternalLink,
   File,
@@ -44,18 +43,20 @@ import { STORAGE_KEYS } from './app/storage.js'
 import { getNavigation, getPageMeta } from './app/navigation.jsx'
 import { PAGE_IDS, PAGE_PATHS, pageFromPath, pagePath } from './app/routes.js'
 import { useI18n } from './app/use-i18n.js'
-import { AgentStatusAvatar } from './components/AgentStatusAvatar.jsx'
 import { BrandLogo } from './components/BrandLogo.jsx'
 import { StarOrbit } from './components/StarOrbit.jsx'
 import { AppDialog, InputLabel, Panel, Segmented, SelectLabel, Toast, Toggle } from './components/ui.jsx'
 import { useAttachmentSelection } from './features/chat/attachments.js'
 import { ChatHistoryPage } from './features/chat/ChatHistoryPage.jsx'
 import { ACTIVE_SESSION_CHANGED_EVENT, SESSION_SELECTED_EVENT, SESSIONS_UPDATED_EVENT, announceActiveSession, announceSessionsUpdated, requestSessionSelection } from './features/chat/events.js'
+import { FocusChatMessage, MiniChatMessage } from './features/chat/ChatMessage.jsx'
+import AgentRunActivity from './features/chat/AgentRunActivity.jsx'
 import { mergeSessionLists, toggleTiledSession } from './features/chat/session-list.js'
-import { deriveRunActivity, formatRunDuration, groupToolCalls, runDurationMs, settleToolCalls } from './features/chat/run-activity.js'
+import { settleToolCalls } from './features/chat/run-activity.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, applyTextPatch, consumeEventStream } from './lib/api.js'
+import { applySessionUpdate, DEFAULT_SESSION_STATE } from './lib/session-state.js'
 import { createStreamingTextScheduler, createToolUpdateScheduler } from './lib/streaming-ui.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
@@ -71,8 +72,6 @@ const McpPage = lazy(() => import('./features/workflows/PreviewPages.jsx').then(
 const SkillsPage = lazy(() => import('./features/skills/SkillsPage.jsx').then((module) => ({ default: module.SkillsPage })))
 const WorkflowsPage = lazy(() => import('./features/workflows/WorkflowsPage.jsx').then((module) => ({ default: module.WorkflowsPage })))
 const WorkflowBuilder = lazy(() => import('./features/workflows/WorkflowsPage.jsx').then((module) => ({ default: module.WorkflowBuilder })))
-const LazyMarkdownMessage = lazy(() => import('./components/MarkdownMessage.jsx'))
-
 const EMPTY_LIST = []
 const USAGE_UPDATED_EVENT = 'vesper:usage-updated'
 const FOCUS_MESSAGE_PAGE_SIZE = 40
@@ -619,8 +618,9 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   const updateSessionState = useCallback((id, update) => {
     if (!id) return
     const current = sessionStatesRef.current
-    const previous = current[id] || { messages: [], tools: [], approvals: [], taskList: null, streaming: false, error: '', loaded: false, messageStart: null, hasOlder: false, olderCursor: null }
-    const next = typeof update === 'function' ? update(previous) : { ...previous, ...update }
+    const previous = current[id] || DEFAULT_SESSION_STATE
+    const next = applySessionUpdate(previous, update)
+    if (next === previous) return
     const states = { ...current, [id]: next }
     sessionStatesRef.current = states
     setSessionStates(states)
@@ -1236,7 +1236,7 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
       <div className="card-head"><button className="session-title-button" onClick={onOpen}><h3 title={session.name}>{session.name}</h3><span className={streaming ? 'success' : ''}>{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || messages.length })} · {relativeTime(session.modified, language)}</span><small className="workspace-summary" title={state?.cwd || session.cwd}><FolderOpen size={10} />{workspaceName(state?.cwd || session.cwd, language)}</small></button><div className="card-head-actions"><button className="icon-button" title={t('设置工作目录')} onClick={onWorkspace} disabled={streaming || state?.switchingCwd}><FolderOpen size={14} /></button><button className="icon-button" title={t('重命名会话')} onClick={onRename}><Pencil size={14} /></button><button className="icon-button" title={t('移出平铺')} aria-label={t('将 {name} 移出平铺', { name: session.name })} onClick={onRemoveFromTiled}><X size={14} /></button>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={11} />{t('停止')}</button> : <button className="icon-button" onClick={onOpen}><MoreHorizontal size={17} /></button>}</div></div>
       <div className="session-live-body" ref={liveRef} onScroll={onLiveScroll}>
         <TaskListPanel taskList={taskList} compact />
-        {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />{t('加载消息…')}</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />{t('从一束新的想法开始')}</button> : messages.map((message) => <div className={`mini-message ${message.role}`} key={message.id}><span>{message.role === 'agent' ? 'Vesper' : 'You'}</span><div className="mini-message-content">{(message.text || !message.streaming) && <MarkdownMessage streaming={message.streaming}>{message.text}</MarkdownMessage>}{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} compact />}</div></div>)}
+        {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />{t('加载消息…')}</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />{t('从一束新的想法开始')}</button> : messages.map((message) => <MiniChatMessage key={message.id} message={message} />)}
         {(streaming || state?.runStartedAt) && <AgentRunActivity compact streaming={streaming} text={lastMessage?.role === 'agent' ? lastMessage.text : ''} tools={tools} error={state?.error} stopped={state?.runStopped} notice={state?.runNotice} startedAt={state?.runStartedAt} lastActivityAt={state?.lastActivityAt} finishedAt={state?.runFinishedAt} />}
         {state?.error && <div className="mini-session-error"><AlertTriangle size={11} />{state.error}</div>}
       </div>
@@ -1404,118 +1404,6 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-const TOOL_ACTIVITY_LABELS = {
-  read: '读取文件',
-  grep: '搜索内容',
-  find: '查找文件',
-  ls: '浏览目录',
-  edit: '修改文件',
-  write: '写入文件',
-  bash: '运行命令',
-  memory_search: '搜索记忆',
-  memory_remember: '保存记忆',
-  spawn_agent: '启动 Agent',
-  list_agents: '查看 Agent',
-  send_message: '发送 Agent 消息',
-  followup_task: '追加 Agent 任务',
-  wait_agent: '等待 Agent',
-  interrupt_agent: '中断 Agent',
-  get_task_list: '读取任务清单',
-  update_task_list: '更新任务清单',
-  browser_automation: '浏览器自动化',
-  generate_visual: '生成视觉内容',
-}
-
-function useRunActivityClock(streaming) {
-  const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    setNow(Date.now())
-    if (!streaming) return undefined
-    const timer = window.setInterval(() => setNow(Date.now()), 1_000)
-    return () => window.clearInterval(timer)
-  }, [streaming])
-  return now
-}
-
-function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, error, stopped, notice, startedAt, lastActivityAt, finishedAt, compact = false }) {
-  const { t, language } = useI18n()
-  const [expanded, setExpanded] = useState(false)
-  const now = useRunActivityClock(streaming)
-  const activity = deriveRunActivity({ streaming, text, tools, error, stopped, lastActivityAt, now })
-  const groups = useMemo(() => groupToolCalls(tools), [tools])
-  const duration = formatRunDuration(runDurationMs(startedAt, finishedAt, now), language)
-  const completedCount = tools.filter((tool) => tool.status === 'done').length
-  const runningCount = groups.running.length
-  const errorCount = groups.errors.length
-  const toolLabel = (name) => t(TOOL_ACTIVITY_LABELS[name] || name || '使用工具')
-  const stageLabel = ({ stage, activeTool }) => ({
-    thinking: t('正在理解任务'),
-    researching: t('正在检查项目内容'),
-    editing: t('正在修改文件'),
-    validating: t('正在运行命令或验证'),
-    subagent: t('子 Agent 正在处理'),
-    generating_visual: t('正在生成视觉内容'),
-    using_tool: t('正在使用 {tool}', { tool: toolLabel(activeTool?.name) }),
-    responding: t('正在整理回复'),
-    waiting_model: t('正在等待模型响应'),
-    waiting_tool: t('正在等待工具返回'),
-    completed: t('已完成回复'),
-    failed: t('本轮执行失败'),
-    stopped: t('已停止运行'),
-  })[stage] || t('正在处理')
-  const summary = [
-    completedCount ? t('已完成 {count} 项操作', { count: completedCount }) : '',
-    runningCount ? t('{count} 项运行中', { count: runningCount }) : '',
-    errorCount ? t('{count} 项失败', { count: errorCount }) : '',
-  ].filter(Boolean).join(' · ')
-  const inactivity = activity.inactiveMs >= 10_000
-    ? t('{count} 秒无新进度', { count: Math.floor(activity.inactiveMs / 1000) })
-    : ''
-  const details = expanded
-    ? [
-        ...groups.running.map((tool) => ({ ...tool, count: 1 })),
-        ...groups.errors.map((tool) => ({ ...tool, count: 1 })),
-        ...groups.completed.map((group) => ({ ...group, id: `completed-${group.name}`, status: 'done' })),
-      ]
-    : [
-        ...groups.running.map((tool) => ({ ...tool, count: 1 })),
-        ...groups.errors.map((tool) => ({ ...tool, count: 1 })),
-      ]
-  const expandable = !compact && tools.length > 0
-
-  useEffect(() => {
-    if (!streaming) setExpanded(false)
-  }, [streaming])
-
-  const statusIcon = activity.stage === 'failed'
-    ? <AlertTriangle size={14} />
-    : activity.stage === 'stopped'
-      ? <Square size={12} />
-      : streaming
-        ? <RefreshCw className="spin" size={14} />
-        : <Check size={14} />
-
-  return <section className={`agent-run-activity ${compact ? 'compact' : ''} ${activity.stage}`}>
-    <button type="button" className="agent-run-summary" disabled={!expandable} aria-expanded={expandable ? expanded : undefined} onClick={() => expandable && setExpanded((value) => !value)} title={expandable ? t(expanded ? '收起工作过程' : '展开工作过程') : stageLabel(activity)}>
-      <span className="agent-run-status-icon">{statusIcon}</span>
-      <span className="agent-run-copy"><strong>{stageLabel(activity)}</strong><small>{inactivity || notice || summary || t('尚未调用工具')}</small></span>
-      <span className="agent-run-duration"><Clock3 size={12} />{duration}</span>
-      {expandable && <ChevronRight className={expanded ? 'expanded' : ''} size={14} />}
-    </button>
-    {!compact && details.length > 0 && <div className="agent-run-tools">
-      {details.map((tool) => {
-        const toolDuration = tool.count === 1 && tool.startedAt ? formatRunDuration(runDurationMs(tool.startedAt, tool.finishedAt, now), language) : ''
-        return <div className={`agent-run-tool ${tool.status}`} key={tool.id || `${tool.name}-${tool.status}`}>
-          <span>{tool.status === 'error' ? <AlertTriangle size={13} /> : tool.status === 'running' ? <RefreshCw className="spin" size={13} /> : <Check size={13} />}</span>
-          <span><strong>{toolLabel(tool.name)}{tool.count > 1 ? ` × ${tool.count}` : ''}</strong>{tool.message && <small title={tool.message}>{tool.message}</small>}</span>
-          <em>{toolDuration || t(tool.status === 'running' ? '运行中' : tool.status === 'error' ? '失败' : '完成')}</em>
-        </div>
-      })}
-      {!expanded && completedCount > 0 && <button type="button" className="agent-run-more" onClick={() => setExpanded(true)}>{t('展开查看已完成的 {count} 项操作', { count: completedCount })}<ChevronRight size={13} /></button>}
-    </div>}
-  </section>
-}
-
 function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, taskList, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, tiled, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onToggleTiled, onSend, onAbort, onOpenRail }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
@@ -1527,8 +1415,20 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   const lastMessage = messages[messages.length - 1]
   // Bucket streaming text length so auto-scroll does not fire on every token.
   const textScrollBucket = Math.floor((lastMessage?.text?.length || 0) / 64)
-  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${textScrollBucket}:${lastMessage?.attachments?.length || 0}:${tools.map((tool) => `${tool.id}:${tool.status}`).join('|')}:${taskList?.updatedAt || ''}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${error || ''}:${streaming ? '1' : '0'}`
+  const toolsVersion = tools.map((tool) => `${tool.id}:${tool.status}`).join('|')
+  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${textScrollBucket}:${lastMessage?.attachments?.length || 0}:${toolsVersion}:${taskList?.updatedAt || ''}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${error || ''}:${streaming ? '1' : '0'}`
   const { scrollRef: transcriptRef, onScroll: onTranscriptScroll, hasUnread, scrollToBottom } = useAutoScroll(transcriptVersion)
+  const latestRunProps = useMemo(() => ({
+    streaming,
+    text: lastMessage?.role === 'agent' ? lastMessage.text : '',
+    tools,
+    error: error || (lastMessage?.role === 'agent' ? lastMessage.error : ''),
+    stopped: runStopped,
+    notice: runNotice,
+    startedAt: runStartedAt,
+    lastActivityAt,
+    finishedAt: runFinishedAt,
+  }), [streaming, lastMessage, tools, error, runStopped, runNotice, runStartedAt, lastActivityAt, runFinishedAt])
   const loadOlder = useCallback(async () => {
     const node = transcriptRef.current
     if (!node || !hasOlder || loadingOlder || prependSnapshot.current) return
@@ -1586,7 +1486,13 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
           const isLatestAgent = message.role === 'agent' && index === messages.length - 1
           const agentState = message.streaming || (isLatestAgent && streaming) ? 'thinking' : isLatestAgent && !message.error ? 'waiting' : 'idle'
           const showRunActivity = isLatestAgent && (streaming || runStartedAt)
-          return <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? <AgentStatusAvatar state={agentState} /> : 'You'}</span><div className="message-content">{showRunActivity && <AgentRunActivity streaming={streaming} text={message.text} tools={tools} error={error || message.error} stopped={runStopped} notice={runNotice} startedAt={runStartedAt} lastActivityAt={lastActivityAt} finishedAt={runFinishedAt} />}{(message.text || !message.streaming) && <MarkdownMessage streaming={message.streaming}>{message.text}</MarkdownMessage>}{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}</div></div>
+          return <FocusChatMessage
+            key={message.id}
+            message={message}
+            agentState={agentState}
+            showRunActivity={showRunActivity}
+            runProps={showRunActivity ? latestRunProps : null}
+          />
         })}
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
@@ -1736,41 +1642,10 @@ function QuickCreate({ type, close, notify }) {
   return <div className="modal-backdrop" onMouseDown={close}><form className="modal" onMouseDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); notify(t('{action}成功', { action: titles[type] })); close() }}><div className="card-head"><div><h2>{titles[type]}</h2><p>{t('填写基本信息后即可继续配置。')}</p></div><button type="button" className="icon-button" aria-label={t('关闭对话框')} onClick={close}><X size={17} /></button></div><InputLabel label={t('名称')} value="" placeholder={t('输入名称')} /><InputLabel label={t('描述')} value="" placeholder={t('补充简短描述')} /><SelectLabel label={t('类型')} options={[t('默认'), t('自定义'), t('从模板创建')]} /><div className="modal-actions"><button type="button" className="button secondary" onClick={close}>{t('取消')}</button><button className="button primary"><Plus size={14} />{t('确认创建')}</button></div></form></div>
 }
 
-function MarkdownMessage({ children, streaming = false }) {
-  return <Suspense fallback={<div className="markdown-body markdown-loading">{children}</div>}><LazyMarkdownMessage streaming={streaming}>{children}</LazyMarkdownMessage></Suspense>
-}
-
 function AttachmentTray({ attachments, onRemove, compact = false }) {
   const { t } = useI18n()
   if (!attachments.length) return null
   return <div className={`attachment-tray ${compact ? 'compact' : ''}`}>{attachments.map((attachment) => <div className="attachment-chip" key={attachment.id}>{attachment.kind === 'image' ? <img src={`data:${attachment.mimeType};base64,${attachment.data}`} alt="" /> : <span className="attachment-icon"><File size={13} /></span>}<span><strong>{attachment.name}</strong><small>{t(attachment.kind === 'image' ? '图片' : attachment.kind === 'document' ? '文档' : '文本')} · {formatFileSize(attachment.size)}{attachment.truncated ? ` · ${t('已截断')}` : ''}</small></span><button type="button" aria-label={t('移除 {name}', { name: attachment.name })} onClick={() => onRemove(attachment.id)}><X size={12} /></button></div>)}</div>
-}
-
-function MessageAttachments({ attachments, compact = false }) {
-  const { t } = useI18n()
-  const [preview, setPreview] = useState(null)
-  return <><div className={`message-attachments ${compact ? 'compact' : ''}`}>{attachments.map((attachment, index) => {
-    const key = attachment.id || index
-    const source = attachment.url || (attachment.data ? `data:${attachment.mimeType};base64,${attachment.data}` : '')
-    if (attachment.kind === 'image' && source) return <button type="button" className="generated-media" onClick={() => setPreview({ attachment, source })} title={t('点击大屏查看')} key={key}><img src={source} alt={attachment.name || t('图片附件')} /><small>{attachment.name || t('生成图片')}</small></button>
-    if (attachment.kind === 'video' && source) return <div className="generated-media video" key={key}><video controls preload="metadata" src={source} /><small>{attachment.name || t('生成视频')}</small></div>
-    return <a className="message-file-attachment" href={attachment.downloadUrl || undefined} key={key}><File size={12} />{attachment.name || t('文件附件')}</a>
-  })}</div>{preview && <ImageLightbox attachment={preview.attachment} source={preview.source} onClose={() => setPreview(null)} />}</>
-}
-
-function ImageLightbox({ attachment, source, onClose }) {
-  const { t } = useI18n()
-  useEffect(() => {
-    const previousOverflow = document.body.style.overflow
-    const onKeyDown = (event) => { if (event.key === 'Escape') onClose() }
-    document.body.style.overflow = 'hidden'
-    window.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.body.style.overflow = previousOverflow
-      window.removeEventListener('keydown', onKeyDown)
-    }
-  }, [onClose])
-  return <div className="image-lightbox" role="dialog" aria-modal="true" aria-label={t('图片大屏预览')} onMouseDown={(event) => event.target === event.currentTarget && onClose()}><div className="image-lightbox-toolbar"><span title={attachment.name}>{attachment.name || t('生成图片')}</span><div><a className="button secondary" href={attachment.downloadUrl || source} download={attachment.name || 'generated-image'}><Download size={14} />{t('下载原图')}</a><button type="button" className="icon-button" aria-label={t('关闭预览')} onClick={onClose}><X size={18} /></button></div></div><img src={source} alt={attachment.name || t('生成图片')} /></div>
 }
 
 function TiledEmptyState({ hasQuery }) { const { t } = useI18n(); return <Panel className="empty-state"><StarOrbit size={48} /><h2>{t(hasQuery ? '没有匹配的平铺会话' : '这片视野里还没有会话')}</h2><p>{t(hasQuery ? '更换搜索关键词，或从历史会话中加入其他会话。' : '从历史会话点亮「平铺」，让不同任务在同一片视野中并行前行。')}</p></Panel> }
