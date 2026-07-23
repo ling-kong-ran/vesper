@@ -38,7 +38,7 @@
 
 When the noise of daylight recedes, a small light remains beside unfinished work. Vesper is built to be that kind of presence: quiet, lucid, and always within reach, gathering scattered models, tools, and context into a workspace you can see, control, and continue to shape.
 
-Vesper is a **local-first multi-agent workspace**. Run independent sessions in parallel, each with its own model, permissions, context, and working directory. Tile them when you need the whole sky in view; focus when one path deserves your full attention.
+Vesper is a **local-first multi-agent workspace**. Run independent sessions in parallel, each with its own model, permissions, context, and working directory. Arrange them in an IDE-style workspace with draggable tabs, `Split Left` / `Split Right`, adjustable panes, and layouts that restore automatically.
 
 > Let every agent follow its own orbit, and every thought find a place to return to.
 
@@ -58,9 +58,9 @@ Vesper is a **local-first multi-agent workspace**. Run independent sessions in p
 <table>
   <tr>
     <td width="50%" align="center">
-      <img src="./docs/shots/chat-grid.png" alt="Vesper tiled multi-session view" />
+      <img src="./docs/shots/chat-grid.png" alt="Vesper multi-session dock workspace" />
       <br />
-      <sub><strong>Parallel sessions</strong> · Let independent tasks move along their own orbits</sub>
+      <sub><strong>Dock workspace</strong> · Run tasks in parallel with tabs, splits, and drag-to-dock panels</sub>
     </td>
     <td width="50%" align="center">
       <img src="./docs/shots/memory.png" alt="Vesper memory view" />
@@ -90,7 +90,7 @@ Vesper is a **local-first multi-agent workspace**. Run independent sessions in p
 
 | Area | Capability |
 | :--- | :--- |
-| **Multi-session chat** | Run independent Agent sessions in parallel. Models, permissions, context, and working directories remain distinct, whether viewed as a grid or in focused mode. |
+| **Multi-session chat** | Run independent Agent sessions in parallel with distinct models, permissions, context, and working directories, plus tab groups, left/right splits, drag-to-dock panels, resizing, and layout restoration. |
 | **Agent Runtime** | Built on Pi Coding Agent with permission controls, structured tool activity, goals, reusable skills, and isolated subagent delegation. |
 | **Tools & MCP** | Bring built-in tools, application plugins, and MCP services into one capability layer, with credential-safe structured configuration. |
 | **Memory** | Store preferences, facts, decisions, and tasks in lightweight local SQLite memory, scoped by workspace and searchable, editable, or captured from conversations. |
