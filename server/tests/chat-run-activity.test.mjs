@@ -7,6 +7,7 @@ test('chat activity derives meaningful stages and inactivity states', () => {
   assert.equal(deriveRunActivity({ streaming: true, lastActivityAt: '2026-07-20T10:00:19.000Z', now }).stage, 'thinking')
   assert.equal(deriveRunActivity({ streaming: true, tools: [{ name: 'read', status: 'running' }], lastActivityAt: '2026-07-20T10:00:19.000Z', now }).stage, 'researching')
   assert.equal(deriveRunActivity({ streaming: true, tools: [{ name: 'bash', status: 'running' }], lastActivityAt: '2026-07-20T10:00:19.000Z', now }).stage, 'validating')
+  assert.equal(deriveRunActivity({ streaming: true, compaction: { active: true }, lastActivityAt: '2026-07-20T10:00:00.000Z', now }).stage, 'compacting')
   const waiting = deriveRunActivity({ streaming: true, tools: [{ name: 'bash', status: 'running' }], lastActivityAt: new Date(now - RUN_INACTIVITY_THRESHOLD_MS).toISOString(), now })
   assert.equal(waiting.stage, 'waiting_tool')
   assert.equal(waiting.inactiveMs, RUN_INACTIVITY_THRESHOLD_MS)

@@ -60,6 +60,14 @@ test('stream completion publishes an authoritative terminal snapshot', async (t)
     },
     async prompt() {
       session.isStreaming = true
+      for (const listener of listeners) listener({ type: 'compaction_start', reason: 'threshold' })
+      for (const listener of listeners) listener({
+        type: 'compaction_end',
+        reason: 'threshold',
+        result: { summary: 'redacted from the public event', firstKeptEntryId: 'message-1', tokensBefore: 92_000, estimatedTokensAfter: 18_500 },
+        aborted: false,
+        willRetry: false,
+      })
       for (const listener of listeners) listener({ type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'read', args: {} })
       const assistant = { role: 'assistant', content: [{ type: 'text', text: 'Final answer' }], timestamp: 2 }
       session.messages.push(assistant)
@@ -78,14 +86,25 @@ test('stream completion publishes an authoritative terminal snapshot', async (t)
     send: (event, data) => events.push({ event, data }),
   })
 
+  const compactionStart = events.find((item) => item.event === 'compaction_start')?.data
+  const compactionEnd = events.find((item) => item.event === 'compaction_end')?.data
+  assert.equal(compactionStart.status, 'running')
+  assert.equal(compactionStart.reason, 'threshold')
+  assert.equal(compactionEnd.status, 'completed')
+  assert.equal(compactionEnd.tokensBefore, 92_000)
+  assert.equal(compactionEnd.estimatedTokensAfter, 18_500)
+  assert.equal(compactionEnd.tokensSaved, 73_500)
+  assert.equal(Object.hasOwn(compactionEnd, 'summary'), false)
   const done = events.find((item) => item.event === 'done')?.data
   assert.equal(done.text, 'Final answer')
   assert.equal(done.tools[0].status, 'done')
+  assert.deepEqual(done.compaction, compactionEnd)
   assert.ok(done.finishedAt)
   const live = await runtime.getSessionLive(session.sessionId)
   assert.equal(live.streaming, false)
   assert.equal(live.finishedAt, done.finishedAt)
   assert.equal(live.tools[0].status, 'done')
+  assert.deepEqual(live.compaction, compactionEnd)
 })
 
 test('generated session title is emitted before the terminal done event', async (t) => {

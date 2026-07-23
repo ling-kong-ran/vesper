@@ -19,7 +19,7 @@ export function settleToolCalls(tools = [], { finishedAt = new Date().toISOStrin
     : tool)
 }
 
-export function deriveRunActivity({ streaming, text, tools = [], error, stopped, lastActivityAt, now = Date.now() } = {}) {
+export function deriveRunActivity({ streaming, text, tools = [], compaction, error, stopped, lastActivityAt, now = Date.now() } = {}) {
   if (!streaming) {
     if (stopped) return { stage: 'stopped', inactiveMs: 0, activeTool: null }
     if (error) return { stage: 'failed', inactiveMs: 0, activeTool: null }
@@ -29,6 +29,7 @@ export function deriveRunActivity({ streaming, text, tools = [], error, stopped,
   const activeTool = latestRunningTool(tools)
   const lastActivity = timestamp(lastActivityAt)
   const inactiveMs = lastActivity ? Math.max(0, now - lastActivity) : 0
+  if (compaction?.active) return { stage: 'compacting', inactiveMs, activeTool: null }
   if (inactiveMs >= RUN_INACTIVITY_THRESHOLD_MS) {
     return { stage: activeTool ? 'waiting_tool' : 'waiting_model', inactiveMs, activeTool }
   }

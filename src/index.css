@@ -663,12 +663,14 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .mini-message.agent > span::before { content: '✦'; margin-right: 4px; color: var(--star); }
 .agent-run-activity { width: 100%; overflow: hidden; margin-bottom: 8px; border: 1px solid var(--stroke-soft); border-radius: var(--r-md); background: var(--surface-subtle); }
 .agent-run-activity.waiting_model,.agent-run-activity.waiting_tool { border-color: var(--brand-blue-border); background: var(--brand-blue-soft); }
+.agent-run-activity.compacting { border-color: var(--accent-border); background: var(--accent-soft); }
 .agent-run-activity.failed { border-color: var(--danger-border); background: var(--danger-soft); }
 .agent-run-summary { display: grid; width: 100%; min-height: 48px; grid-template-columns: 30px minmax(0,1fr) auto auto; align-items: center; gap: 8px; border: 0; background: transparent; padding: 7px 10px; color: var(--text); text-align: left; }
 .agent-run-summary:disabled { cursor: default; opacity: 1; }
 .agent-run-summary:not(:disabled):hover { background: var(--surface-hover); }
 .agent-run-status-icon { display: grid; width: 28px; height: 28px; place-items: center; border-radius: var(--r-sm); background: var(--solid); color: var(--brand-blue-strong); box-shadow: var(--sh-1); }
 .agent-run-activity.completed .agent-run-status-icon { color: var(--success); }
+.agent-run-activity.compacting .agent-run-status-icon { color: var(--star-strong); }
 .agent-run-activity.failed .agent-run-status-icon { color: var(--danger); }
 .agent-run-activity.stopped .agent-run-status-icon { color: var(--muted); }
 .agent-run-copy { display: flex; min-width: 0; flex-direction: column; gap: 2px; }

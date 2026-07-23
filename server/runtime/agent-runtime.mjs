@@ -162,6 +162,45 @@ function addUsage(target, usage) {
   return target
 }
 
+function optionalTokenCount(value) {
+  const tokens = Number(value)
+  return Number.isFinite(tokens) ? Math.max(0, Math.round(tokens)) : null
+}
+
+function startedCompaction(reason, startedAt) {
+  return {
+    active: true,
+    status: 'running',
+    reason: ['manual', 'threshold', 'overflow'].includes(reason) ? reason : 'threshold',
+    startedAt,
+    finishedAt: null,
+    tokensBefore: null,
+    estimatedTokensAfter: null,
+    tokensSaved: null,
+    aborted: false,
+    willRetry: false,
+    error: '',
+  }
+}
+
+function finishedCompaction(previous, event, finishedAt) {
+  const tokensBefore = optionalTokenCount(event.result?.tokensBefore)
+  const estimatedTokensAfter = optionalTokenCount(event.result?.estimatedTokensAfter)
+  return {
+    ...(previous || startedCompaction(event.reason, finishedAt)),
+    active: false,
+    status: event.errorMessage ? 'failed' : event.aborted ? 'aborted' : event.result ? 'completed' : 'failed',
+    reason: ['manual', 'threshold', 'overflow'].includes(event.reason) ? event.reason : previous?.reason || 'threshold',
+    finishedAt,
+    tokensBefore,
+    estimatedTokensAfter,
+    tokensSaved: tokensBefore != null && estimatedTokensAfter != null ? Math.max(0, tokensBefore - estimatedTokensAfter) : null,
+    aborted: Boolean(event.aborted),
+    willRetry: Boolean(event.willRetry),
+    error: String(event.errorMessage || ''),
+  }
+}
+
 async function resolveDirectory(input, fallback) {
   const directory = resolve(String(input || fallback || '').trim())
   const info = await stat(directory).catch(() => null)
@@ -898,6 +937,7 @@ export class AgentRuntimeService {
       permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
       goal: live?.goal ?? this.goals.get(id),
       taskList: live?.taskList ?? this.taskLists.get(id),
+      compaction: redactSecretValue(live?.compaction || null),
       approvals: redactSecretValue(this.permissions.getPending(id)),
       pageInfo: page.pageInfo,
     }
@@ -1166,7 +1206,7 @@ export class AgentRuntimeService {
     const keepTaskList = goal?.status === 'active' || isGoalContinuationMessage(message)
     if (!keepTaskList) await this.taskLists.replace(session.sessionId, [])
     const startedAt = new Date().toISOString()
-    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, taskList: this.taskLists.get(session.sessionId), startedAt, lastActivityAt: startedAt }
+    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, taskList: this.taskLists.get(session.sessionId), compaction: null, startedAt, lastActivityAt: startedAt }
     this.liveSessions.set(session.sessionId, live)
     this.goalEmitters.set(session.sessionId, emit)
     this.taskListEmitters.set(session.sessionId, emit)
@@ -1224,6 +1264,12 @@ export class AgentRuntimeService {
           if (patch) emit('text_patch', patch)
         }
         if (update.type === 'thinking_delta') emit('thinking_delta', { delta: update.delta })
+      } else if (event.type === 'compaction_start') {
+        live.compaction = startedCompaction(event.reason, live.lastActivityAt)
+        emit('compaction_start', live.compaction)
+      } else if (event.type === 'compaction_end') {
+        live.compaction = finishedCompaction(live.compaction, event, live.lastActivityAt)
+        emit('compaction_end', live.compaction)
       } else if (event.type === 'tool_execution_start') {
         const toolStartedAt = live.lastActivityAt
         live.tools.push({ id: event.toolCallId, name: event.toolName, status: 'running', startedAt: toolStartedAt, updatedAt: toolStartedAt })
@@ -1358,6 +1404,7 @@ export class AgentRuntimeService {
         approvals: [],
         goal: this.goals.get(session.sessionId),
         taskList: this.taskLists.get(session.sessionId),
+        compaction: live.compaction,
         startedAt: live.startedAt,
         finishedAt,
       })
@@ -1382,6 +1429,7 @@ export class AgentRuntimeService {
         approvals: [],
         goal: this.goals.get(session.sessionId),
         taskList: this.taskLists.get(session.sessionId),
+        compaction: live.compaction,
         startedAt: live.startedAt,
         finishedAt,
       })

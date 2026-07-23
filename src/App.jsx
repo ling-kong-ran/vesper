@@ -659,6 +659,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           permissionMode: data.permissionMode || current.permissionMode,
           goal: data.goal ?? current.goal ?? null,
           taskList: data.taskList ?? current.taskList ?? null,
+          compaction: data.compaction ?? current.compaction ?? null,
           approvals: data.approvals || [],
         }
       })
@@ -838,7 +839,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           sessionsRef.current = next
           return next
         })
-        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', goal: created.goal || null, taskList: created.taskList || null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
+        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', goal: created.goal || null, taskList: created.taskList || null, compaction: null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
         try {
           await refreshSessions(created.id)
         } catch (caught) {
@@ -1024,6 +1025,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         runFinishedAt: null,
         runStopped: false,
         runNotice: '',
+        compaction: null,
         // Explicit null means cleared; do not keep a previous turn's plan hanging around.
         taskList: keepTaskList ? current.taskList : null,
       }
@@ -1064,6 +1066,20 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
               taskList: data.taskList !== undefined ? data.taskList : session.taskList,
             } : session))
           }
+        } else if (event === 'compaction_start') {
+          typewriter.flush()
+          toolScheduler.flush()
+          updateSessionState(sessionId, (current) => ({
+            ...current,
+            compaction: data,
+            lastActivityAt: data.startedAt || eventAt,
+          }))
+        } else if (event === 'compaction_end') {
+          updateSessionState(sessionId, (current) => ({
+            ...current,
+            compaction: data,
+            lastActivityAt: data.finishedAt || eventAt,
+          }))
         } else if (event === 'text_patch') {
           responseText = applyTextPatch(responseText, data)
           typewriter.setTarget(responseText, eventAt)
@@ -1149,6 +1165,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             runNotice: '',
             goal: data.goal ?? current.goal ?? null,
             taskList: data.taskList !== undefined ? data.taskList : current.taskList,
+            compaction: data.compaction ?? current.compaction ?? null,
             approvals: data.approvals || [],
             tools: settleToolCalls(data.tools || current.tools, { finishedAt }),
             messages: current.messages.map((item) => item.id === agentId ? {
@@ -1177,6 +1194,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             streaming: false,
             runFinishedAt: finishedAt,
             lastActivityAt: finishedAt,
+            compaction: data.compaction ?? current.compaction ?? null,
             approvals: [],
             tools: settleToolCalls(data.tools || current.tools, { finishedAt, error: data.message }),
             messages: current.messages.map((item) => item.id === agentId ? {
@@ -1231,7 +1249,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     if (!sessionId) return
     const result = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', body: '{}' })
     const runFinishedAt = new Date().toISOString()
-    updateSessionState(sessionId, (current) => ({ ...current, streaming: false, goal: result.goal ?? null, runFinishedAt, lastActivityAt: runFinishedAt, runStopped: true, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: t('已停止') }), messages: current.messages.map((item) => item.streaming ? { ...item, streaming: false } : item) }))
+    updateSessionState(sessionId, (current) => ({ ...current, streaming: false, goal: result.goal ?? null, compaction: current.compaction?.active ? { ...current.compaction, active: false, status: 'aborted', aborted: true, finishedAt: runFinishedAt } : current.compaction, runFinishedAt, lastActivityAt: runFinishedAt, runStopped: true, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: t('已停止') }), messages: current.messages.map((item) => item.streaming ? { ...item, streaming: false } : item) }))
     setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false, goal: result.goal ?? session.goal ?? null } : session))
     notify(t('已停止当前运行'), 'info')
   }
@@ -1432,6 +1450,7 @@ function SessionDockPanel({ params, api }) {
       permissionMode={state.permissionMode || session.permissionMode || 'auto'}
       goal={state.goal ?? session.goal ?? null}
       taskList={resolveSessionTaskList(state, session)}
+      compaction={state.compaction}
       cwd={state.cwd || session.cwd}
       availableModels={context.availableModels}
       switchingModel={state.switchingModel}
@@ -1491,11 +1510,13 @@ function SessionRail({ sessions, states, activeId, splitEnabled, onSelect, onSpl
       <label className="session-rail-search"><Search size={13} /><input value={railQuery} onChange={(event) => setRailQuery(event.target.value)} placeholder={t('搜索会话')} /></label>
       <div className="session-rail-list">
         {filtered.map((session) => {
-          const streaming = Boolean(states[session.id]?.streaming)
+          const state = states[session.id]
+          const streaming = Boolean(state?.streaming)
+          const compacting = Boolean(state?.compaction?.active)
           return <div className={`session-rail-row ${session.id === activeId ? 'active' : ''}`} key={session.id}>
             <button className="session-rail-item" onClick={() => onSelect(session.id)}>
               <span className="session-rail-item-name">{streaming && <i className="session-rail-live" />}{session.name || t('未命名会话')}</span>
-              <span className="session-rail-item-meta">{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || 0 })} · {relativeTime(session.modified, language)}</span>
+              <span className="session-rail-item-meta">{compacting ? t('正在压缩上下文') : streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || 0 })} · {relativeTime(session.modified, language)}</span>
             </button>
             {splitEnabled && <div className="session-rail-split-actions">
               <button type="button" title={t('拆分到左侧')} aria-label={t('将 {name} 拆分到左侧', { name: session.name })} onClick={() => onSplit(session.id, 'left')}><PanelLeft size={13} /></button>
@@ -1697,7 +1718,7 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, taskList, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onAbort, onOpenRail }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, taskList, compaction, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onAbort, onOpenRail }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const [goalArmed, setGoalArmed] = useState(false)
@@ -1709,19 +1730,20 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   // Bucket streaming text length so auto-scroll does not fire on every token.
   const textScrollBucket = Math.floor((lastMessage?.text?.length || 0) / 64)
   const toolsVersion = tools.map((tool) => `${tool.id}:${tool.status}`).join('|')
-  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${textScrollBucket}:${lastMessage?.attachments?.length || 0}:${toolsVersion}:${taskList?.updatedAt || ''}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${error || ''}:${streaming ? '1' : '0'}`
+  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${textScrollBucket}:${lastMessage?.attachments?.length || 0}:${toolsVersion}:${taskList?.updatedAt || ''}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${compaction?.status || ''}:${compaction?.finishedAt || ''}:${error || ''}:${streaming ? '1' : '0'}`
   const { scrollRef: transcriptRef, onScroll: onTranscriptScroll, hasUnread, scrollToBottom } = useAutoScroll(transcriptVersion)
   const latestRunProps = useMemo(() => ({
     streaming,
     text: lastMessage?.role === 'agent' ? lastMessage.text : '',
     tools,
+    compaction,
     error: error || (lastMessage?.role === 'agent' ? lastMessage.error : ''),
     stopped: runStopped,
     notice: runNotice,
     startedAt: runStartedAt,
     lastActivityAt,
     finishedAt: runFinishedAt,
-  }), [streaming, lastMessage, tools, error, runStopped, runNotice, runStartedAt, lastActivityAt, runFinishedAt])
+  }), [streaming, lastMessage, tools, compaction, error, runStopped, runNotice, runStartedAt, lastActivityAt, runFinishedAt])
   const loadOlder = useCallback(async () => {
     const node = transcriptRef.current
     if (!node || !hasOlder || loadingOlder || prependSnapshot.current) return
@@ -1770,7 +1792,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   }
   return (
     <Panel className="focus-session">
-      <div className="card-head"><div className="session-runtime-meta">{onOpenRail && <button className="icon-button session-rail-open-btn" title={t('展开会话列表')} aria-label={t('展开会话列表')} onClick={onOpenRail}><PanelLeftOpen size={15} /></button>}<span className={streaming ? 'success' : ''}>{t(streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} canSplit={canSplit} streaming={streaming} switchingCwd={switchingCwd} onSplitLeft={onSplitLeft} onSplitRight={onSplitRight} onClosePanel={onClosePanel} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
+      <div className="card-head"><div className="session-runtime-meta">{onOpenRail && <button className="icon-button session-rail-open-btn" title={t('展开会话列表')} aria-label={t('展开会话列表')} onClick={onOpenRail}><PanelLeftOpen size={15} /></button>}<span className={streaming ? 'success' : ''}>{t(compaction?.active ? '正在压缩上下文' : streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} canSplit={canSplit} streaming={streaming} switchingCwd={switchingCwd} onSplitLeft={onSplitLeft} onSplitRight={onSplitRight} onClosePanel={onClosePanel} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
       {/* Keep the plan/task list outside the auto-scrolling transcript so it stays visible while tokens stream. */}
       <TaskListPanel taskList={taskList} streaming={streaming} />
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>

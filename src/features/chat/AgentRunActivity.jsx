@@ -8,6 +8,7 @@ import {
   Square,
 } from 'lucide-react'
 import { useI18n } from '../../app/use-i18n.js'
+import { formatTokenCount } from '../../lib/format.js'
 import { deriveRunActivity, formatRunDuration, groupToolCalls, runDurationMs } from './run-activity.js'
 
 const EMPTY_LIST = []
@@ -45,11 +46,11 @@ function useRunActivityClock(streaming) {
   return now
 }
 
-function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, error, stopped, notice, startedAt, lastActivityAt, finishedAt, compact = false }) {
+function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, compaction, error, stopped, notice, startedAt, lastActivityAt, finishedAt, compact = false }) {
   const { t, language } = useI18n()
   const [expanded, setExpanded] = useState(false)
   const now = useRunActivityClock(streaming)
-  const activity = deriveRunActivity({ streaming, text, tools, error, stopped, lastActivityAt, now })
+  const activity = deriveRunActivity({ streaming, text, tools, compaction, error, stopped, lastActivityAt, now })
   const groups = useMemo(() => groupToolCalls(tools), [tools])
   const duration = formatRunDuration(runDurationMs(startedAt, finishedAt, now), language)
   const completedCount = tools.filter((tool) => tool.status === 'done').length
@@ -58,6 +59,7 @@ function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, error, stopped,
   const toolLabel = (name) => t(TOOL_ACTIVITY_LABELS[name] || name || '使用工具')
   const stageLabel = ({ stage, activeTool }) => ({
     thinking: t('正在理解任务'),
+    compacting: t('正在压缩上下文'),
     researching: t('正在检查项目内容'),
     editing: t('正在修改文件'),
     validating: t('正在运行命令或验证'),
@@ -79,6 +81,25 @@ function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, error, stopped,
   const inactivity = activity.inactiveMs >= 10_000
     ? t('{count} 秒无新进度', { count: Math.floor(activity.inactiveMs / 1000) })
     : ''
+  const compactionDetail = compaction?.active
+    ? t(compaction.reason === 'overflow'
+        ? '上下文已满，压缩后将自动重试'
+        : compaction.reason === 'manual'
+          ? '正在按请求整理较早消息'
+          : '上下文接近上限，正在摘要较早消息')
+    : compaction?.status === 'completed'
+      ? compaction.tokensBefore != null && compaction.estimatedTokensAfter != null
+        ? t(compaction.willRetry ? '上下文已压缩：{before} → {after} tokens，正在重试请求' : '上下文已压缩：{before} → {after} tokens', {
+            before: formatTokenCount(compaction.tokensBefore),
+            after: formatTokenCount(compaction.estimatedTokensAfter),
+          })
+        : t(compaction.willRetry ? '较早消息已整理为摘要，正在重试请求' : '较早消息已整理为摘要')
+      : compaction?.status === 'aborted'
+        ? t('上下文压缩已停止')
+        : compaction?.status === 'failed'
+          ? t('上下文压缩失败：{error}', { error: compaction.error || t('未知错误') })
+          : ''
+  const secondary = compaction?.active ? compactionDetail : inactivity || notice || compactionDetail || summary || t('尚未调用工具')
   const details = expanded
     ? [
         ...groups.running.map((tool) => ({ ...tool, count: 1 })),
@@ -106,7 +127,7 @@ function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, error, stopped,
   return <section className={`agent-run-activity ${compact ? 'compact' : ''} ${activity.stage}`}>
     <button type="button" className="agent-run-summary" disabled={!expandable} aria-expanded={expandable ? expanded : undefined} onClick={() => expandable && setExpanded((value) => !value)} title={expandable ? t(expanded ? '收起工作过程' : '展开工作过程') : stageLabel(activity)}>
       <span className="agent-run-status-icon">{statusIcon}</span>
-      <span className="agent-run-copy"><strong>{stageLabel(activity)}</strong><small>{inactivity || notice || summary || t('尚未调用工具')}</small></span>
+      <span className="agent-run-copy"><strong>{stageLabel(activity)}</strong><small>{secondary}</small></span>
       <span className="agent-run-duration"><Clock3 size={12} />{duration}</span>
       {expandable && <ChevronRight className={expanded ? 'expanded' : ''} size={14} />}
     </button>
