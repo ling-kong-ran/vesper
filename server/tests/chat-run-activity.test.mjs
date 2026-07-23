@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { deriveRunActivity, formatRunDuration, groupToolCalls, latestUnrecoveredToolError, RUN_INACTIVITY_THRESHOLD_MS, settleToolCalls } from '../../src/features/chat/run-activity.js'
+import { deriveRunActivity, formatRunDuration, groupToolCalls, latestUnrecoveredToolError, pushCurrentActivity, RUN_INACTIVITY_THRESHOLD_MS, settleToolCalls, taskListChanges } from '../../src/features/chat/run-activity.js'
 
 test('chat activity derives meaningful stages and inactivity states', () => {
   const now = Date.parse('2026-07-20T10:00:20.000Z')
@@ -53,6 +53,37 @@ test('chat activity formats short and long elapsed time', () => {
   assert.equal(formatRunDuration(9_900, 'zh-CN'), '9 秒')
   assert.equal(formatRunDuration(65_000, 'zh-CN'), '1:05')
   assert.equal(formatRunDuration(3_665_000, 'en-US'), '1:01:05')
+})
+
+test('current activity feed updates tools in place and evicts its oldest entries', () => {
+  let feed = []
+  for (let index = 1; index <= 7; index += 1) {
+    feed = pushCurrentActivity(feed, { type: 'tool', id: `tool-${index}`, name: 'read', status: 'running', updatedAt: `2026-07-20T10:00:0${index}.000Z` })
+  }
+  assert.equal(feed.length, 6)
+  assert.equal(feed[0].id, 'tool-2')
+  feed = pushCurrentActivity(feed, { ...feed.at(-1), status: 'done' })
+  assert.equal(feed.length, 6)
+  assert.equal(feed.at(-1).status, 'done')
+  const beforeModelUpdate = feed
+  feed = pushCurrentActivity(feed, { type: 'model', stage: 'responding', updatedAt: '2026-07-20T10:00:08.000Z' })
+  assert.equal(feed, beforeModelUpdate)
+  assert.equal(feed.filter((item) => item.type === 'model').length, 0)
+})
+
+test('plan activity reports the concrete items whose status changed', () => {
+  const changes = taskListChanges({ items: [
+    { id: 'one', title: 'Inspect', status: 'in_progress' },
+    { id: 'removed', title: 'Old step', status: 'pending' },
+  ] }, { items: [
+    { id: 'one', title: 'Inspect', status: 'completed' },
+    { id: 'two', title: 'Implement', status: 'in_progress' },
+  ] })
+  assert.deepEqual(changes, [
+    { id: 'one', title: 'Inspect', status: 'completed', previousStatus: 'in_progress', kind: 'updated' },
+    { id: 'two', title: 'Implement', status: 'in_progress', kind: 'added' },
+    { id: 'removed', title: 'Old step', status: 'pending', kind: 'removed' },
+  ])
 })
 
 test('terminal run state settles any tool missing its final event', () => {

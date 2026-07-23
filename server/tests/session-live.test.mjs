@@ -9,7 +9,10 @@ test('live session snapshot restores partial assistant output and tool state', a
   const directory = await mkdtemp(join(tmpdir(), 'vesper-live-session-'))
   t.after(() => rm(directory, { recursive: true, force: true }))
   const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
-  runtime.multiAgents = { summaries: () => [{ id: 'agent-live', canonicalName: '/root/live_1', status: 'running' }] }
+  runtime.multiAgents = { summaries: () => [
+    { id: 'agent-live', canonicalName: '/root/live_1', status: 'running' },
+    { id: 'agent-finished', canonicalName: '/root/finished_1', status: 'completed' },
+  ] }
   runtime.sessions.set('session-live', {
     cwd: directory,
     session: {
@@ -21,7 +24,9 @@ test('live session snapshot restores partial assistant output and tool state', a
   runtime.liveSessions.set('session-live', {
     streaming: true,
     text: '正在处理剩余测试…',
-    tools: [{ id: 'tool-1', name: 'bash', status: 'running' }],
+    tools: [{ type: 'tool', id: 'tool-1', name: 'bash', args: { command: 'npm test' }, status: 'running' }],
+    currentActivity: { type: 'tool', id: 'tool-1', name: 'bash', args: { command: 'npm test' }, status: 'running', updatedAt: '2026-07-20T10:00:05.000Z' },
+    activityFeed: [{ type: 'tool', id: 'tool-1', name: 'bash', args: { command: 'npm test' }, status: 'running', updatedAt: '2026-07-20T10:00:05.000Z' }],
     assets: [],
     error: '',
     startedAt: '2026-07-20T10:00:00.000Z',
@@ -31,11 +36,43 @@ test('live session snapshot restores partial assistant output and tool state', a
   assert.equal(live.streaming, true)
   assert.equal(live.messages.at(-1).role, 'agent')
   assert.equal(live.messages.at(-1).text, '正在处理剩余测试…')
-  assert.deepEqual(live.tools, [{ id: 'tool-1', name: 'bash', status: 'running' }])
+  assert.deepEqual(live.tools, [{ type: 'tool', id: 'tool-1', name: 'bash', args: { command: 'npm test' }, status: 'running' }])
+  assert.equal(live.currentActivity.args.command, 'npm test')
+  assert.equal(live.activityFeed[0].args.command, 'npm test')
   assert.equal(live.startedAt, '2026-07-20T10:00:00.000Z')
   assert.equal(live.lastActivityAt, '2026-07-20T10:00:05.000Z')
   assert.equal(live.model, 'openai/gpt-5.4')
   assert.deepEqual(live.agents, [{ id: 'agent-live', canonicalName: '/root/live_1', status: 'running' }])
+})
+
+test('live activity replaces plan and Agent status without retaining terminal Agent cards', () => {
+  const runtime = new AgentRuntimeService({ cwd: process.cwd(), dataDir: process.cwd() })
+  runtime.liveSessions.set('session-activity', {
+    streaming: true,
+    agents: [],
+    currentActivity: { type: 'model', stage: 'thinking' },
+  })
+  const running = { id: 'agent-running', canonicalName: '/root/running_1', status: 'running', lastActivityAt: '2026-07-20T10:00:01.000Z' }
+  const completed = { id: 'agent-completed', canonicalName: '/root/completed_1', status: 'completed', lastActivityAt: '2026-07-20T10:00:02.000Z' }
+  runtime.multiAgents = { summaries: () => [running, completed] }
+
+  let update = null
+  runtime.emitAgentUpdate('session-activity', completed, (event, data) => { update = { event, data } })
+  assert.deepEqual(runtime.liveSessions.get('session-activity').agents, [running])
+  assert.equal(runtime.liveSessions.get('session-activity').currentActivity.agent.id, completed.id)
+  assert.equal(update.event, 'agent_update')
+  assert.deepEqual(update.data.agents, [running])
+
+  const taskList = {
+    items: [{ id: 'one', title: 'Implement', status: 'in_progress' }],
+    counts: { completed: 0, inProgress: 1 },
+    updatedAt: '2026-07-20T10:00:03.000Z',
+  }
+  runtime.emitTaskListUpdate('session-activity', taskList, (event, data) => { update = { event, data } })
+  assert.equal(runtime.liveSessions.get('session-activity').currentActivity.type, 'plan')
+  assert.equal(runtime.liveSessions.get('session-activity').activityFeed.at(-1).changes[0].title, 'Implement')
+  assert.equal(update.event, 'task_list_update')
+  assert.equal(update.data.currentActivity.taskList, taskList)
 })
 
 test('stream completion publishes an authoritative terminal snapshot', async (t) => {
@@ -106,6 +143,7 @@ test('stream completion publishes an authoritative terminal snapshot', async (t)
   assert.equal(live.streaming, false)
   assert.equal(live.finishedAt, done.finishedAt)
   assert.equal(live.tools[0].status, 'done')
+  assert.equal(live.currentActivity, null)
   assert.deepEqual(live.compaction, compactionEnd)
 })
 

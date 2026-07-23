@@ -1,4 +1,5 @@
 export const RUN_INACTIVITY_THRESHOLD_MS = 10_000
+export const MAX_CURRENT_ACTIVITIES = 6
 
 const RESEARCH_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'memory_search', 'get_task_list', 'browser_automation'])
 const EDIT_TOOLS = new Set(['edit', 'write', 'memory_remember'])
@@ -11,6 +12,46 @@ function timestamp(value) {
 
 export function latestRunningTool(tools = []) {
   return [...tools].reverse().find((tool) => tool?.status === 'running') || null
+}
+
+function activityKey(activity) {
+  if (!activity?.type) return ''
+  if (activity.type === 'tool') return `tool:${activity.id || activity.name || ''}`
+  if (activity.type === 'agent') return `agent:${activity.agent?.id || activity.agent?.canonicalName || ''}:${activity.agent?.status || ''}`
+  if (activity.type === 'plan') return `plan:${activity.updatedAt || activity.taskList?.updatedAt || ''}`
+  if (activity.type === 'model') return `model:${activity.stage || ''}`
+  if (activity.type === 'compaction') return `compaction:${activity.compaction?.status || activity.compaction?.active || ''}`
+  return `${activity.type}:${activity.id || activity.updatedAt || ''}`
+}
+
+export function taskListChanges(previous, next) {
+  const previousItems = new Map((previous?.items || []).map((item) => [item.id, item]))
+  const nextItems = new Map((next?.items || []).map((item) => [item.id, item]))
+  const changes = []
+  for (const item of nextItems.values()) {
+    const before = previousItems.get(item.id)
+    if (!before) changes.push({ id: item.id, title: item.title, status: item.status, kind: 'added' })
+    else if (before.status !== item.status || before.title !== item.title || before.note !== item.note) {
+      changes.push({ id: item.id, title: item.title, status: item.status, previousStatus: before.status, kind: 'updated' })
+    }
+  }
+  for (const item of previousItems.values()) {
+    if (!nextItems.has(item.id)) changes.push({ id: item.id, title: item.title, status: item.status, kind: 'removed' })
+  }
+  return changes
+}
+
+export function pushCurrentActivity(feed = [], activity, maximum = MAX_CURRENT_ACTIVITIES) {
+  const current = Array.isArray(feed) ? feed : []
+  if (!['tool', 'plan', 'agent'].includes(activity?.type)) return current
+  let next = [...current]
+  if (activity.type === 'plan') next = next.filter((item) => item?.type !== 'tool' || !['get_task_list', 'update_task_list'].includes(item.name))
+  if (activity.type === 'agent') next = next.filter((item) => item?.type !== 'tool' || !['spawn_agent', 'list_agents', 'send_message', 'followup_task', 'wait_agent', 'interrupt_agent'].includes(item.name))
+  const key = activityKey(activity)
+  const existingIndex = next.findIndex((item) => activityKey(item) === key)
+  if (existingIndex >= 0) next[existingIndex] = { ...next[existingIndex], ...activity }
+  else next.push(activity)
+  return next.slice(-Math.max(1, Number(maximum) || MAX_CURRENT_ACTIVITIES))
 }
 
 export function settleToolCalls(tools = [], { finishedAt = new Date().toISOString(), error = '' } = {}) {

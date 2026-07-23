@@ -7,7 +7,6 @@ import {
   ArrowDown,
   Bot,
   Check,
-  Circle,
   ChevronRight,
   Download,
   ExternalLink,
@@ -56,12 +55,12 @@ import { ACTIVE_SESSION_CHANGED_EVENT, SESSION_SELECTED_EVENT, SESSIONS_UPDATED_
 import { FocusChatMessage } from './features/chat/ChatMessage.jsx'
 import { mergeSessionLists } from './features/chat/session-list.js'
 import { createDockLayoutEnvelope, initialDockSessionIds, panelIdForSession, parseDockLayoutEnvelope, sessionIdFromPanel } from './features/chat/dock-layout.js'
-import { settleToolCalls } from './features/chat/run-activity.js'
+import { pushCurrentActivity, settleToolCalls, taskListChanges } from './features/chat/run-activity.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, applyTextPatch, consumeEventStream } from './lib/api.js'
 import { showBrowserSystemNotification } from './lib/browser-notifications.js'
-import { applySessionUpdate, DEFAULT_SESSION_STATE, isTaskListActive, resolveSessionTaskList } from './lib/session-state.js'
+import { applySessionUpdate, DEFAULT_SESSION_STATE } from './lib/session-state.js'
 import { createToolUpdateScheduler, createTypewriterDisplay } from './lib/streaming-ui.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
@@ -672,6 +671,8 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           compaction: data.compaction ?? current.compaction ?? null,
           approvals: data.approvals || [],
           agents: data.agents || [],
+          currentActivity: data.streaming ? (data.currentActivity || current.currentActivity || null) : null,
+          activityFeed: data.streaming ? (data.activityFeed || current.activityFeed || []) : [],
           queuedInputs: data.queuedInputs?.length ? data.queuedInputs : current.queuedInputs || [],
         }
       })
@@ -1015,22 +1016,39 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     let responseText = ''
     let queuedDuringRun = false
     const typewriter = createTypewriterDisplay((text, activityAt) => {
-      updateSessionState(sessionId, (current) => ({
-        ...current,
-        lastActivityAt: activityAt || current.lastActivityAt,
-        runNotice: '',
-        messages: current.messages.map((item) => item.id === agentId ? { ...item, text } : item),
-      }))
+      updateSessionState(sessionId, (current) => {
+        const activity = { type: 'model', stage: 'responding', updatedAt: activityAt || current.lastActivityAt }
+        return {
+          ...current,
+          lastActivityAt: activityAt || current.lastActivityAt,
+          runNotice: '',
+          currentActivity: activity,
+          activityFeed: pushCurrentActivity(current.activityFeed, activity),
+          messages: current.messages.map((item) => item.id === agentId ? { ...item, text } : item),
+        }
+      })
     })
     const toolScheduler = createToolUpdateScheduler((batch, activityAt) => {
-      updateSessionState(sessionId, (current) => ({
-        ...current,
-        lastActivityAt: activityAt || current.lastActivityAt,
-        tools: current.tools.map((item) => {
-          const patch = batch.get(item.id)
-          return patch ? { ...item, ...patch } : item
-        }),
-      }))
+      updateSessionState(sessionId, (current) => {
+        let activityFeed = current.activityFeed || []
+        for (const [id, patch] of batch) {
+          const existing = activityFeed.find((item) => item.type === 'tool' && item.id === id)
+          if (existing) activityFeed = pushCurrentActivity(activityFeed, { ...existing, ...patch, updatedAt: activityAt || existing.updatedAt })
+        }
+        const currentActivity = current.currentActivity?.type === 'tool' && batch.has(current.currentActivity.id)
+          ? { ...current.currentActivity, ...batch.get(current.currentActivity.id), updatedAt: activityAt || current.currentActivity.updatedAt }
+          : current.currentActivity
+        return {
+          ...current,
+          lastActivityAt: activityAt || current.lastActivityAt,
+          tools: current.tools.map((item) => {
+            const patch = batch.get(item.id)
+            return patch ? { ...item, ...patch } : item
+          }),
+          currentActivity,
+          activityFeed,
+        }
+      })
     })
     updateSessionState(sessionId, (current) => {
       const keepTaskList = goalMode || current.goal?.status === 'active'
@@ -1047,6 +1065,8 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         runFinishedAt: null,
         runStopped: false,
         runNotice: '',
+        currentActivity: { type: 'model', stage: 'thinking', updatedAt: runStartedAt },
+        activityFeed: [],
         compaction: null,
         // Explicit null means cleared; do not keep a previous turn's plan hanging around.
         taskList: keepTaskList ? current.taskList : null,
@@ -1078,6 +1098,8 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             // Prefer explicit meta.taskList (including empty) over leftover client state.
             taskList: data.taskList !== undefined ? data.taskList : current.taskList,
             agents: data.agents || current.agents || [],
+            currentActivity: data.currentActivity || current.currentActivity || null,
+            activityFeed: data.activityFeed || current.activityFeed || [],
             contextUsage: data.contextUsage ?? current.contextUsage ?? null,
             runStartedAt: data.startedAt || current.runStartedAt,
             lastActivityAt: data.lastActivityAt || eventAt,
@@ -1093,23 +1115,30 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             } : session))
           }
         } else if (event === 'agent_update') {
-          updateSessionState(sessionId, { agents: data.agents || [] })
+          updateSessionState(sessionId, (current) => {
+            const activity = data.currentActivity || (data.agent ? { type: 'agent', agent: data.agent, updatedAt: data.agent.lastActivityAt || eventAt } : null)
+            return {
+              ...current,
+              agents: data.agents || [],
+              currentActivity: current.currentActivity?.type === 'tool' ? current.currentActivity : activity || current.currentActivity,
+              activityFeed: activity ? pushCurrentActivity(current.activityFeed, activity) : current.activityFeed,
+              lastActivityAt: data.agent?.lastActivityAt || eventAt,
+            }
+          })
         } else if (event === 'context_usage') {
           updateSessionState(sessionId, { contextUsage: data })
         } else if (event === 'compaction_start') {
           typewriter.flush()
           toolScheduler.flush()
-          updateSessionState(sessionId, (current) => ({
-            ...current,
-            compaction: data,
-            lastActivityAt: data.startedAt || eventAt,
-          }))
+          updateSessionState(sessionId, (current) => {
+            const activity = { type: 'compaction', compaction: data, updatedAt: data.startedAt || eventAt }
+            return { ...current, compaction: data, currentActivity: activity, activityFeed: pushCurrentActivity(current.activityFeed, activity), lastActivityAt: data.startedAt || eventAt }
+          })
         } else if (event === 'compaction_end') {
-          updateSessionState(sessionId, (current) => ({
-            ...current,
-            compaction: data,
-            lastActivityAt: data.finishedAt || eventAt,
-          }))
+          updateSessionState(sessionId, (current) => {
+            const activity = { type: 'model', stage: 'processing_result', updatedAt: data.finishedAt || eventAt }
+            return { ...current, compaction: data, currentActivity: activity, activityFeed: pushCurrentActivity(current.activityFeed, activity), lastActivityAt: data.finishedAt || eventAt }
+          })
         } else if (event === 'text_patch') {
           responseText = applyTextPatch(responseText, data)
           typewriter.setTarget(responseText, eventAt)
@@ -1121,11 +1150,15 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         } else if (event === 'tool_start') {
           typewriter.flush()
           toolScheduler.flush()
-          updateSessionState(sessionId, (current) => ({
-            ...current,
-            lastActivityAt: eventAt,
-            runNotice: '',
-            tools: [...current.tools, { id: data.id, name: data.name, status: 'running', startedAt: data.startedAt || eventAt, updatedAt: eventAt }],
+          updateSessionState(sessionId, (current) => {
+            const activity = { type: 'tool', id: data.id, name: data.name, args: data.args, status: 'running', startedAt: data.startedAt || eventAt, updatedAt: eventAt }
+            return {
+              ...current,
+              lastActivityAt: eventAt,
+              runNotice: '',
+              tools: [...current.tools, activity],
+              currentActivity: activity,
+              activityFeed: pushCurrentActivity(current.activityFeed, activity),
             // Freeze the pre-tool preamble once, so the UI can render: preamble → tools → post-tool text.
             messages: current.messages.map((item) => item.id === agentId
               ? {
@@ -1134,7 +1167,8 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
                   streamPreamble: item.streamPreamble ?? responseText ?? item.text ?? '',
                 }
               : item),
-          }))
+            }
+          })
         } else if (event === 'tool_update') {
           toolScheduler.push(data.id, {
             message: data.message || '',
@@ -1143,11 +1177,24 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           }, data.updatedAt || eventAt)
         } else if (event === 'tool_end') {
           toolScheduler.flush()
-          updateSessionState(sessionId, (current) => ({
-            ...current,
-            lastActivityAt: data.finishedAt || eventAt,
-            tools: current.tools.map((item) => item.id === data.id ? { ...item, status: data.error ? 'error' : 'done', message: data.message || '', updatedAt: data.finishedAt || eventAt, finishedAt: data.finishedAt || eventAt } : item),
-          }))
+          updateSessionState(sessionId, (current) => {
+            const completedTool = current.tools.find((item) => item.id === data.id)
+            const finishedAt = data.finishedAt || eventAt
+            const preserveEvent = ['update_task_list', 'spawn_agent', 'list_agents', 'send_message', 'followup_task', 'wait_agent', 'interrupt_agent'].includes(completedTool?.name)
+              && ['plan', 'agent'].includes(current.currentActivity?.type)
+            const toolActivity = { ...(completedTool || {}), type: 'tool', status: data.error ? 'error' : 'done', message: data.message || completedTool?.message || '', updatedAt: finishedAt, finishedAt }
+            const agentActivity = data.agent ? { type: 'agent', agent: data.agent, updatedAt: data.agent.lastActivityAt || finishedAt } : null
+            let activityFeed = current.activityFeed || []
+            if (data.error || (!preserveEvent && !agentActivity)) activityFeed = pushCurrentActivity(activityFeed, toolActivity)
+            if (agentActivity) activityFeed = pushCurrentActivity(activityFeed, agentActivity)
+            return {
+              ...current,
+              lastActivityAt: finishedAt,
+              tools: current.tools.map((item) => item.id === data.id ? { ...item, status: data.error ? 'error' : 'done', message: data.message || '', updatedAt: finishedAt, finishedAt } : item),
+              currentActivity: data.error ? toolActivity : agentActivity || (preserveEvent ? current.currentActivity : toolActivity),
+              activityFeed,
+            }
+          })
         } else if (event === 'permission_request') {
           typewriter.flush()
           toolScheduler.flush()
@@ -1168,11 +1215,17 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         } else if (event === 'task_list_update') {
           typewriter.flush()
           toolScheduler.flush()
-          updateSessionState(sessionId, (current) => ({
-            ...current,
-            lastActivityAt: eventAt,
-            taskList: data.taskList !== undefined ? data.taskList : current.taskList,
-          }))
+          updateSessionState(sessionId, (current) => {
+            const nextTaskList = data.taskList !== undefined ? data.taskList : current.taskList
+            const activity = data.currentActivity || { type: 'plan', taskList: nextTaskList, changes: taskListChanges(current.taskList, nextTaskList), updatedAt: nextTaskList?.updatedAt || eventAt }
+            return {
+              ...current,
+              lastActivityAt: eventAt,
+              taskList: nextTaskList,
+              currentActivity: activity,
+              activityFeed: pushCurrentActivity(current.activityFeed, activity),
+            }
+          })
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? {
             ...session,
             taskList: data.taskList !== undefined ? data.taskList : session.taskList,
@@ -1180,7 +1233,11 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         } else if (event === 'session_title') {
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, name: data.name } : session))
         } else if (event === 'retry') {
-          updateSessionState(sessionId, { runNotice: t('正在重试 {attempt}/{maxAttempts}：{message}', { attempt: data.attempt, maxAttempts: data.maxAttempts, message: data.message }), lastActivityAt: eventAt })
+          const retryNotice = t('正在重试 {attempt}/{maxAttempts}：{message}', { attempt: data.attempt, maxAttempts: data.maxAttempts, message: data.message })
+          updateSessionState(sessionId, (current) => {
+            const activity = { type: 'retry', message: retryNotice, updatedAt: eventAt }
+            return { ...current, runNotice: retryNotice, currentActivity: activity, activityFeed: pushCurrentActivity(current.activityFeed, activity), lastActivityAt: eventAt }
+          })
         } else if (event === 'done') {
           queuedDuringRun ||= Boolean(sessionStatesRef.current[sessionId]?.queuedInputs?.length)
           const finishedAt = data.finishedAt || eventAt
@@ -1194,6 +1251,8 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             runFinishedAt: finishedAt,
             lastActivityAt: finishedAt,
             runNotice: '',
+            currentActivity: null,
+            activityFeed: [],
             goal: data.goal ?? current.goal ?? null,
             taskList: data.taskList !== undefined ? data.taskList : current.taskList,
             agents: data.agents || current.agents || [],
@@ -1228,6 +1287,8 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             streaming: false,
             runFinishedAt: finishedAt,
             lastActivityAt: finishedAt,
+            currentActivity: null,
+            activityFeed: [],
             agents: data.agents || current.agents || [],
             contextUsage: data.contextUsage ?? current.contextUsage ?? null,
             compaction: data.compaction ?? current.compaction ?? null,
@@ -1251,7 +1312,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
       if (stillStreaming) {
         updateSessionState(sessionId, (current) => {
           const runFinishedAt = current.runFinishedAt || fallbackFinishedAt
-          return { ...current, streaming: false, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, text: responseText || item.text } : item) }
+          return { ...current, streaming: false, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', currentActivity: null, activityFeed: [], approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, text: responseText || item.text } : item) }
         })
       }
       // Steering and follow-up inputs can create multiple user/assistant turns inside one SSE run.
@@ -1272,7 +1333,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
       typewriter.cancel()
       toolScheduler.cancel()
       const runFinishedAt = new Date().toISOString()
-      updateSessionState(sessionId, (current) => ({ ...current, streaming: false, error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: caught.message }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || responseText || caught.message } : item) }))
+      updateSessionState(sessionId, (current) => ({ ...current, streaming: false, error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', currentActivity: null, activityFeed: [], approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: caught.message }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || responseText || caught.message } : item) }))
       if (queuedDuringRun || sessionStatesRef.current[sessionId]?.queuedInputs?.length) {
         try { await loadSessionMessages(sessionId, { force: true }) } catch {}
         updateSessionState(sessionId, { queuedInputs: [] })
@@ -1568,8 +1629,8 @@ function SessionDockPanel({ params, api }) {
       executionMode={state.executionMode || session.executionMode || 'workspace'}
       sandboxStatus={context.sandboxStatus}
       goal={state.goal ?? session.goal ?? null}
-      taskList={resolveSessionTaskList(state, session)}
-      agents={state.agents?.length ? state.agents : (session.agents || EMPTY_LIST)}
+      currentActivity={state.currentActivity}
+      activityFeed={state.activityFeed || EMPTY_LIST}
       queuedInputs={state.queuedInputs || EMPTY_LIST}
       compaction={state.compaction}
       contextUsage={state.contextUsage}
@@ -1579,7 +1640,6 @@ function SessionDockPanel({ params, api }) {
       switchingCwd={state.switchingCwd}
       switchingPermission={state.switchingPermission}
       streaming={state.streaming}
-      tools={state.tools || EMPTY_LIST}
       runStartedAt={state.runStartedAt}
       lastActivityAt={state.lastActivityAt}
       runFinishedAt={state.runFinishedAt}
@@ -1651,75 +1711,6 @@ function SessionRail({ sessions, states, activeId, splitEnabled, onSelect, onSpl
       </div>
     </aside>
   )
-}
-
-function TaskListPanel({ taskList, compact = false, streaming = false }) {
-  const { t } = useI18n()
-  const [expanded, setExpanded] = useState(!compact)
-  const items = taskList?.items || EMPTY_LIST
-  // Hide fully completed leftover plans when the agent is idle; keep them visible while streaming.
-  if (!isTaskListActive(taskList, { streaming })) return null
-  const visibleItems = compact ? items.slice(0, 3) : items
-  const completed = taskList?.counts?.completed ?? items.filter((item) => item.status === 'completed').length
-  const statusMeta = {
-    pending: { label: t('待处理'), icon: <Circle size={compact ? 11 : 13} />, tone: 'text-[var(--muted)]' },
-    in_progress: { label: t('进行中'), icon: <RefreshCw className="spin" size={compact ? 11 : 13} />, tone: 'text-[var(--accent-strong)]' },
-    completed: { label: t('已完成'), icon: <Check size={compact ? 11 : 13} />, tone: 'text-[var(--success)]' },
-    blocked: { label: t('已阻塞'), icon: <AlertTriangle size={compact ? 11 : 13} />, tone: 'text-[var(--danger)]' },
-  }
-  return <section className={`task-list-panel ${compact ? 'compact' : ''}`} aria-label={t('任务清单')}>
-    <button type="button" className="task-list-panel-summary" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
-      <ListChecks size={14} className="shrink-0 text-[var(--muted)]" />
-      <strong className="min-w-0 flex-1 truncate">{t('任务清单')}</strong>
-      <small className="text-[11px] text-[var(--muted)]">{t('{completed}/{total} 已完成', { completed, total: items.length })}</small>
-      <ChevronRight size={13} className={`text-[var(--muted)] transition-transform ${expanded ? 'rotate-90' : ''}`} />
-    </button>
-    {expanded && <div className={`task-list-panel-body ${compact ? 'compact' : ''}`}>
-      {visibleItems.map((item) => {
-        const meta = statusMeta[item.status] || statusMeta.pending
-        return <div className="task-list-item" key={item.id}>
-          <span className={`task-list-item-status ${meta.tone}`} title={meta.label}>{meta.icon}</span>
-          <span className={`task-list-item-title ${item.status === 'completed' ? 'is-completed' : ''}`} title={item.note || item.title}>{item.title}</span>
-        </div>
-      })}
-      {compact && items.length > visibleItems.length && <small className="task-list-more">{t('还有 {count} 项', { count: items.length - visibleItems.length })}</small>}
-    </div>}
-  </section>
-}
-
-function SubagentStatusPanel({ agents = EMPTY_LIST }) {
-  const { t } = useI18n()
-  const activeCount = agents.filter((agent) => ['starting', 'running'].includes(agent.status)).length
-  const [expanded, setExpanded] = useState(activeCount > 0)
-  useEffect(() => { if (activeCount > 0) setExpanded(true) }, [activeCount])
-  if (!agents.length) return null
-  const visibleAgents = [...agents].reverse().slice(0, 8)
-  const statusMeta = {
-    starting: { label: t('启动中'), icon: <RefreshCw className="spin" size={13} />, tone: 'text-[var(--accent-strong)]' },
-    running: { label: t('运行中'), icon: <RefreshCw className="spin" size={13} />, tone: 'text-[var(--accent-strong)]' },
-    completed: { label: t('已完成'), icon: <Check size={13} />, tone: 'text-[var(--success)]' },
-    failed: { label: t('失败'), icon: <AlertTriangle size={13} />, tone: 'text-[var(--danger)]' },
-    interrupted: { label: t('已中断'), icon: <Square size={11} />, tone: 'text-[var(--muted)]' },
-  }
-  return <section className="task-list-panel subagent-status-panel" aria-label={t('子 Agent')}>
-    <button type="button" className="task-list-panel-summary" onClick={() => setExpanded((value) => !value)} aria-expanded={expanded}>
-      <Bot size={14} className="shrink-0 text-[var(--muted)]" />
-      <strong className="min-w-0 flex-1 truncate">{t('子 Agent')}</strong>
-      <small className="text-[11px] text-[var(--muted)]">{activeCount ? t('{count} 项运行中', { count: activeCount }) : t('{count} 项已记录', { count: agents.length })}</small>
-      <ChevronRight size={13} className={`text-[var(--muted)] transition-transform ${expanded ? 'rotate-90' : ''}`} />
-    </button>
-    {expanded && <div className="task-list-panel-body">
-      {visibleAgents.map((agent) => {
-        const meta = statusMeta[agent.status] || statusMeta.failed
-        const detail = agent.error || agent.output || agent.message
-        return <div className="task-list-item subagent-status-item" key={agent.id}>
-          <span className={`task-list-item-status ${meta.tone}`} title={meta.label}>{meta.icon}</span>
-          <span className="subagent-status-copy"><strong>{agent.canonicalName}</strong><small title={detail}>{meta.label}{detail ? ` · ${detail}` : ''}</small></span>
-        </div>
-      })}
-      {agents.length > visibleAgents.length && <small className="task-list-more">{t('还有 {count} 项', { count: agents.length - visibleAgents.length })}</small>}
-    </div>}
-  </section>
 }
 
 function ContextUsageIndicator({ usage }) {
@@ -1919,7 +1910,7 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, executionMode, sandboxStatus, goal, taskList, agents, queuedInputs, compaction, contextUsage, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onExecutionModeChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onQueue, onAbort, onOpenRail }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, executionMode, sandboxStatus, goal, currentActivity, activityFeed, queuedInputs, compaction, contextUsage, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onExecutionModeChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onQueue, onAbort, onOpenRail }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const [goalArmed, setGoalArmed] = useState(false)
@@ -1931,13 +1922,14 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   const lastMessage = messages[messages.length - 1]
   // Bucket streaming text length so auto-scroll does not fire on every token.
   const textScrollBucket = Math.floor((lastMessage?.text?.length || 0) / 64)
-  const toolsVersion = tools.map((tool) => `${tool.id}:${tool.status}`).join('|')
-  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${textScrollBucket}:${lastMessage?.attachments?.length || 0}:${toolsVersion}:${taskList?.updatedAt || ''}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${compaction?.status || ''}:${compaction?.finishedAt || ''}:${error || ''}:${streaming ? '1' : '0'}`
+  const activityVersion = activityFeed.map((activity) => `${activity.type}:${activity.id || activity.agent?.id || ''}:${activity.status || activity.stage || activity.agent?.status || ''}:${activity.updatedAt || ''}`).join('|')
+  const transcriptVersion = `${session?.id || ''}:${lastMessage?.id || ''}:${textScrollBucket}:${lastMessage?.attachments?.length || 0}:${activityVersion}:${goal?.status || ''}:${goal?.tokensUsed || 0}:${compaction?.status || ''}:${compaction?.finishedAt || ''}:${error || ''}:${streaming ? '1' : '0'}`
   const { scrollRef: transcriptRef, onScroll: onTranscriptScroll, hasUnread, scrollToBottom } = useAutoScroll(transcriptVersion)
   const latestRunProps = useMemo(() => ({
     streaming,
     text: lastMessage?.role === 'agent' ? lastMessage.text : '',
-    tools,
+    currentActivity,
+    activityFeed,
     compaction,
     error: error || (lastMessage?.role === 'agent' ? lastMessage.error : ''),
     stopped: runStopped,
@@ -1945,7 +1937,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
     startedAt: runStartedAt,
     lastActivityAt,
     finishedAt: runFinishedAt,
-  }), [streaming, lastMessage, tools, compaction, error, runStopped, runNotice, runStartedAt, lastActivityAt, runFinishedAt])
+  }), [streaming, lastMessage, currentActivity, activityFeed, compaction, error, runStopped, runNotice, runStartedAt, lastActivityAt, runFinishedAt])
   const loadOlder = useCallback(async () => {
     const node = transcriptRef.current
     if (!node || !hasOlder || loadingOlder || prependSnapshot.current) return
@@ -2011,16 +2003,13 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
   return (
     <Panel className="focus-session">
       <div className="card-head"><div className="session-runtime-meta">{onOpenRail && <button className="icon-button session-rail-open-btn" title={t('展开会话列表')} aria-label={t('展开会话列表')} onClick={onOpenRail}><PanelLeftOpen size={15} /></button>}<span className={streaming ? 'success' : ''}>{t(compaction?.active ? '正在压缩上下文' : streaming ? 'Agent 运行中' : '等待输入')}</span><button className="workspace-chip" title={cwd} onClick={onWorkspace} disabled={streaming || switchingCwd}><FolderOpen size={11} />{workspaceName(cwd, language)}</button></div><div className="focus-session-head-actions">{streaming && <button className="button danger tiny" onClick={onAbort}><Square size={12} />{t('停止')}</button>}<SessionActionsMenu session={session} canSplit={canSplit} streaming={streaming} switchingCwd={switchingCwd} onSplitLeft={onSplitLeft} onSplitRight={onSplitRight} onClosePanel={onClosePanel} onWorkspace={onWorkspace} onRename={onRename} /></div></div>
-      {/* Keep the plan/task list outside the auto-scrolling transcript so it stays visible while tokens stream. */}
-      <TaskListPanel taskList={taskList} streaming={streaming} />
-      <SubagentStatusPanel agents={agents} />
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
         {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />{t('重试加载更早消息')}</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />{t('正在加载更早消息…')}</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />{t('加载更早消息')}</button>}</div>}
         {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>{t('让我们从一束想法开始')}</h2><p>{t('Vesper 已准备好读取当前工作区、搜索代码，并陪你把任务推进到完成。默认在工作区沙箱中运行。')}</p><div className="welcome-chips">{welcomeChips(t).map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
         {messages.map((message, index) => {
           const isLatestAgent = message.role === 'agent' && index === messages.length - 1
           const agentState = message.streaming || (isLatestAgent && streaming) ? 'thinking' : isLatestAgent && !message.error ? 'waiting' : 'idle'
-          const showRunActivity = isLatestAgent && (streaming || runStartedAt)
+          const showRunActivity = isLatestAgent && streaming
           return <FocusChatMessage
             key={message.id}
             message={message}

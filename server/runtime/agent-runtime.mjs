@@ -95,6 +95,54 @@ function textFromContent(content) {
     .join('')
 }
 
+const MAX_LIVE_ACTIVITY_ITEMS = 6
+
+function liveActivityKey(activity) {
+  if (!activity?.type) return ''
+  if (activity.type === 'tool') return `tool:${activity.id || activity.name || ''}`
+  if (activity.type === 'agent') return `agent:${activity.agent?.id || activity.agent?.canonicalName || ''}:${activity.agent?.status || ''}`
+  if (activity.type === 'plan') return `plan:${activity.updatedAt || activity.taskList?.updatedAt || ''}`
+  if (activity.type === 'model') return `model:${activity.stage || ''}`
+  if (activity.type === 'compaction') return `compaction:${activity.compaction?.status || activity.compaction?.active || ''}`
+  return `${activity.type}:${activity.id || activity.updatedAt || ''}`
+}
+
+function pushLiveActivity(feed, activity) {
+  const current = Array.isArray(feed) ? feed : []
+  if (!['tool', 'plan', 'agent'].includes(activity?.type)) return current
+  let next = [...current]
+  if (activity.type === 'plan') next = next.filter((item) => item?.type !== 'tool' || !['get_task_list', 'update_task_list'].includes(item.name))
+  if (activity.type === 'agent') next = next.filter((item) => item?.type !== 'tool' || !MULTI_AGENT_TOOL_NAMES.includes(item.name))
+  const key = liveActivityKey(activity)
+  const existingIndex = next.findIndex((item) => liveActivityKey(item) === key)
+  if (existingIndex >= 0) next[existingIndex] = { ...next[existingIndex], ...activity }
+  else next.push(activity)
+  return next.slice(-MAX_LIVE_ACTIVITY_ITEMS)
+}
+
+function setLiveActivity(live, activity) {
+  if (!live) return
+  live.currentActivity = activity || null
+  live.activityFeed = activity ? pushLiveActivity(live.activityFeed, activity) : []
+}
+
+function liveTaskListChanges(previous, next) {
+  const previousItems = new Map((previous?.items || []).map((item) => [item.id, item]))
+  const nextItems = new Map((next?.items || []).map((item) => [item.id, item]))
+  const changes = []
+  for (const item of nextItems.values()) {
+    const before = previousItems.get(item.id)
+    if (!before) changes.push({ id: item.id, title: item.title, status: item.status, kind: 'added' })
+    else if (before.status !== item.status || before.title !== item.title || before.note !== item.note) {
+      changes.push({ id: item.id, title: item.title, status: item.status, previousStatus: before.status, kind: 'updated' })
+    }
+  }
+  for (const item of previousItems.values()) {
+    if (!nextItems.has(item.id)) changes.push({ id: item.id, title: item.title, status: item.status, kind: 'removed' })
+  }
+  return changes
+}
+
 function queuedSessionInputs(session) {
   const steering = typeof session?.getSteeringMessages === 'function' ? session.getSteeringMessages() : []
   const followUp = typeof session?.getFollowUpMessages === 'function' ? session.getFollowUpMessages() : []
@@ -505,15 +553,32 @@ export class AgentRuntimeService {
 
   emitTaskListUpdate(sessionId, taskList, send = this.taskListEmitters.get(sessionId)) {
     const live = this.liveSessions.get(sessionId)
-    if (live) live.taskList = taskList || this.taskLists.get(sessionId)
-    try { send?.('task_list_update', { sessionId, taskList: taskList || this.taskLists.get(sessionId) }) } catch {}
+    const nextTaskList = taskList || this.taskLists.get(sessionId)
+    const updatedAt = nextTaskList?.updatedAt || new Date().toISOString()
+    const currentActivity = { type: 'plan', taskList: nextTaskList, changes: liveTaskListChanges(live?.taskList, nextTaskList), updatedAt }
+    if (live) {
+      live.taskList = nextTaskList
+      setLiveActivity(live, currentActivity)
+    }
+    try { send?.('task_list_update', { sessionId, taskList: nextTaskList, currentActivity }) } catch {}
   }
 
   emitAgentUpdate(sessionId, agent, send = this.agentEmitters.get(sessionId)) {
-    const agents = this.multiAgents.summaries(sessionId)
+    const allAgents = this.multiAgents.summaries(sessionId)
+    const updatedAgent = allAgents.find((item) => item.id === agent?.id) || null
+    const agents = allAgents.filter((item) => ['starting', 'running'].includes(item.status))
     const live = this.liveSessions.get(sessionId)
-    if (live) live.agents = agents
-    try { send?.('agent_update', { sessionId, agent: agents.find((item) => item.id === agent?.id) || null, agents }) } catch {}
+    const currentActivity = updatedAgent
+      ? { type: 'agent', agent: updatedAgent, updatedAt: updatedAgent.lastActivityAt || new Date().toISOString() }
+      : live?.currentActivity || null
+    if (live) {
+      live.agents = agents
+      if (updatedAgent) {
+        live.activityFeed = pushLiveActivity(live.activityFeed, currentActivity)
+        if (live.currentActivity?.type !== 'tool') live.currentActivity = currentActivity
+      }
+    }
+    try { send?.('agent_update', { sessionId, agent: updatedAgent, agents, currentActivity }) } catch {}
   }
 
   getSessionExecutionMode(sessionId) {
@@ -836,7 +901,7 @@ export class AgentRuntimeService {
         executionMode: this.getSessionExecutionMode(session.id),
         goal: this.goals.get(session.id),
         taskList: this.taskLists.get(session.id),
-        agents: this.multiAgents.summaries(session.id),
+        agents: this.multiAgents.summaries(session.id).filter((agent) => ['starting', 'running'].includes(agent.status)),
       }
     })
     const persistedIds = new Set(result.map((session) => session.id))
@@ -856,7 +921,7 @@ export class AgentRuntimeService {
         executionMode: this.getSessionExecutionMode(id),
         goal: this.goals.get(id),
         taskList: this.taskLists.get(id),
-        agents: this.multiAgents.summaries(id),
+        agents: this.multiAgents.summaries(id).filter((agent) => ['starting', 'running'].includes(agent.status)),
       })
     }
     return result
@@ -1093,7 +1158,9 @@ export class AgentRuntimeService {
       executionMode: this.getSessionExecutionMode(id),
       goal: live?.goal ?? this.goals.get(id),
       taskList: live?.taskList ?? this.taskLists.get(id),
-      agents: redactSecretValue(live?.agents ?? this.multiAgents.summaries(id)),
+      agents: redactSecretValue(live?.agents ?? this.multiAgents.summaries(id).filter((agent) => ['starting', 'running'].includes(agent.status))),
+      currentActivity: redactSecretValue(live?.currentActivity || null),
+      activityFeed: redactSecretValue(live?.activityFeed || []),
       queuedInputs: redactSecretValue(live?.queuedInputs ?? queuedSessionInputs(active?.session)),
       contextUsage: this.compactionAwareContextUsage(active?.session, live?.compaction) || page.contextUsage,
       compaction: redactSecretValue(live?.compaction || null),
@@ -1412,7 +1479,8 @@ export class AgentRuntimeService {
     const keepTaskList = goal?.status === 'active' || isGoalContinuationMessage(message)
     if (!keepTaskList) await this.taskLists.replace(session.sessionId, [])
     const startedAt = new Date().toISOString()
-    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, taskList: this.taskLists.get(session.sessionId), agents: this.multiAgents.summaries(session.sessionId), queuedInputs: queuedSessionInputs(session), contextUsage: this.compactionAwareContextUsage(session), compaction: null, startedAt, lastActivityAt: startedAt }
+    const initialActivity = { type: 'model', stage: 'thinking', updatedAt: startedAt }
+    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, taskList: this.taskLists.get(session.sessionId), agents: this.multiAgents.summaries(session.sessionId).filter((agent) => ['starting', 'running'].includes(agent.status)), currentActivity: initialActivity, activityFeed: [], queuedInputs: queuedSessionInputs(session), contextUsage: this.compactionAwareContextUsage(session), compaction: null, startedAt, lastActivityAt: startedAt }
     this.liveSessions.set(session.sessionId, live)
     this.goalEmitters.set(session.sessionId, emit)
     this.taskListEmitters.set(session.sessionId, emit)
@@ -1439,6 +1507,8 @@ export class AgentRuntimeService {
       goal,
       taskList: live.taskList,
       agents: live.agents,
+      currentActivity: live.currentActivity,
+      activityFeed: live.activityFeed,
       contextUsage: live.contextUsage,
       startedAt: live.startedAt,
       lastActivityAt: live.lastActivityAt,
@@ -1462,6 +1532,8 @@ export class AgentRuntimeService {
       live.tools = live.tools.map((tool) => tool.status === 'running'
         ? { ...tool, status: error ? 'error' : 'done', message: error || tool.message || '', updatedAt: finishedAt, finishedAt }
         : tool)
+      live.currentActivity = null
+      live.activityFeed = []
       return finishedAt
     }
     const unsubscribe = session.subscribe((event) => {
@@ -1471,11 +1543,13 @@ export class AgentRuntimeService {
         if (update.type === 'text_delta') {
           const patch = textRedactor.push(update.delta)
           live.text = textRedactor.text()
+          setLiveActivity(live, { type: 'model', stage: 'responding', updatedAt: live.lastActivityAt })
           if (patch) emit('text_patch', patch)
         }
         if (update.type === 'thinking_delta') emit('thinking_delta', { delta: update.delta })
       } else if (event.type === 'compaction_start') {
         live.compaction = startedCompaction(event.reason, live.lastActivityAt)
+        setLiveActivity(live, { type: 'compaction', compaction: live.compaction, updatedAt: live.lastActivityAt })
         emit('compaction_start', live.compaction)
       } else if (event.type === 'compaction_end') {
         live.compaction = finishedCompaction(live.compaction, event, live.lastActivityAt)
@@ -1493,7 +1567,9 @@ export class AgentRuntimeService {
         emit('queue_update', { queuedInputs: live.queuedInputs })
       } else if (event.type === 'tool_execution_start') {
         const toolStartedAt = live.lastActivityAt
-        live.tools.push({ id: event.toolCallId, name: event.toolName, status: 'running', startedAt: toolStartedAt, updatedAt: toolStartedAt })
+        const tool = { type: 'tool', id: event.toolCallId, name: event.toolName, args: event.args, status: 'running', startedAt: toolStartedAt, updatedAt: toolStartedAt }
+        live.tools.push(tool)
+        setLiveActivity(live, tool)
         emit('tool_start', { id: event.toolCallId, name: event.toolName, args: event.args, startedAt: toolStartedAt })
       } else if (event.type === 'tool_execution_update') {
         const message = textFromContent(event.partialResult?.content).replace(/\s+/g, ' ').trim().slice(0, 180)
@@ -1501,6 +1577,9 @@ export class AgentRuntimeService {
         live.tools = live.tools.map((item) => item.id === event.toolCallId
           ? { ...item, message: message || item.message || '', updatedAt: live.lastActivityAt, ...(agent ? { agent } : {}) }
           : item)
+        if (live.currentActivity?.id === event.toolCallId) {
+          setLiveActivity(live, { ...live.currentActivity, message: message || live.currentActivity.message || '', updatedAt: live.lastActivityAt, ...(agent ? { agent } : {}) })
+        }
         emit('tool_update', { id: event.toolCallId, name: event.toolName, message, updatedAt: live.lastActivityAt, ...(agent ? { agent } : {}) })
       } else if (event.type === 'tool_execution_end') {
         if (!event.isError && ['generate_visual', 'browser_automation'].includes(event.toolName) && event.result?.details?.path) {
@@ -1514,14 +1593,29 @@ export class AgentRuntimeService {
         }
         const resultMessage = event.isError ? textFromContent(event.result?.content) || '工具执行失败。' : ''
         const completedTool = live.tools.find((item) => item.id === event.toolCallId)
+        const resultDetails = event.result?.details
+        const resultAgent = MULTI_AGENT_TOOL_NAMES.includes(event.toolName)
+          ? Array.isArray(resultDetails?.agents)
+            ? [...resultDetails.agents].reverse().find((agent) => ['completed', 'failed', 'interrupted'].includes(agent.status)) || resultDetails.agents.at(-1)
+            : resultDetails?.id ? resultDetails : null
+          : null
         const toolFinishedAt = live.lastActivityAt
         live.tools = live.tools.map((item) => item.id === event.toolCallId ? { ...item, status: event.isError ? 'error' : 'done', message: resultMessage || item.message || '', updatedAt: toolFinishedAt, finishedAt: toolFinishedAt } : item)
+        const finishedActivity = event.isError
+          ? { ...(completedTool || {}), type: 'tool', status: 'error', message: resultMessage || completedTool?.message || '', updatedAt: toolFinishedAt, finishedAt: toolFinishedAt }
+          : resultAgent
+            ? { type: 'agent', agent: resultAgent, updatedAt: resultAgent.lastActivityAt || toolFinishedAt }
+            : { ...(completedTool || {}), type: 'tool', status: 'done', message: completedTool?.message || '', updatedAt: toolFinishedAt, finishedAt: toolFinishedAt }
+        const preserveEvent = ['get_task_list', 'update_task_list'].includes(event.toolName) && live.currentActivity?.type === 'plan'
+        if (event.isError || !preserveEvent) live.activityFeed = pushLiveActivity(live.activityFeed, finishedActivity)
+        if (live.currentActivity?.id === event.toolCallId) live.currentActivity = finishedActivity
         emit('tool_end', {
           id: event.toolCallId,
           name: event.toolName,
           error: event.isError,
           message: resultMessage || completedTool?.message || '',
           finishedAt: toolFinishedAt,
+          ...(resultAgent ? { agent: resultAgent } : {}),
         })
       } else if (event.type === 'turn_start') {
         const activeGoal = this.goals.get(session.sessionId)
@@ -1640,7 +1734,7 @@ export class AgentRuntimeService {
         approvals: [],
         goal: this.goals.get(session.sessionId),
         taskList: this.taskLists.get(session.sessionId),
-        agents: this.multiAgents.summaries(session.sessionId),
+        agents: this.multiAgents.summaries(session.sessionId).filter((agent) => ['starting', 'running'].includes(agent.status)),
         queuedInputs: live.queuedInputs,
         contextUsage: live.contextUsage,
         compaction: live.compaction,
@@ -1674,7 +1768,7 @@ export class AgentRuntimeService {
         approvals: [],
         goal: this.goals.get(session.sessionId),
         taskList: this.taskLists.get(session.sessionId),
-        agents: this.multiAgents.summaries(session.sessionId),
+        agents: this.multiAgents.summaries(session.sessionId).filter((agent) => ['starting', 'running'].includes(agent.status)),
         queuedInputs: live.queuedInputs,
         contextUsage: live.contextUsage,
         compaction: live.compaction,
