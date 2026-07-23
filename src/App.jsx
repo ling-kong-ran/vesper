@@ -61,6 +61,7 @@ import { settleToolCalls } from './features/chat/run-activity.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, applyTextPatch, consumeEventStream } from './lib/api.js'
+import { showBrowserSystemNotification } from './lib/browser-notifications.js'
 import { applySessionUpdate, DEFAULT_SESSION_STATE, isTaskListActive, resolveSessionTaskList } from './lib/session-state.js'
 import { createToolUpdateScheduler, createTypewriterDisplay } from './lib/streaming-ui.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
@@ -210,9 +211,12 @@ function App() {
       void window.vesperDesktop.showNotification({ title, body }).catch(() => {})
       return
     }
-    if (!('Notification' in window) || window.Notification.permission !== 'granted') return
-    const item = new window.Notification(title, { body, tag: `vesper-${title}` })
-    item.onclick = () => { window.focus(); item.close() }
+    void showBrowserSystemNotification({
+      title,
+      body,
+      tag: `vesper-${title}`,
+      url: window.location.href,
+    }).catch(() => {})
   }, [notificationSettings.browser?.enabled])
 
   const browserNotify = useCallback((event, data, options) => {

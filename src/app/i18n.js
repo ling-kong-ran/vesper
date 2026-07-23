@@ -474,6 +474,7 @@ const EN_MESSAGES = Object.freeze({
 
   '当前环境不支持系统通知': 'System notifications are not supported in this environment.',
   '通知权限未授权，请在浏览器站点设置中允许通知': 'Notification permission was not granted. Allow notifications in the browser site settings.',
+  '浏览器后台通知服务注册失败': 'The browser background notification service could not be registered.',
   '通知已启用': 'Notifications enabled',
   '通知已关闭': 'Notifications disabled',
   '{app} 通知测试': '{app} notification test',
@@ -482,6 +483,7 @@ const EN_MESSAGES = Object.freeze({
   '权限已允许': 'Permission granted',
   '权限被拒绝': 'Permission denied',
   '系统通知已关闭': 'System notifications are off',
+  '浏览器通知已关闭': 'Browser notifications are blocked',
   '等待授权': 'Waiting for permission',
   '系统通知已关闭，请在操作系统设置中允许 Vesper 发送通知。': 'System notifications are off. Allow Vesper to send notifications in your operating system settings.',
   '系统没有接受通知请求，请检查操作系统通知设置。': 'The operating system did not accept the notification. Check your system notification settings.',

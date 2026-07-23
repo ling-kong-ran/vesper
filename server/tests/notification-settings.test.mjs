@@ -54,11 +54,35 @@ test('browser notification events use the configured template queue', async (t) 
     renderNotification: () => ({ title: '定时任务完成', content: '日报已完成' }),
   }
   const service = new NotificationSettingsService({ path, browserEventsPath, channels })
+  const bootstrap = await service.getBrowserEvents()
+  assert.equal(bootstrap.events.length, 0)
+  assert.ok(bootstrap.latestId)
   await service.notify('schedule.completed', { task: { name: '日报' } }, { platforms: ['browser'] })
-  const first = await service.getBrowserEvents('missing')
+  const first = await service.getBrowserEvents(bootstrap.latestId)
   assert.equal(first.events.length, 1)
   assert.equal(first.events[0].body, '日报已完成')
   assert.equal((await service.getBrowserEvents(first.latestId)).events.length, 0)
+})
+
+test('browser template tests return a system-notification payload without queueing a duplicate event', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-browser-template-test-'))
+  const path = join(directory, 'vesper.json')
+  const browserEventsPath = join(directory, 'browser-events.json')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  await writeFile(path, JSON.stringify({ notifications: { browser: { enabled: true } } }))
+  const channels = {
+    getState: () => ({ templates: [{ id: 'schedule.completed', enabled: true }], connections: {}, scopes: [] }),
+    renderNotification: () => ({ title: '定时任务完成', content: '日报已完成' }),
+  }
+  const service = new NotificationSettingsService({ path, browserEventsPath, channels })
+
+  assert.deepEqual(await service.testTemplate('schedule.completed', 'browser'), {
+    sent: 1,
+    title: '定时任务完成',
+    body: '日报已完成',
+    preview: '日报已完成',
+  })
+  assert.equal((await service.getBrowserEvents('missing')).events.length, 0)
 })
 
 test('channel notification failures are reported after other targets are attempted', async (t) => {

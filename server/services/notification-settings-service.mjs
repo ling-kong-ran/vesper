@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto'
 import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
 import { sampleNotificationData } from './channels/notification-templates.mjs'
 
+const EMPTY_BROWSER_EVENT_CURSOR = '__vesper_browser_events_empty__'
+
 export class NotificationSettingsService {
   constructor({ path, browserEventsPath, channels }) {
     this.path = path
@@ -46,10 +48,10 @@ export class NotificationSettingsService {
   }
 
   async testBrowserTemplate(event) {
+    const appConfig = await readJson(this.path, {})
+    if (appConfig.notifications?.browser?.enabled !== true) throw new Error('请先启用通知。')
     const rendered = this.channels.renderNotification(event, 'browser', sampleNotificationData())
-    const published = await this.publishBrowser(rendered.title, rendered.content, event)
-    if (!published) throw new Error('请先启用通知。')
-    return { sent: 1, preview: rendered.content }
+    return { sent: 1, title: rendered.title, body: rendered.content, preview: rendered.content }
   }
 
   async publishBrowser(title, body, event = '') {
@@ -68,8 +70,11 @@ export class NotificationSettingsService {
   async getBrowserEvents(after = '') {
     const ledger = await readJson(this.browserEventsPath, { events: [] })
     const events = Array.isArray(ledger.events) ? ledger.events : []
-    const index = after ? events.findIndex((item) => item.id === after) : events.length - 1
-    return { events: index >= 0 ? events.slice(index + 1) : events.slice(-20), latestId: events.at(-1)?.id || '' }
+    const latestId = events.at(-1)?.id || EMPTY_BROWSER_EVENT_CURSOR
+    if (!after) return { events: [], latestId }
+    if (after === EMPTY_BROWSER_EVENT_CURSOR) return { events: events.slice(-20), latestId }
+    const index = events.findIndex((item) => item.id === after)
+    return { events: index >= 0 ? events.slice(index + 1) : events.slice(-20), latestId }
   }
 
   async notify(event, data, { platforms } = {}) {
