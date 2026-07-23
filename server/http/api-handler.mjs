@@ -424,13 +424,13 @@ export function createApiHandler(runtime, { updates } = {}) {
       const sessionApprovalMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/approvals\/([^/]+)$/)
       if (req.method === 'POST' && sessionApprovalMatch) {
         const body = await bodyJson(req)
-        const resolved = runtime.resolveToolApproval(
+        const resolution = runtime.resolveToolApproval(
           decodeURIComponent(sessionApprovalMatch[1]),
           decodeURIComponent(sessionApprovalMatch[2]),
           Boolean(body.approved),
         )
-        if (!resolved) json(res, 404, { error: '授权请求不存在或已经处理。' })
-        else json(res, 200, { resolved: true, approved: Boolean(body.approved) })
+        if (!resolution.found) json(res, 404, { error: '授权请求不存在。' })
+        else json(res, 200, resolution)
         return true
       }
       const sessionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)$/)
@@ -486,9 +486,11 @@ export function createApiHandler(runtime, { updates } = {}) {
             send: (event, data) => { if (!res.destroyed && !res.writableEnded) sseSend(res, event, data) },
           })
         } catch (error) {
-          sseSend(res, 'error', { message: publicError(error) })
+          // streamPrompt normally emits its own terminal error snapshot and returns;
+          // only send a fallback when an unexpected throw escapes.
+          if (!res.destroyed && !res.writableEnded) sseSend(res, 'error', { message: publicError(error) })
         }
-        res.end()
+        if (!res.writableEnded) res.end()
         return true
       }
       json(res, 404, { error: '接口不存在。' })

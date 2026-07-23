@@ -2,6 +2,7 @@ export const RUN_INACTIVITY_THRESHOLD_MS = 10_000
 
 const RESEARCH_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'memory_search', 'get_task_list', 'browser_automation'])
 const EDIT_TOOLS = new Set(['edit', 'write', 'memory_remember'])
+const AGENT_TOOLS = new Set(['spawn_agent', 'list_agents', 'send_message', 'followup_task', 'wait_agent', 'interrupt_agent'])
 
 function timestamp(value) {
   const parsed = new Date(value || 0).getTime()
@@ -10,6 +11,12 @@ function timestamp(value) {
 
 export function latestRunningTool(tools = []) {
   return [...tools].reverse().find((tool) => tool?.status === 'running') || null
+}
+
+export function settleToolCalls(tools = [], { finishedAt = new Date().toISOString(), error = '' } = {}) {
+  return tools.map((tool) => tool?.status === 'running'
+    ? { ...tool, status: error ? 'error' : 'done', message: error || tool.message || '', updatedAt: finishedAt, finishedAt }
+    : tool)
 }
 
 export function deriveRunActivity({ streaming, text, tools = [], error, stopped, lastActivityAt, now = Date.now() } = {}) {
@@ -25,7 +32,7 @@ export function deriveRunActivity({ streaming, text, tools = [], error, stopped,
   if (inactiveMs >= RUN_INACTIVITY_THRESHOLD_MS) {
     return { stage: activeTool ? 'waiting_tool' : 'waiting_model', inactiveMs, activeTool }
   }
-  if (activeTool?.name === 'delegate_task') return { stage: 'subagent', inactiveMs, activeTool }
+  if (AGENT_TOOLS.has(activeTool?.name)) return { stage: 'subagent', inactiveMs, activeTool }
   if (activeTool?.name === 'generate_visual') return { stage: 'generating_visual', inactiveMs, activeTool }
   if (activeTool?.name === 'bash') return { stage: 'validating', inactiveMs, activeTool }
   if (EDIT_TOOLS.has(activeTool?.name)) return { stage: 'editing', inactiveMs, activeTool }

@@ -8,7 +8,7 @@ export class ToolPluginService {
   }
 
   async ensureDefaultTools(toolIds, migrationKey) {
-    const appConfig = await readJson(this.configPath, { toolMode: 'read-only' })
+    const appConfig = await readJson(this.configPath, { toolMode: 'full' })
     if (appConfig[migrationKey]) return
     const enabledTools = [...new Set([...toolsFromConfig(appConfig), ...sanitizeEnabledTools(toolIds)])]
     await writeJsonAtomic(this.configPath, {
@@ -20,7 +20,7 @@ export class ToolPluginService {
   }
 
   async getState() {
-    const appConfig = await readJson(this.configPath, { toolMode: 'read-only' })
+    const appConfig = await readJson(this.configPath, { toolMode: 'full' })
     const enabledTools = toolsFromConfig(appConfig)
     return {
       tools: TOOL_CATALOG.map((tool) => ({ ...tool, enabled: enabledTools.includes(tool.id) })),
@@ -33,7 +33,7 @@ export class ToolPluginService {
   }
 
   async saveState(input = {}) {
-    const appConfig = await readJson(this.configPath, { toolMode: 'read-only' })
+    const appConfig = await readJson(this.configPath, { toolMode: 'full' })
     const previous = new Set(toolsFromConfig(appConfig))
     const enabledTools = sanitizeEnabledTools(input.enabledTools)
     const now = new Date().toISOString()

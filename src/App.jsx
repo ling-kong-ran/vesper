@@ -52,10 +52,10 @@ import { useAttachmentSelection } from './features/chat/attachments.js'
 import { ChatHistoryPage } from './features/chat/ChatHistoryPage.jsx'
 import { ACTIVE_SESSION_CHANGED_EVENT, SESSION_SELECTED_EVENT, SESSIONS_UPDATED_EVENT, announceActiveSession, announceSessionsUpdated, requestSessionSelection } from './features/chat/events.js'
 import { mergeSessionLists, toggleTiledSession } from './features/chat/session-list.js'
-import { deriveRunActivity, formatRunDuration, groupToolCalls, runDurationMs } from './features/chat/run-activity.js'
+import { deriveRunActivity, formatRunDuration, groupToolCalls, runDurationMs, settleToolCalls } from './features/chat/run-activity.js'
 import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
-import { apiJson, consumeEventStream } from './lib/api.js'
+import { apiJson, applyTextPatch, consumeEventStream } from './lib/api.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
 import { useAppUpdate } from './features/updates/useAppUpdate.js'
@@ -629,26 +629,29 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     if (!id) return
     try {
       const data = await apiJson(`/api/sessions/${encodeURIComponent(id)}/live`)
-      updateSessionState(id, (current) => ({
-        ...current,
-        ...latestPageState(current, data),
-        tools: data.tools || [],
-        streaming: data.streaming,
-        recovering: data.streaming,
-        runStartedAt: data.startedAt || current.runStartedAt || null,
-        lastActivityAt: data.lastActivityAt || current.lastActivityAt || data.startedAt || null,
-        runFinishedAt: data.streaming ? null : (current.runFinishedAt || new Date().toISOString()),
-        runNotice: data.streaming ? current.runNotice || '' : '',
-        loaded: true,
-        loading: false,
-        error: data.error || '',
-        model: data.model || current.model,
-        cwd: data.cwd || current.cwd,
-        permissionMode: data.permissionMode || current.permissionMode,
-        goal: data.goal ?? current.goal ?? null,
-        taskList: data.taskList ?? current.taskList ?? null,
-        approvals: data.approvals || [],
-      }))
+      updateSessionState(id, (current) => {
+        const finishedAt = data.finishedAt || current.runFinishedAt || new Date().toISOString()
+        return {
+          ...current,
+          ...latestPageState(current, data),
+          tools: data.streaming ? (data.tools || []) : settleToolCalls(data.tools || [], { finishedAt, error: data.error || '' }),
+          streaming: data.streaming,
+          recovering: data.streaming,
+          runStartedAt: data.startedAt || current.runStartedAt || null,
+          lastActivityAt: data.lastActivityAt || current.lastActivityAt || data.startedAt || null,
+          runFinishedAt: data.streaming ? null : finishedAt,
+          runNotice: data.streaming ? current.runNotice || '' : '',
+          loaded: true,
+          loading: false,
+          error: data.error || '',
+          model: data.model || current.model,
+          cwd: data.cwd || current.cwd,
+          permissionMode: data.permissionMode || current.permissionMode,
+          goal: data.goal ?? current.goal ?? null,
+          taskList: data.taskList ?? current.taskList ?? null,
+          approvals: data.approvals || [],
+        }
+      })
       setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
     } catch (caught) {
       updateSessionState(id, { recovering: false, loading: false, error: caught.message })
@@ -816,7 +819,9 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     let active = true
     const poll = () => {
       if (!active) return
-      for (const [id, state] of Object.entries(sessionStatesRef.current)) if (state.recovering) void syncLiveSession(id)
+      for (const [id, state] of Object.entries(sessionStatesRef.current)) {
+        if (state.recovering || state.approvals?.length) void syncLiveSession(id)
+      }
     }
     poll()
     const timer = window.setInterval(poll, 800)
@@ -848,6 +853,9 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         if (event === 'meta') {
           updateSessionState(sessionId, (current) => ({ ...current, model: data.model, cwd: data.cwd, permissionMode: data.permissionMode, goal: data.goal ?? null, taskList: data.taskList ?? current.taskList ?? null, runStartedAt: data.startedAt || current.runStartedAt, lastActivityAt: data.lastActivityAt || eventAt }))
           if (data.cwd || data.permissionMode || data.goal !== undefined || data.taskList !== undefined) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
+        } else if (event === 'text_patch') {
+          responseText = applyTextPatch(responseText, data)
+          updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, runNotice: '', messages: current.messages.map((item) => item.id === agentId ? { ...item, text: applyTextPatch(item.text, data) } : item) }))
         } else if (event === 'text_delta') {
           responseText += data.delta || ''
           updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, runNotice: '', messages: current.messages.map((item) => item.id === agentId ? { ...item, text: item.text + data.delta } : item) }))
@@ -860,7 +868,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
             ...current,
             lastActivityAt: data.updatedAt || eventAt,
             tools: current.tools.map((item) => item.id === data.id
-              ? { ...item, message: data.message || item.message || '', updatedAt: data.updatedAt || eventAt, ...(data.subagent ? { subagent: data.subagent } : {}) }
+              ? { ...item, message: data.message || item.message || '', updatedAt: data.updatedAt || eventAt, ...(data.agent ? { agent: data.agent } : {}) }
               : item),
           }))
         } else if (event === 'tool_end') {
@@ -891,19 +899,61 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, name: data.name } : session))
         } else if (event === 'retry') {
           updateSessionState(sessionId, { runNotice: t('正在重试 {attempt}/{maxAttempts}：{message}', { attempt: data.attempt, maxAttempts: data.maxAttempts, message: data.message }), lastActivityAt: eventAt })
+        } else if (event === 'done') {
+          const finishedAt = data.finishedAt || eventAt
+          if (typeof data.text === 'string') responseText = data.text
+          updateSessionState(sessionId, (current) => ({
+            ...current,
+            streaming: false,
+            runFinishedAt: finishedAt,
+            lastActivityAt: finishedAt,
+            runNotice: '',
+            goal: data.goal ?? current.goal ?? null,
+            taskList: data.taskList ?? current.taskList ?? null,
+            approvals: data.approvals || [],
+            tools: settleToolCalls(data.tools || current.tools, { finishedAt }),
+            messages: current.messages.map((item) => item.id === agentId ? {
+              ...item,
+              text: typeof data.text === 'string' ? data.text : item.text,
+              streaming: false,
+              ...(data.assets?.length ? { attachments: data.assets } : {}),
+            } : item),
+          }))
+          setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
+          return false
         } else if (event === 'error') {
+          const finishedAt = data.finishedAt || eventAt
+          if (typeof data.text === 'string') responseText = data.text
+          updateSessionState(sessionId, (current) => ({
+            ...current,
+            streaming: false,
+            runFinishedAt: finishedAt,
+            lastActivityAt: finishedAt,
+            approvals: [],
+            tools: settleToolCalls(data.tools || current.tools, { finishedAt, error: data.message }),
+            messages: current.messages.map((item) => item.id === agentId ? { ...item, text: typeof data.text === 'string' ? data.text : item.text, streaming: false } : item),
+          }))
           throw new Error(data.message)
         }
       })
-      const runFinishedAt = new Date().toISOString()
-      updateSessionState(sessionId, (current) => ({ ...current, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false } : item) }))
-      if (goalMode || sessionStatesRef.current[sessionId]?.goal) await loadSessionMessages(sessionId, { force: true })
-      const sessions = await refreshSessions()
-      const completed = sessions.find((session) => session.id === sessionId)
+      const fallbackFinishedAt = new Date().toISOString()
+      updateSessionState(sessionId, (current) => {
+        const runFinishedAt = current.runFinishedAt || fallbackFinishedAt
+        return { ...current, streaming: false, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false } : item) }
+      })
+      await loadSessionMessages(sessionId, { force: true })
+      let completed
+      try {
+        const sessions = await refreshSessions()
+        completed = sessions.find((session) => session.id === sessionId)
+      } catch {
+        void syncLiveSession(sessionId)
+      }
       browserNotify?.('chat.completed', { chat: { title: completed?.name || t('{app} 对话', { app: APP_NAME }), summary: responseText.trim().slice(0, 260) || t('Agent 已完成回复。'), model: sessionStatesRef.current[sessionId]?.model || model } })
     } catch (caught) {
       const runFinishedAt = new Date().toISOString()
-      updateSessionState(sessionId, (current) => ({ ...current, error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || caught.message } : item) }))
+      updateSessionState(sessionId, (current) => ({ ...current, streaming: false, error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: caught.message }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || caught.message } : item) }))
+      setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false } : session))
     } finally {
       updateSessionState(sessionId, { streaming: false })
       window.dispatchEvent(new Event(USAGE_UPDATED_EVENT))
@@ -914,8 +964,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     if (!sessionId) return
     const result = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', body: '{}' })
     const runFinishedAt = new Date().toISOString()
-    updateSessionState(sessionId, { streaming: false, goal: result.goal ?? null, runFinishedAt, lastActivityAt: runFinishedAt, runStopped: true, runNotice: '' })
-    setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, goal: result.goal ?? session.goal ?? null } : session))
+    updateSessionState(sessionId, (current) => ({ ...current, streaming: false, goal: result.goal ?? null, runFinishedAt, lastActivityAt: runFinishedAt, runStopped: true, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: t('已停止') }), messages: current.messages.map((item) => item.streaming ? { ...item, streaming: false } : item) }))
+    setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false, goal: result.goal ?? session.goal ?? null } : session))
     notify(t('已停止当前运行'), 'info')
   }
 
@@ -966,12 +1016,18 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
   }
 
   const resolveToolApproval = async (sessionId, approvalId, approved) => {
+    updateSessionState(sessionId, (current) => ({ ...current, approvals: (current.approvals || []).filter((item) => item.id !== approvalId), error: '' }))
     try {
-      await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`, {
+      const resolution = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/approvals/${encodeURIComponent(approvalId)}`, {
         method: 'POST', body: JSON.stringify({ approved }),
       })
-      updateSessionState(sessionId, (current) => ({ ...current, approvals: (current.approvals || []).filter((item) => item.id !== approvalId) }))
+      if (resolution.alreadyResolved) void syncLiveSession(sessionId)
     } catch (caught) {
+      await syncLiveSession(sessionId)
+      if (caught.status === 404) {
+        notify(t('授权状态已更新'), 'info')
+        return
+      }
       updateSessionState(sessionId, { error: caught.message })
       throw caught
     }
@@ -1140,7 +1196,7 @@ function SessionCard({ session, state, model, permissionMode, availableModels, o
       <div className="card-head"><button className="session-title-button" onClick={onOpen}><h3 title={session.name}>{session.name}</h3><span className={streaming ? 'success' : ''}>{streaming ? t('Agent 运行中') : t('{count} 条消息', { count: session.messageCount || messages.length })} · {relativeTime(session.modified, language)}</span><small className="workspace-summary" title={state?.cwd || session.cwd}><FolderOpen size={10} />{workspaceName(state?.cwd || session.cwd, language)}</small></button><div className="card-head-actions"><button className="icon-button" title={t('设置工作目录')} onClick={onWorkspace} disabled={streaming || state?.switchingCwd}><FolderOpen size={14} /></button><button className="icon-button" title={t('重命名会话')} onClick={onRename}><Pencil size={14} /></button><button className="icon-button" title={t('移出平铺')} aria-label={t('将 {name} 移出平铺', { name: session.name })} onClick={onRemoveFromTiled}><X size={14} /></button>{streaming ? <button className="button danger tiny" onClick={onAbort}><Square size={11} />{t('停止')}</button> : <button className="icon-button" onClick={onOpen}><MoreHorizontal size={17} /></button>}</div></div>
       <div className="session-live-body" ref={liveRef} onScroll={onLiveScroll}>
         <TaskListPanel taskList={taskList} compact />
-        {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />{t('加载消息…')}</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />{t('从一束新的想法开始')}</button> : messages.map((message) => <div className={`mini-message ${message.role}`} key={message.id}><span>{message.role === 'agent' ? 'Vesper' : 'You'}</span><div className="mini-message-content">{(message.text || !message.streaming) && <MarkdownMessage>{message.text}</MarkdownMessage>}{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} compact />}</div></div>)}
+        {state?.loading && !messages.length ? <div className="session-live-empty"><RefreshCw className="spin" size={16} />{t('加载消息…')}</div> : !messages.length ? <button className="session-live-empty" onClick={onOpen}><Bot size={17} />{t('从一束新的想法开始')}</button> : messages.map((message) => <div className={`mini-message ${message.role}`} key={message.id}><span>{message.role === 'agent' ? 'Vesper' : 'You'}</span><div className="mini-message-content">{(message.text || !message.streaming) && <MarkdownMessage streaming={message.streaming}>{message.text}</MarkdownMessage>}{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} compact />}</div></div>)}
         {(streaming || state?.runStartedAt) && <AgentRunActivity compact streaming={streaming} text={lastMessage?.role === 'agent' ? lastMessage.text : ''} tools={tools} error={state?.error} stopped={state?.runStopped} notice={state?.runNotice} startedAt={state?.runStartedAt} lastActivityAt={state?.lastActivityAt} finishedAt={state?.runFinishedAt} />}
         {state?.error && <div className="mini-session-error"><AlertTriangle size={11} />{state.error}</div>}
       </div>
@@ -1236,11 +1292,14 @@ function PermissionModeSelect({ value, onChange, disabled, compact = false }) {
 function ToolApproval({ approvals, onResolve, compact = false }) {
   const { t } = useI18n()
   const [resolving, setResolving] = useState(false)
+  const resolvingRef = useRef(false)
   const approval = approvals[0]
   if (!approval) return null
   const resolve = async (approved) => {
+    if (resolvingRef.current) return
+    resolvingRef.current = true
     setResolving(true)
-    try { await onResolve(approval.id, approved) } finally { setResolving(false) }
+    try { await onResolve(approval.id, approved) } finally { resolvingRef.current = false; setResolving(false) }
   }
   return <div className={`tool-approval ${compact ? 'compact' : ''}`}><div><ShieldCheck size={compact ? 12 : 15} /><span><strong>{t('{tool} 请求授权', { tool: approval.toolName })}</strong><small>{approval.reason}{approvals.length > 1 ? ` · ${t('另有 {count} 项等待', { count: approvals.length - 1 })}` : ''}</small></span></div>{!compact && <details><summary>{t('查看调用参数')}</summary><pre>{JSON.stringify(approval.args, null, 2)}</pre></details>}<div className="tool-approval-actions"><button type="button" className="button secondary" disabled={resolving} onClick={() => resolve(false)}>{t('拒绝')}</button><button type="button" className="button primary" disabled={resolving} onClick={() => resolve(true)}>{resolving ? <RefreshCw className="spin" size={12} /> : <Check size={12} />}{t('允许')}</button></div></div>
 }
@@ -1315,7 +1374,12 @@ const TOOL_ACTIVITY_LABELS = {
   bash: '运行命令',
   memory_search: '搜索记忆',
   memory_remember: '保存记忆',
-  delegate_task: '子 Agent',
+  spawn_agent: '启动 Agent',
+  list_agents: '查看 Agent',
+  send_message: '发送 Agent 消息',
+  followup_task: '追加 Agent 任务',
+  wait_agent: '等待 Agent',
+  interrupt_agent: '中断 Agent',
   get_task_list: '读取任务清单',
   update_task_list: '更新任务清单',
   browser_automation: '浏览器自动化',
@@ -1480,7 +1544,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
           const isLatestAgent = message.role === 'agent' && index === messages.length - 1
           const agentState = message.streaming || (isLatestAgent && streaming) ? 'thinking' : isLatestAgent && !message.error ? 'waiting' : 'idle'
           const showRunActivity = isLatestAgent && (streaming || runStartedAt)
-          return <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? <AgentStatusAvatar state={agentState} /> : 'You'}</span><div className="message-content">{showRunActivity && <AgentRunActivity streaming={streaming} text={message.text} tools={tools} error={error || message.error} stopped={runStopped} notice={runNotice} startedAt={runStartedAt} lastActivityAt={lastActivityAt} finishedAt={runFinishedAt} />}{(message.text || !message.streaming) && <MarkdownMessage>{message.text}</MarkdownMessage>}{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}</div></div>
+          return <div key={message.id} className={`message ${message.role} ${message.error ? 'has-error' : ''}`}><span>{message.role === 'agent' ? <AgentStatusAvatar state={agentState} /> : 'You'}</span><div className="message-content">{showRunActivity && <AgentRunActivity streaming={streaming} text={message.text} tools={tools} error={error || message.error} stopped={runStopped} notice={runNotice} startedAt={runStartedAt} lastActivityAt={lastActivityAt} finishedAt={runFinishedAt} />}{(message.text || !message.streaming) && <MarkdownMessage streaming={message.streaming}>{message.text}</MarkdownMessage>}{message.attachments?.length > 0 && <MessageAttachments attachments={message.attachments} />}</div></div>
         })}
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
@@ -1630,8 +1694,8 @@ function QuickCreate({ type, close, notify }) {
   return <div className="modal-backdrop" onMouseDown={close}><form className="modal" onMouseDown={(e) => e.stopPropagation()} onSubmit={(e) => { e.preventDefault(); notify(t('{action}成功', { action: titles[type] })); close() }}><div className="card-head"><div><h2>{titles[type]}</h2><p>{t('填写基本信息后即可继续配置。')}</p></div><button type="button" className="icon-button" aria-label={t('关闭对话框')} onClick={close}><X size={17} /></button></div><InputLabel label={t('名称')} value="" placeholder={t('输入名称')} /><InputLabel label={t('描述')} value="" placeholder={t('补充简短描述')} /><SelectLabel label={t('类型')} options={[t('默认'), t('自定义'), t('从模板创建')]} /><div className="modal-actions"><button type="button" className="button secondary" onClick={close}>{t('取消')}</button><button className="button primary"><Plus size={14} />{t('确认创建')}</button></div></form></div>
 }
 
-function MarkdownMessage({ children }) {
-  return <Suspense fallback={<div className="markdown-body markdown-loading">{children}</div>}><LazyMarkdownMessage>{children}</LazyMarkdownMessage></Suspense>
+function MarkdownMessage({ children, streaming = false }) {
+  return <Suspense fallback={<div className="markdown-body markdown-loading">{children}</div>}><LazyMarkdownMessage streaming={streaming}>{children}</LazyMarkdownMessage></Suspense>
 }
 
 function AttachmentTray({ attachments, onRemove, compact = false }) {

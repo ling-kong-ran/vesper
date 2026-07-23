@@ -25,7 +25,7 @@ import { WebSearchService } from '../services/web-search-service.mjs'
 import { extractConversationMemories } from '../services/memory/conversation-memory.mjs'
 import { LocalMemoryRuntime } from '../services/memory/local-memory-runtime.mjs'
 import { inferModelKind, VisualGenerationService } from '../services/visual-generation/index.mjs'
-import { SubagentService } from '../services/subagent-service.mjs'
+import { MultiAgentService, MULTI_AGENT_TOOL_NAMES } from '../services/multi-agent-service.mjs'
 import { GoalService, goalBudgetPrompt, goalContinuationPrompt, isGoalContinuationMessage } from '../services/goal-service.mjs'
 import { TaskListService } from '../services/task-list-service.mjs'
 import { BrowserAutomationService } from '../services/browser-automation-service.mjs'
@@ -35,7 +35,7 @@ import { createAppTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry
 import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
 import { createTaskListTools, TASK_LIST_TOOL_NAMES } from '../tools/app/task-list.mjs'
 import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
-import { installSessionPersistenceRedaction, redactPersistedSessionFiles, redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
+import { createStreamingSecretRedactor, installSessionPersistenceRedaction, redactPersistedSessionFiles, redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
 import { applyVesperSystemPrompt, vesperPromptExtension } from '../prompts/vesper-system-prompt.mjs'
 
 const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'kimi-coding', 'zai-coding-cn']
@@ -334,11 +334,11 @@ export class AgentRuntimeService {
       getMode: (sessionId) => this.sessionMeta[sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
       getToolRisk: (toolName) => this.mcp.getToolRisk(toolName),
     })
-    this.subagents = new SubagentService({
+    this.multiAgents = new MultiAgentService({
       agentDir: this.dataDir,
       getModelRuntime: () => this.modelRuntime,
       getSettingsManager: () => this.settingsManager,
-      createResourceLoader: ({ cwd: childCwd, rolePrompt }) => this.skills.createResourceLoader(childCwd, { appendSystemPrompt: rolePrompt }),
+      createResourceLoader: ({ cwd: childCwd, appendSystemPrompt }) => this.skills.createResourceLoader(childCwd, { appendSystemPrompt }),
     })
     this.sessionMetaWrite = Promise.resolve()
     this.usageLedger = { days: {} }
@@ -368,7 +368,7 @@ export class AgentRuntimeService {
     await this.skills.init()
     await this.mcp.init()
     await this.toolPlugins.ensureDefaultTools(['memory_search', 'memory_remember'], 'memoryToolsV1')
-    await this.toolPlugins.ensureDefaultTools(['delegate_task'], 'subagentToolsV1')
+    await this.toolPlugins.ensureDefaultTools(MULTI_AGENT_TOOL_NAMES, 'multiAgentToolsV2')
     await this.toolPlugins.ensureDefaultTools(['mcp_list', 'mcp_manage'], 'mcpManagementToolsV1')
     await this.toolPlugins.ensureDefaultTools(['web_search'], 'webSearchToolV1')
     await this.toolPlugins.ensureDefaultTools(['browser_automation'], 'browserAutomationToolV1')
@@ -434,7 +434,7 @@ export class AgentRuntimeService {
   async disposeSessions() {
     for (const [id, value] of this.sessions) {
       await this.pauseSessionGoal(id)
-      this.subagents.abortParent(id)
+      this.multiAgents.abortParent(id)
       this.permissions.resolveSession(id, false, 'Agent Runtime 正在重新加载，工具未执行。')
       value.session.dispose()
     }
@@ -445,7 +445,7 @@ export class AgentRuntimeService {
     this.sessionRuntimeVersion += 1
     for (const [id, value] of this.sessions) {
       if (value.session.isStreaming) continue
-      this.subagents.abortParent(id)
+      this.multiAgents.abortParent(id)
       this.permissions.resolveSession(id, false, 'Agent Runtime resources changed before the tool could run.')
       value.session.dispose()
       this.sessions.delete(id)
@@ -892,6 +892,7 @@ export class AgentRuntimeService {
       error: redactSecretText(live?.error || ''),
       startedAt: live?.startedAt || null,
       lastActivityAt: live?.lastActivityAt || null,
+      finishedAt: live?.finishedAt || null,
       model: active?.session.model ? `${active.session.model.provider}/${active.session.model.id}` : '',
       cwd: active?.cwd || this.sessionMeta[id]?.cwd || this.cwd,
       permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
@@ -921,7 +922,7 @@ export class AgentRuntimeService {
   }
 
   async setSessionModel(id, provider, modelId) {
-    const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
+    const appConfig = await readJson(this.appConfigPath, { toolMode: 'full', disabledProviders: [] })
     if ((appConfig.disabledProviders || []).includes(String(provider || ''))) throw new Error('该 Provider 当前未启用。')
     const model = this.modelRuntime.getModel(String(provider || ''), String(modelId || ''))
     if (!model) throw new Error('指定的模型不存在。')
@@ -1022,7 +1023,7 @@ export class AgentRuntimeService {
 
   async createSessionRuntime(sessionManager, name) {
     installSessionPersistenceRedaction(sessionManager)
-    const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only' })
+    const appConfig = await readJson(this.appConfigPath, { toolMode: 'full' })
     const effectiveCwd = await resolveDirectory(this.sessionMeta[sessionManager.getSessionId()]?.cwd, sessionManager.getCwd() || this.cwd)
     const enabledTools = toolsFromConfig(appConfig)
     const runtimeSessionId = sessionManager.getSessionId()
@@ -1054,30 +1055,38 @@ export class AgentRuntimeService {
       sessionId: runtimeSession.sessionId,
       cwd: effectiveCwd,
     })
-    const accountSubagentUsage = async ({ id, usage, completedAt }) => {
-      await this.recordUsage(localDayKey(completedAt), `subagent:${runtimeSession.sessionId}:${id}`, usage)
+    const accountSubagentUsage = async ({ id, runNumber, runUsage, completedAt }) => {
+      await this.recordUsage(localDayKey(completedAt), `agent:${runtimeSession.sessionId}:${id}:${runNumber}`, runUsage)
       const goal = this.goals.get(runtimeSession.sessionId)
       if (goal?.status !== 'active') return
-      const accounting = this.goals.account(runtimeSession.sessionId, { goalId: goal.id, usage })
+      const accounting = this.goals.account(runtimeSession.sessionId, { goalId: goal.id, usage: runUsage })
       const updatedGoal = this.goals.get(runtimeSession.sessionId)
       if (runtimeValue) this.syncGoalTools(runtimeValue, updatedGoal)
       this.emitGoalUpdate(runtimeSession.sessionId, updatedGoal)
       await accounting
     }
     const parentActiveToolNames = () => [...baseToolNames]
-    const runSubagent = (input, execution) => {
-      if (!runtimeSession?.model) throw new Error('当前会话没有可用模型，无法启动子 Agent。')
-      return this.subagents.run({
-        ...input,
-        ...execution,
-        parentSessionId: runtimeSession.sessionId,
-        cwd: effectiveCwd,
-        model: runtimeSession.model,
-        allowedTools: parentActiveToolNames(),
-        customTools: createInheritedCustomTools(),
-        onSession: installSubagentPermissions,
-        onCompleted: accountSubagentUsage,
-      })
+    const multiAgentRuntime = {
+      spawn: (input) => {
+        if (!runtimeSession?.model) throw new Error('当前会话没有可用模型，无法启动 Agent。')
+        return this.multiAgents.spawn({
+          ...input,
+          parentSessionId: runtimeSession.sessionId,
+          cwd: effectiveCwd,
+          model: runtimeSession.model,
+          thinkingLevel: runtimeSession.thinkingLevel,
+          parentMessages: runtimeSession.messages,
+          allowedTools: parentActiveToolNames(),
+          customTools: createInheritedCustomTools(),
+          onSession: installSubagentPermissions,
+          onCompleted: accountSubagentUsage,
+        })
+      },
+      list: () => this.multiAgents.list(runtimeSession.sessionId),
+      sendMessage: (target, message) => this.multiAgents.sendMessage(runtimeSession.sessionId, target, message),
+      followup: (target, message) => this.multiAgents.followup(runtimeSession.sessionId, target, message),
+      wait: (timeoutMs) => this.multiAgents.wait(runtimeSession.sessionId, timeoutMs),
+      interrupt: (target) => this.multiAgents.interrupt(runtimeSession.sessionId, target),
     }
     const createInheritedCustomTools = () => [
       ...createAppTools({
@@ -1091,7 +1100,7 @@ export class AgentRuntimeService {
         onGeneratedFile: ({ path }) => runtimeValue && runtimeSession
           ? this.recordGeneratedFile(runtimeSession.sessionId, runtimeValue, path)
           : undefined,
-        runSubagent,
+        multiAgentRuntime,
         mcpRuntime: {
           list: (options) => this.getMcpDashboard(options),
           add: (input) => this.createMcpServer(input),
@@ -1138,7 +1147,7 @@ export class AgentRuntimeService {
     const emit = (event, data) => send(event, redactSecretValue(data))
     const value = await this.getOrCreateSession(sessionId)
     const { session } = value
-    const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
+    const appConfig = await readJson(this.appConfigPath, { toolMode: 'full', disabledProviders: [] })
     if ((appConfig.disabledProviders || []).includes(session.model?.provider)) {
       throw new Error('当前会话使用的 Provider 已停用，请先启用或切换模型。')
     }
@@ -1186,11 +1195,31 @@ export class AgentRuntimeService {
     let goalTurnStartedAt = 0
     let continuationQueued = false
     let budgetSummaryQueued = false
+    const textRedactor = createStreamingSecretRedactor()
+    const flushText = () => {
+      const patch = textRedactor.flush()
+      live.text = textRedactor.text()
+      if (patch) emit('text_patch', patch)
+    }
+    const finishLiveRun = (error = '') => {
+      const finishedAt = new Date().toISOString()
+      live.streaming = false
+      live.finishedAt = finishedAt
+      live.lastActivityAt = finishedAt
+      live.tools = live.tools.map((tool) => tool.status === 'running'
+        ? { ...tool, status: error ? 'error' : 'done', message: error || tool.message || '', updatedAt: finishedAt, finishedAt }
+        : tool)
+      return finishedAt
+    }
     const unsubscribe = session.subscribe((event) => {
       live.lastActivityAt = new Date().toISOString()
       if (event.type === 'message_update') {
         const update = event.assistantMessageEvent
-        if (update.type === 'text_delta') { live.text += update.delta || ''; emit('text_delta', { delta: update.delta }) }
+        if (update.type === 'text_delta') {
+          const patch = textRedactor.push(update.delta)
+          live.text = textRedactor.text()
+          if (patch) emit('text_patch', patch)
+        }
         if (update.type === 'thinking_delta') emit('thinking_delta', { delta: update.delta })
       } else if (event.type === 'tool_execution_start') {
         const toolStartedAt = live.lastActivityAt
@@ -1198,11 +1227,11 @@ export class AgentRuntimeService {
         emit('tool_start', { id: event.toolCallId, name: event.toolName, args: event.args, startedAt: toolStartedAt })
       } else if (event.type === 'tool_execution_update') {
         const message = textFromContent(event.partialResult?.content).replace(/\s+/g, ' ').trim().slice(0, 180)
-        const subagent = event.toolName === 'delegate_task' ? event.partialResult?.details : undefined
+        const agent = MULTI_AGENT_TOOL_NAMES.includes(event.toolName) ? event.partialResult?.details : undefined
         live.tools = live.tools.map((item) => item.id === event.toolCallId
-          ? { ...item, message: message || item.message || '', updatedAt: live.lastActivityAt, ...(subagent ? { subagent } : {}) }
+          ? { ...item, message: message || item.message || '', updatedAt: live.lastActivityAt, ...(agent ? { agent } : {}) }
           : item)
-        emit('tool_update', { id: event.toolCallId, name: event.toolName, message, updatedAt: live.lastActivityAt, ...(subagent ? { subagent } : {}) })
+        emit('tool_update', { id: event.toolCallId, name: event.toolName, message, updatedAt: live.lastActivityAt, ...(agent ? { agent } : {}) })
       } else if (event.type === 'tool_execution_end') {
         if (!event.isError && ['generate_visual', 'browser_automation'].includes(event.toolName) && event.result?.details?.path) {
           const generatedPath = resolve(event.result.details.path)
@@ -1300,19 +1329,35 @@ export class AgentRuntimeService {
         session.agent.state.systemPrompt = originalSystemPrompt
         restorePayloadHandler()
       }
+      flushText()
       const last = [...session.messages].reverse().find((item) => item.role === 'assistant')
       if (last?.errorMessage) throw new Error(last.errorMessage)
       const assistantText = textFromContent(last?.content)
+      live.text = redactSecretText(assistantText) || live.text
+      // Resolve auto-title before done so clients that stop the SSE stream on `done` still receive it.
       if (titlePromise) {
-        const generatedTitle = await titlePromise
-        if (generatedTitle && !this.sessionMeta[session.sessionId]?.manual && generatedTitle !== value.name) {
-          session.setSessionName(generatedTitle)
-          value.name = generatedTitle
-          await this.markSessionTitle(session.sessionId, generatedTitle, false)
-          emit('session_title', { sessionId: session.sessionId, name: generatedTitle, source: 'generated' })
-        }
+        try {
+          const generatedTitle = await titlePromise
+          if (generatedTitle && !this.sessionMeta[session.sessionId]?.manual && generatedTitle !== value.name) {
+            session.setSessionName(generatedTitle)
+            value.name = generatedTitle
+            await this.markSessionTitle(session.sessionId, generatedTitle, false)
+            emit('session_title', { sessionId: session.sessionId, name: generatedTitle, source: 'generated' })
+          }
+        } catch {}
       }
-      emit('done', { sessionId: session.sessionId, goal: this.goals.get(session.sessionId), taskList: this.taskLists.get(session.sessionId) })
+      const finishedAt = finishLiveRun()
+      emit('done', {
+        sessionId: session.sessionId,
+        text: live.text,
+        tools: live.tools,
+        assets: live.assets,
+        approvals: [],
+        goal: this.goals.get(session.sessionId),
+        taskList: this.taskLists.get(session.sessionId),
+        startedAt: live.startedAt,
+        finishedAt,
+      })
       void this.captureConversationMemory({
         sessionId: session.sessionId,
         cwd: value.cwd,
@@ -1321,15 +1366,30 @@ export class AgentRuntimeService {
         assistant: assistantText,
       }).catch(() => {})
     } catch (error) {
+      flushText()
       live.error = error instanceof Error ? error.message : String(error)
+      const finishedAt = live.streaming ? finishLiveRun(live.error) : live.finishedAt
       if (this.goals.get(session.sessionId)?.status === 'active') await this.pauseSessionGoal(session.sessionId)
-      throw error
+      emit('error', {
+        sessionId: session.sessionId,
+        message: live.error,
+        text: live.text,
+        tools: live.tools,
+        assets: live.assets,
+        approvals: [],
+        goal: this.goals.get(session.sessionId),
+        taskList: this.taskLists.get(session.sessionId),
+        startedAt: live.startedAt,
+        finishedAt,
+      })
+      // Terminal snapshot already delivered over SSE; avoid a second bare error event from the HTTP handler.
+      return
     } finally {
       unsubscribe()
       this.permissions.detachEmitter(session.sessionId, emit)
       if (this.goalEmitters.get(session.sessionId) === emit) this.goalEmitters.delete(session.sessionId)
       if (this.taskListEmitters.get(session.sessionId) === emit) this.taskListEmitters.delete(session.sessionId)
-      live.streaming = false
+      if (live.streaming) finishLiveRun(live.error)
       const timer = setTimeout(() => { if (this.liveSessions.get(session.sessionId) === live) this.liveSessions.delete(session.sessionId) }, 60_000)
       timer.unref?.()
     }
@@ -1402,7 +1462,7 @@ export class AgentRuntimeService {
     const value = this.sessions.get(id)
     if (!value) return false
     await this.pauseSessionGoal(id)
-    this.subagents.abortParent(id)
+    this.multiAgents.abortParent(id)
     this.permissions.resolveSession(id, false, '会话已停止，工具未执行。')
     await value.session.abort()
     return true
@@ -1412,7 +1472,7 @@ export class AgentRuntimeService {
     await this.goals.remove(id)
     await this.taskLists.remove(id)
     await this.browserAutomation.closeSession(id)
-    this.subagents.abortParent(id)
+    this.multiAgents.abortParent(id)
     this.permissions.resolveSession(id, false, '会话已删除，工具未执行。')
     const active = this.sessions.get(id)
     let sessionFile = active?.session.sessionFile
@@ -1642,7 +1702,7 @@ export class AgentRuntimeService {
     await this.schedules.dispose()
     await this.channels.dispose()
     await this.goals.pauseAllActive()
-    await this.subagents.dispose()
+    await this.multiAgents.dispose()
     await this.browserAutomation.dispose()
     this.permissions.dispose()
     await this.disposeSessions()
@@ -1742,7 +1802,7 @@ export class AgentRuntimeService {
     const [credentials, modelsJson, appConfig] = await Promise.all([
       readJson(this.authPath, {}),
       readJson(this.modelsPath, { providers: {} }),
-      readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [], providerImports: {} }),
+      readJson(this.appConfigPath, { toolMode: 'full', disabledProviders: [], providerImports: {} }),
     ])
     modelsJson.providers ||= {}
     const existingProvider = modelsJson.providers[loaded.providerId]
@@ -1778,7 +1838,7 @@ export class AgentRuntimeService {
 
   async getConfig() {
     const settings = this.settingsManager.getGlobalSettings()
-    const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only' })
+    const appConfig = await readJson(this.appConfigPath, { toolMode: 'full' })
     const modelsJson = await readJson(this.modelsPath, { providers: {} })
     const credentials = await readJson(this.authPath, {})
     const runtimeProviders = this.modelRuntime.getProviders()
@@ -1834,7 +1894,7 @@ export class AgentRuntimeService {
       provider: selectedProvider,
       model: selectedModel,
       thinkingLevel: settings.defaultThinkingLevel || 'medium',
-      toolMode: appConfig.toolMode || 'read-only',
+      toolMode: appConfig.toolMode || 'full',
       providers,
       apiKeyConfigured: Boolean(credentials[selectedProvider]),
     }
@@ -1844,7 +1904,7 @@ export class AgentRuntimeService {
     const provider = String(input.provider || '').trim()
     const model = String(input.model || '').trim()
     if (!provider) throw new Error('Provider 不能为空。')
-    const currentAppConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
+    const currentAppConfig = await readJson(this.appConfigPath, { toolMode: 'full', disabledProviders: [] })
     const existingOverlay = await readJson(this.modelsPath, { providers: {} })
     const providerType = input.providerType === 'visual' || input.providerType === 'chat'
       ? input.providerType
@@ -1919,7 +1979,7 @@ export class AgentRuntimeService {
     const errors = this.settingsManager.drainErrors()
     if (errors.length) throw errors[0].error
 
-    const requestedToolMode = ['read-only', 'workspace', 'full', 'custom'].includes(input.toolMode) ? input.toolMode : 'read-only'
+    const requestedToolMode = ['read-only', 'workspace', 'full', 'custom'].includes(input.toolMode) ? input.toolMode : 'full'
     await writeJsonAtomic(this.appConfigPath, {
       ...currentAppConfig,
       toolMode: requestedToolMode,
@@ -1940,7 +2000,7 @@ export class AgentRuntimeService {
     if (!this.modelRuntime.getProviders().some((item) => item.id === provider) && !KNOWN_PROVIDERS.includes(provider)) {
       throw new Error('Provider 不存在。')
     }
-    const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
+    const appConfig = await readJson(this.appConfigPath, { toolMode: 'full', disabledProviders: [] })
     const disabled = new Set(appConfig.disabledProviders || [])
     if (enabled) disabled.delete(provider)
     else disabled.add(provider)
@@ -2006,7 +2066,7 @@ export class AgentRuntimeService {
       credentials[id] = { type: 'api_key', key: apiKey }
       await writeJsonAtomic(this.authPath, credentials)
     }
-    const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
+    const appConfig = await readJson(this.appConfigPath, { toolMode: 'full', disabledProviders: [] })
     const disabled = new Set(appConfig.disabledProviders || [])
     if (input.enabled === false) disabled.add(id)
     else disabled.delete(id)
@@ -2190,7 +2250,7 @@ export class AgentRuntimeService {
     const credentials = await readJson(this.authPath, {})
     delete credentials[provider]
     await writeJsonAtomic(this.authPath, credentials)
-    const appConfig = await readJson(this.appConfigPath, { toolMode: 'read-only', disabledProviders: [] })
+    const appConfig = await readJson(this.appConfigPath, { toolMode: 'full', disabledProviders: [] })
     appConfig.disabledProviders = (appConfig.disabledProviders || []).filter((item) => item !== provider)
     if (appConfig.providerTypes) delete appConfig.providerTypes[provider]
     if (appConfig.providerDefaultModels) delete appConfig.providerDefaultModels[provider]

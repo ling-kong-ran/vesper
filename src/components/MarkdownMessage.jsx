@@ -4,6 +4,7 @@ import ReactMarkdown from 'react-markdown'
 import rehypeHighlight from 'rehype-highlight'
 import remarkGfm from 'remark-gfm'
 import { useI18n } from '../app/use-i18n.js'
+import { prepareMarkdown } from '../lib/markdown.js'
 
 function textContent(value) {
   if (typeof value === 'string' || typeof value === 'number') return String(value)
@@ -54,10 +55,11 @@ function CodeBlock({ children }) {
   </div>
 }
 
-export default function MarkdownMessage({ children }) {
+export default function MarkdownMessage({ children, streaming = false }) {
+  const source = prepareMarkdown(children, streaming)
   return <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[[rehypeHighlight, { detect: true }]]} components={{
     a: ({ children: label, node: _node, ...props }) => <a {...props} target="_blank" rel="noreferrer">{label}</a>,
     pre: ({ children: codeChildren }) => <CodeBlock>{codeChildren}</CodeBlock>,
     code: ({ children: code, className, node: _node, ...props }) => <code className={className || ''} {...props}>{code}</code>,
-  }}>{children}</ReactMarkdown></div>
+  }}>{source}</ReactMarkdown></div>
 }

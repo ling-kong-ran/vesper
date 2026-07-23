@@ -36,6 +36,156 @@ test('live session snapshot restores partial assistant output and tool state', a
   assert.equal(live.model, 'openai/gpt-5.4')
 })
 
+test('stream completion publishes an authoritative terminal snapshot', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-live-terminal-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  runtime.archiveAttachments = async () => []
+  runtime.captureConversationMemory = async () => []
+  runtime.memory = { relevantContext: async () => ({ text: '' }) }
+
+  const listeners = new Set()
+  const session = {
+    sessionId: 'session-terminal',
+    isStreaming: false,
+    model: { provider: 'openai', id: 'gpt-5.4' },
+    thinkingLevel: 'medium',
+    messages: [{ role: 'user', content: 'Earlier context', timestamp: 1 }],
+    agent: { state: { systemPrompt: '' } },
+    getActiveToolNames: () => [],
+    setActiveToolsByName: () => {},
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    async prompt() {
+      session.isStreaming = true
+      for (const listener of listeners) listener({ type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'read', args: {} })
+      const assistant = { role: 'assistant', content: [{ type: 'text', text: 'Final answer' }], timestamp: 2 }
+      session.messages.push(assistant)
+      for (const listener of listeners) listener({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Final answer' } })
+      session.isStreaming = false
+    },
+  }
+  const value = { session, cwd: directory, name: 'Terminal snapshot', baseToolNames: [] }
+  runtime.sessions.set(session.sessionId, value)
+  runtime.getOrCreateSession = async () => value
+
+  const events = []
+  await runtime.streamPrompt({
+    sessionId: session.sessionId,
+    message: 'Finish the answer.',
+    send: (event, data) => events.push({ event, data }),
+  })
+
+  const done = events.find((item) => item.event === 'done')?.data
+  assert.equal(done.text, 'Final answer')
+  assert.equal(done.tools[0].status, 'done')
+  assert.ok(done.finishedAt)
+  const live = await runtime.getSessionLive(session.sessionId)
+  assert.equal(live.streaming, false)
+  assert.equal(live.finishedAt, done.finishedAt)
+  assert.equal(live.tools[0].status, 'done')
+})
+
+test('generated session title is emitted before the terminal done event', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-live-title-order-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  runtime.archiveAttachments = async () => []
+  runtime.captureConversationMemory = async () => []
+  runtime.memory = { relevantContext: async () => ({ text: '' }) }
+  runtime.generateSessionTitle = async () => 'Generated Title'
+  runtime.markSessionTitle = async () => {}
+
+  const listeners = new Set()
+  const session = {
+    sessionId: 'session-title-order',
+    isStreaming: false,
+    model: { provider: 'openai', id: 'gpt-5.4' },
+    thinkingLevel: 'medium',
+    messages: [],
+    agent: { state: { systemPrompt: '' } },
+    getActiveToolNames: () => [],
+    setActiveToolsByName: () => {},
+    setSessionName(name) { this.name = name },
+    subscribe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+    async prompt() {
+      session.isStreaming = true
+      session.messages.push({ role: 'user', content: 'Name this chat.', timestamp: 1 })
+      session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Hello' }], timestamp: 2 })
+      for (const listener of listeners) listener({ type: 'message_update', assistantMessageEvent: { type: 'text_delta', delta: 'Hello' } })
+      session.isStreaming = false
+    },
+  }
+  const value = { session, cwd: directory, name: 'Temporary title', baseToolNames: [] }
+  runtime.sessions.set(session.sessionId, value)
+  runtime.getOrCreateSession = async () => value
+
+  const events = []
+  await runtime.streamPrompt({
+    sessionId: session.sessionId,
+    message: 'Name this chat.',
+    send: (event, data) => events.push({ event, data }),
+  })
+
+  const titleIndex = events.findIndex((item) => item.event === 'session_title' && item.data?.source === 'generated')
+  const doneIndex = events.findIndex((item) => item.event === 'done')
+  assert.ok(titleIndex >= 0)
+  assert.ok(doneIndex > titleIndex)
+  assert.equal(events[titleIndex].data.name, 'Generated Title')
+})
+
+test('stream failures emit a single terminal error snapshot without throwing', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-live-error-once-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const runtime = new AgentRuntimeService({ cwd: directory, dataDir: directory })
+  runtime.archiveAttachments = async () => []
+  runtime.captureConversationMemory = async () => []
+  runtime.memory = { relevantContext: async () => ({ text: '' }) }
+
+  const session = {
+    sessionId: 'session-error-once',
+    isStreaming: false,
+    model: { provider: 'openai', id: 'gpt-5.4' },
+    thinkingLevel: 'medium',
+    messages: [{ role: 'user', content: 'Earlier', timestamp: 1 }],
+    agent: { state: { systemPrompt: '' } },
+    getActiveToolNames: () => [],
+    setActiveToolsByName: () => {},
+    subscribe() { return () => {} },
+    async prompt() {
+      session.isStreaming = true
+      try {
+        throw new Error('model failed')
+      } finally {
+        session.isStreaming = false
+      }
+    },
+  }
+  const value = { session, cwd: directory, name: 'Error once', baseToolNames: [] }
+  runtime.sessions.set(session.sessionId, value)
+  runtime.getOrCreateSession = async () => value
+
+  const events = []
+  await runtime.streamPrompt({
+    sessionId: session.sessionId,
+    message: 'Trigger failure.',
+    send: (event, data) => events.push({ event, data }),
+  })
+
+  const errors = events.filter((item) => item.event === 'error')
+  assert.equal(errors.length, 1)
+  assert.equal(errors[0].data.message, 'model failed')
+  assert.equal(errors[0].data.tools.length, 0)
+  const live = await runtime.getSessionLive(session.sessionId)
+  assert.equal(live.streaming, false)
+  assert.equal(live.error, 'model failed')
+})
+
 test('session messages are returned newest-first by bounded cursor pages', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vesper-message-pages-'))
   t.after(() => rm(directory, { recursive: true, force: true }))

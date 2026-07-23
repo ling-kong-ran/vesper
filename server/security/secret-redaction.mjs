@@ -29,6 +29,9 @@ const QUOTED_GENERIC_TOKEN = new RegExp(`((?:["'])?${GENERIC_TOKEN_KEY_PATTERN}(
 const PLAIN_GENERIC_TOKEN = new RegExp(`((?:^|[\\s,{;])${GENERIC_TOKEN_KEY_PATTERN}\\s*[:=]\\s*)(?!["']|\\[REDACTED SECRET\\])([^\\s,;}\\]]+)`, 'gim')
 const CLI_GENERIC_TOKEN = new RegExp(`(--?token(?:=|\\s+))(?!\\[REDACTED SECRET\\])([^\\s"']+)`, 'gi')
 const PERSISTENCE_REDACTION = Symbol('vesperPersistenceRedaction')
+const STREAM_GUARD_LENGTH = 64
+const PRIVATE_KEY_BEGIN = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g
+const PRIVATE_KEY_END = /-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g
 
 function normalizedKey(value) {
   return String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '')
@@ -73,6 +76,54 @@ export function redactSecretValue(value, key = '', seen = new WeakSet()) {
   seen.add(value)
   if (Array.isArray(value)) return value.map((item) => redactSecretValue(item, key, seen))
   return Object.fromEntries(Object.entries(value).map(([childKey, child]) => [childKey, redactSecretValue(child, childKey, seen)]))
+}
+
+function commonPrefixLength(left, right) {
+  const limit = Math.min(left.length, right.length)
+  let index = 0
+  while (index < limit && left.charCodeAt(index) === right.charCodeAt(index)) index += 1
+  return index
+}
+
+function unmatchedPrivateKeyStart(value) {
+  const begins = [...value.matchAll(PRIVATE_KEY_BEGIN)]
+  const ends = [...value.matchAll(PRIVATE_KEY_END)]
+  if (begins.length <= ends.length) return -1
+  return begins.at(-1)?.index ?? -1
+}
+
+export function createStreamingSecretRedactor({ guardLength = STREAM_GUARD_LENGTH } = {}) {
+  let source = ''
+  let visible = ''
+
+  const patchFor = (nextVisible) => {
+    if (nextVisible === visible) return null
+    const start = commonPrefixLength(visible, nextVisible)
+    visible = nextVisible
+    return { start, text: nextVisible.slice(start) }
+  }
+
+  const render = (final) => {
+    const privateKeyStart = unmatchedPrivateKeyStart(source)
+    const redacted = privateKeyStart >= 0
+      ? redactSecretText(source.slice(0, privateKeyStart))
+      : redactSecretText(source)
+    const safeLength = final ? redacted.length : Math.max(0, redacted.length - Math.max(0, guardLength))
+    return patchFor(redacted.slice(0, safeLength))
+  }
+
+  return {
+    push(delta) {
+      source += String(delta || '')
+      return render(false)
+    },
+    flush() {
+      return render(true)
+    },
+    text() {
+      return visible
+    },
+  }
 }
 
 export function installSessionPersistenceRedaction(sessionManager) {

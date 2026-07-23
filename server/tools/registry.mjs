@@ -11,7 +11,7 @@ export function toolsFromConfig(config = {}) {
   const configured = Array.isArray(config.enabledTools)
     ? config.enabledTools.filter((tool) => TOOL_IDS.has(tool))
     : null
-  return configured || TOOL_PRESETS[config.toolMode] || TOOL_PRESETS['read-only']
+  return configured || TOOL_PRESETS[config.toolMode] || TOOL_PRESETS.full
 }
 
 export function presetFromTools(enabledTools) {

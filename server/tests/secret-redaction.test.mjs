@@ -6,10 +6,12 @@ import test from 'node:test'
 import {
   installSessionPersistenceRedaction,
   REDACTED_SECRET,
+  createStreamingSecretRedactor,
   redactPersistedSessionFiles,
   redactSecretText,
   redactSecretValue,
 } from '../security/secret-redaction.mjs'
+import { applyTextPatch } from '../../src/lib/api.js'
 
 test('credential redaction removes common secrets without hiding token usage fields', () => {
   const text = redactSecretText([
@@ -78,4 +80,27 @@ test('existing JSONL sessions are scrubbed while preserving ordinary usage data'
   assert.equal(entry.message.usage.maxTokens, 128_000)
   assert.equal(entry.message.usage.totalTokens, 123)
   assert.equal(await redactPersistedSessionFiles(directory), 0)
+})
+
+test('streaming redaction preserves text order and hides secrets split across chunks', () => {
+  const redactor = createStreamingSecretRedactor()
+  const source = '调用 `rgPath`，然后设置 apiKey: sk-example-secret-token-1234567890。\n\n## 最终建议\n保留 `--json`。'
+  const chunks = ['调用 `rg', 'Path`，然后设置 api', 'Key: sk-example-', 'secret-token-1234567890。\n', '\n## 最终', '建议\n保留 `--json`。']
+  let visible = ''
+  for (const chunk of chunks) {
+    const patch = redactor.push(chunk)
+    if (patch) visible = applyTextPatch(visible, patch)
+    assert.doesNotMatch(visible, /sk-example|secret-token/)
+  }
+  visible = applyTextPatch(visible, redactor.flush())
+  assert.equal(visible, redactSecretText(source))
+})
+
+test('streaming redaction withholds an incomplete private key', () => {
+  const redactor = createStreamingSecretRedactor({ guardLength: 0 })
+  let visible = applyTextPatch('', redactor.push('before\n-----BEGIN PRIVATE KEY-----\nprivate-material'))
+  assert.equal(visible, 'before\n')
+  visible = applyTextPatch(visible, redactor.push('\n-----END PRIVATE KEY-----\nafter'))
+  visible = applyTextPatch(visible, redactor.flush())
+  assert.equal(visible, `before\n${REDACTED_SECRET}\nafter`)
 })

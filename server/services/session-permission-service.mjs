@@ -4,6 +4,8 @@ import { TOOL_CATALOG } from '../tools/registry.mjs'
 
 export const PERMISSION_MODES = new Set(['ask', 'auto', 'ignore'])
 export const DEFAULT_PERMISSION_MODE = 'auto'
+export const RESOLVED_APPROVAL_TTL_MS = 5 * 60_000
+export const MAX_RESOLVED_APPROVALS = 256
 
 const TOOL_RISKS = new Map(TOOL_CATALOG.map((tool) => [tool.id, tool.risk]))
 const SENSITIVE_RISKS = new Set(['中风险', '高风险'])
@@ -56,8 +58,22 @@ export class SessionPermissionService {
     this.getToolRisk = getToolRisk || (() => null)
     this.timeoutMs = timeoutMs
     this.pending = new Map()
+    this.resolved = new Map()
     this.emitters = new Map()
     this.installedSessions = new WeakSet()
+  }
+
+  pruneResolutions() {
+    const cutoff = Date.now() - RESOLVED_APPROVAL_TTL_MS
+    for (const [id, value] of this.resolved) {
+      if (new Date(value.resolvedAt).getTime() < cutoff) this.resolved.delete(id)
+    }
+  }
+
+  rememberResolution(resolution) {
+    this.pruneResolutions()
+    this.resolved.set(resolution.id, resolution)
+    while (this.resolved.size > MAX_RESOLVED_APPROVALS) this.resolved.delete(this.resolved.keys().next().value)
   }
 
   attachEmitter(sessionId, emit) {
@@ -106,13 +122,16 @@ export class SessionPermissionService {
     return new Promise((resolveApproval) => {
       let settled = false
       const settle = (approved, resolutionReason) => {
-        if (settled) return
+        if (settled) return this.resolved.get(id)
         settled = true
         clearTimeout(timer)
         signal?.removeEventListener('abort', abort)
         this.pending.delete(id)
-        this.emit(sessionId, 'permission_resolved', { id, approved, reason: resolutionReason || '' })
-        resolveApproval({ approved, reason: resolutionReason })
+        const resolution = { id, sessionId, approved: Boolean(approved), reason: resolutionReason || '', resolvedAt: new Date().toISOString() }
+        this.rememberResolution(resolution)
+        this.emit(sessionId, 'permission_resolved', resolution)
+        resolveApproval({ approved: resolution.approved, reason: resolution.reason })
+        return resolution
       }
       const abort = () => settle(false, '操作已停止，工具未执行。')
       const timer = setTimeout(() => settle(false, '等待授权超时，工具未执行。'), this.timeoutMs)
@@ -129,9 +148,14 @@ export class SessionPermissionService {
 
   resolve(sessionId, approvalId, approved) {
     const approval = this.pending.get(approvalId)
-    if (!approval || approval.sessionId !== sessionId) return false
-    approval.settle(Boolean(approved), approved ? '用户已授权执行。' : '用户拒绝执行该工具。')
-    return true
+    if (approval?.sessionId === sessionId) {
+      const resolution = approval.settle(Boolean(approved), approved ? '用户已授权执行。' : '用户拒绝执行该工具。')
+      return { found: true, alreadyResolved: false, ...resolution }
+    }
+    this.pruneResolutions()
+    const previous = this.resolved.get(approvalId)
+    if (previous?.sessionId === sessionId) return { found: true, alreadyResolved: true, ...previous }
+    return { found: false, alreadyResolved: false, id: approvalId, sessionId }
   }
 
   resolveSession(sessionId, approved, reason = '') {
@@ -151,5 +175,6 @@ export class SessionPermissionService {
   dispose() {
     for (const approval of [...this.pending.values()]) approval.settle(false, '应用正在关闭，工具未执行。')
     this.emitters.clear()
+    this.resolved.clear()
   }
 }

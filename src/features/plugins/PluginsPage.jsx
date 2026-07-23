@@ -8,9 +8,9 @@ import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
 
 const FILTERS = ['全部', '文件系统', '搜索', '终端', '视觉', '高风险', '已禁用']
 const PRESETS = {
-  'read-only': ['read', 'grep', 'find', 'ls', 'web_search', 'memory_search', 'memory_remember', 'delegate_task'],
-  workspace: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'web_search', 'memory_search', 'memory_remember', 'delegate_task'],
-  full: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'web_search', 'memory_search', 'memory_remember', 'delegate_task'],
+  'read-only': ['read', 'grep', 'find', 'ls', 'web_search', 'browser_automation', 'memory_search', 'memory_remember', 'spawn_agent', 'list_agents', 'send_message', 'followup_task', 'wait_agent', 'interrupt_agent', 'mcp_list', 'mcp_manage'],
+  workspace: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'web_search', 'browser_automation', 'memory_search', 'memory_remember', 'spawn_agent', 'list_agents', 'send_message', 'followup_task', 'wait_agent', 'interrupt_agent', 'mcp_list', 'mcp_manage'],
+  full: ['read', 'grep', 'find', 'ls', 'edit', 'write', 'bash', 'web_search', 'browser_automation', 'generate_visual', 'memory_search', 'memory_remember', 'spawn_agent', 'list_agents', 'send_message', 'followup_task', 'wait_agent', 'interrupt_agent', 'mcp_list', 'mcp_manage'],
 }
 const TOOL_ICONS = {
   read: Eye,
@@ -22,7 +22,12 @@ const TOOL_ICONS = {
   bash: Server,
   web_search: Globe2,
   generate_visual: Image,
-  delegate_task: Bot,
+  spawn_agent: Bot,
+  list_agents: Bot,
+  send_message: Bot,
+  followup_task: Bot,
+  wait_agent: Bot,
+  interrupt_agent: Bot,
 }
 
 function pluginStatus(tools) {

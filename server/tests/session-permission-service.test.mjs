@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { resolve } from 'node:path'
 import test from 'node:test'
+import { createApiHandler } from '../http/api-handler.mjs'
 import { permissionRequirement, SessionPermissionService } from '../services/session-permission-service.mjs'
 
 test('permission modes progress from ask to automatic to ignored checks', () => {
@@ -9,7 +10,7 @@ test('permission modes progress from ask to automatic to ignored checks', () => 
   assert.equal(permissionRequirement({ mode: 'ask', cwd, toolName: 'read', args: { path: 'README.md' } }), null)
   assert.match(permissionRequirement({ mode: 'ask', cwd, toolName: 'read', args: { path: outside } }).reason, /工作目录之外/)
   assert.match(permissionRequirement({ mode: 'ask', cwd, toolName: 'write', args: { path: 'README.md' } }).reason, /需要确认/)
-  assert.match(permissionRequirement({ mode: 'ask', cwd, toolName: 'delegate_task', args: { task: 'inspect the repository' } }).reason, /需要确认/)
+  assert.match(permissionRequirement({ mode: 'ask', cwd, toolName: 'spawn_agent', args: { message: 'inspect the repository' } }).reason, /需要确认/)
   assert.equal(permissionRequirement({ mode: 'ask', cwd, toolName: 'mcp_read_123', toolRisk: '低风险', args: {} }), null)
   assert.match(permissionRequirement({ mode: 'ask', cwd, toolName: 'mcp_write_456', toolRisk: '高风险', args: {} }).reason, /需要确认/)
   assert.equal(permissionRequirement({ mode: 'ask', cwd, toolName: 'update_goal', args: { status: 'complete' } }), null)
@@ -28,8 +29,17 @@ test('pending tool approval can be accepted or denied', async () => {
   const allowed = service.authorize({ sessionId: 'session-1', cwd: process.cwd(), toolName: 'write', toolCallId: 'tool-1', args: { path: 'file.txt', content: 'ok' } })
   const first = service.getPending('session-1')[0]
   assert.equal(first.toolName, 'write')
-  assert.equal(service.resolve('session-1', first.id, true), true)
+  const firstResolution = service.resolve('session-1', first.id, true)
+  assert.equal(firstResolution.found, true)
+  assert.equal(firstResolution.alreadyResolved, false)
+  assert.equal(firstResolution.approved, true)
   assert.equal(await allowed, undefined)
+
+  const duplicateResolution = service.resolve('session-1', first.id, true)
+  assert.equal(duplicateResolution.found, true)
+  assert.equal(duplicateResolution.alreadyResolved, true)
+  assert.equal(duplicateResolution.approved, true)
+  assert.equal(service.resolve('another-session', first.id, true).found, false)
 
   const denied = service.authorize({ sessionId: 'session-1', cwd: process.cwd(), toolName: 'bash', toolCallId: 'tool-2', args: { command: 'npm test' } })
   const second = service.getPending('session-1')[0]
@@ -41,6 +51,30 @@ test('pending tool approval can be accepted or denied', async () => {
   mode = 'ignore'
   assert.equal(await service.authorize({ sessionId: 'session-1', cwd: process.cwd(), toolName: 'bash', args: { command: 'rm -rf /' } }), undefined)
   service.dispose()
+})
+
+test('approval API treats a repeated resolution as an idempotent success', async () => {
+  const calls = []
+  const handler = createApiHandler({
+    resolveToolApproval(sessionId, approvalId, approved) {
+      calls.push({ sessionId, approvalId, approved })
+      return { found: true, alreadyResolved: true, id: approvalId, sessionId, approved: false, reason: '等待授权超时。' }
+    },
+  })
+  const request = {
+    method: 'POST',
+    async *[Symbol.asyncIterator]() {
+      yield Buffer.from(JSON.stringify({ approved: true }))
+    },
+  }
+  const response = { status: 0, body: '', writeHead(status) { this.status = status }, end(body) { this.body = body } }
+  const handled = await handler(request, response, new URL('http://localhost/api/sessions/session-1/approvals/approval-1'))
+  assert.equal(handled, true)
+  assert.equal(response.status, 200)
+  const body = JSON.parse(response.body)
+  assert.equal(body.alreadyResolved, true)
+  assert.equal(body.approved, false)
+  assert.deepEqual(calls, [{ sessionId: 'session-1', approvalId: 'approval-1', approved: true }])
 })
 
 test('session hook preserves upstream tool blockers before permission checks', async () => {

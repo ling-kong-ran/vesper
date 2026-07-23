@@ -23,7 +23,7 @@ function configDraft(data, provider, preferredModel) {
     modelBaseUrl: model?.baseUrlOverride || '',
     organization: provider?.organization || '',
     thinkingLevel: data.thinkingLevel || 'medium',
-    toolMode: data.toolMode || 'read-only',
+    toolMode: data.toolMode || 'full',
   }
 }
 
