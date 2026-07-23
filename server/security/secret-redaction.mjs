@@ -29,7 +29,8 @@ const QUOTED_GENERIC_TOKEN = new RegExp(`((?:["'])?${GENERIC_TOKEN_KEY_PATTERN}(
 const PLAIN_GENERIC_TOKEN = new RegExp(`((?:^|[\\s,{;])${GENERIC_TOKEN_KEY_PATTERN}\\s*[:=]\\s*)(?!["']|\\[REDACTED SECRET\\])([^\\s,;}\\]]+)`, 'gim')
 const CLI_GENERIC_TOKEN = new RegExp(`(--?token(?:=|\\s+))(?!\\[REDACTED SECRET\\])([^\\s"']+)`, 'gi')
 const PERSISTENCE_REDACTION = Symbol('vesperPersistenceRedaction')
-const STREAM_GUARD_LENGTH = 64
+// Withhold a short tail while streaming so split secrets are not flashed; keep small to avoid obvious truncation.
+const STREAM_GUARD_LENGTH = 28
 const PRIVATE_KEY_BEGIN = /-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g
 const PRIVATE_KEY_END = /-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/g
 

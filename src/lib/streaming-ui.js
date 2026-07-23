@@ -85,3 +85,106 @@ export function createToolUpdateScheduler(onFlush, { intervalMs = 80 } = {}) {
     },
   }
 }
+
+function commonPrefixLength(left, right) {
+  const limit = Math.min(left.length, right.length)
+  let index = 0
+  while (index < limit && left.charCodeAt(index) === right.charCodeAt(index)) index += 1
+  return index
+}
+
+/**
+ * Smooth typewriter display for streaming text.
+ * - Keeps React updates to at most one rAF (~60fps)
+ * - Speeds up dynamically when the target is far ahead
+ * - Snaps immediately on flush (done / tool boundary)
+ */
+export function createTypewriterDisplay(onFrame, {
+  minCharsPerSecond = 36,
+  maxCharsPerSecond = 1_200,
+  catchUpRemaining = 160,
+  snapRemaining = 480,
+  requestFrame = globalThis.requestAnimationFrame?.bind(globalThis),
+  cancelFrame = globalThis.cancelAnimationFrame?.bind(globalThis),
+  now = () => (typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now()),
+} = {}) {
+  const scheduleFrame = requestFrame || ((callback) => setTimeout(() => callback(now()), 16))
+  const cancelScheduled = cancelFrame || clearTimeout
+  let target = ''
+  let shown = ''
+  let activityAt = null
+  let frame = 0
+  let lastTs = 0
+  let closed = false
+
+  const emit = () => onFrame(shown, activityAt)
+
+  const revealCount = (remaining, dt) => {
+    if (remaining <= 0) return 0
+    // Huge backlog: snap in one paint so the UI never feels laggy.
+    if (remaining >= snapRemaining) return remaining
+    // Medium backlog: catch up in ~100-200ms.
+    if (remaining >= catchUpRemaining) {
+      return Math.min(remaining, Math.max(12, Math.ceil(remaining * Math.min(1, dt * 10))))
+    }
+    // Small backlog: natural typing with mild acceleration.
+    const cps = Math.min(maxCharsPerSecond, minCharsPerSecond + remaining * 4)
+    return Math.min(remaining, Math.max(1, Math.ceil(cps * dt)))
+  }
+
+  const step = (now) => {
+    frame = 0
+    if (closed) return
+    const dt = lastTs ? Math.min(0.08, Math.max(0.012, (now - lastTs) / 1000)) : 0.032
+    lastTs = now
+    const previous = shown
+
+    if (target === shown) return
+
+    // text_patch / redaction may rewrite earlier text; realign to the common prefix first.
+    if (!target.startsWith(shown)) {
+      const prefix = commonPrefixLength(shown, target)
+      shown = target.slice(0, prefix)
+    }
+
+    if (target.length < shown.length) {
+      shown = target
+    } else {
+      const remaining = target.length - shown.length
+      if (remaining > 0) shown = target.slice(0, shown.length + revealCount(remaining, dt))
+    }
+
+    if (shown !== previous) emit()
+    if (!closed && shown !== target) frame = scheduleFrame(step)
+  }
+
+  const schedule = () => {
+    if (closed || frame) return
+    lastTs = 0
+    frame = scheduleFrame(step)
+  }
+
+  return {
+    setTarget(text, nextActivityAt = new Date().toISOString()) {
+      if (closed) return
+      target = String(text || '')
+      activityAt = nextActivityAt
+      schedule()
+    },
+    flush() {
+      if (frame) cancelScheduled(frame)
+      frame = 0
+      lastTs = 0
+      shown = target
+      emit()
+    },
+    cancel() {
+      closed = true
+      if (frame) cancelScheduled(frame)
+      frame = 0
+      lastTs = 0
+    },
+    getShown: () => shown,
+    getTarget: () => target,
+  }
+}

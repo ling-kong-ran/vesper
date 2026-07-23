@@ -57,7 +57,7 @@ import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, applyTextPatch, consumeEventStream } from './lib/api.js'
 import { applySessionUpdate, DEFAULT_SESSION_STATE } from './lib/session-state.js'
-import { createStreamingTextScheduler, createToolUpdateScheduler } from './lib/streaming-ui.js'
+import { createToolUpdateScheduler, createTypewriterDisplay } from './lib/streaming-ui.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
 import { useAppUpdate } from './features/updates/useAppUpdate.js'
@@ -842,7 +842,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
     const agentId = `agent-${Date.now()}`
     const runStartedAt = new Date().toISOString()
     let responseText = ''
-    const textScheduler = createStreamingTextScheduler((text, activityAt) => {
+    const typewriter = createTypewriterDisplay((text, activityAt) => {
       updateSessionState(sessionId, (current) => ({
         ...current,
         lastActivityAt: activityAt || current.lastActivityAt,
@@ -874,14 +874,14 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
           if (data.cwd || data.permissionMode || data.goal !== undefined || data.taskList !== undefined) setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
         } else if (event === 'text_patch') {
           responseText = applyTextPatch(responseText, data)
-          textScheduler.push(responseText, eventAt)
+          typewriter.setTarget(responseText, eventAt)
         } else if (event === 'text_delta') {
           responseText += data.delta || ''
-          textScheduler.push(responseText, eventAt)
+          typewriter.setTarget(responseText, eventAt)
         } else if (event === 'thinking_delta') {
           // Thinking tokens are high-frequency and only used for inactivity UI; ignore to avoid re-renders.
         } else if (event === 'tool_start') {
-          textScheduler.flush()
+          typewriter.flush()
           toolScheduler.flush()
           updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, runNotice: '', tools: [...current.tools, { id: data.id, name: data.name, status: 'running', startedAt: data.startedAt || eventAt, updatedAt: eventAt }] }))
         } else if (event === 'tool_update') {
@@ -898,7 +898,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
             tools: current.tools.map((item) => item.id === data.id ? { ...item, status: data.error ? 'error' : 'done', message: data.message || '', updatedAt: data.finishedAt || eventAt, finishedAt: data.finishedAt || eventAt } : item),
           }))
         } else if (event === 'permission_request') {
-          textScheduler.flush()
+          typewriter.flush()
           toolScheduler.flush()
           updateSessionState(sessionId, (current) => ({ ...current, lastActivityAt: eventAt, approvals: [...(current.approvals || []).filter((item) => item.id !== data.id), data] }))
         } else if (event === 'permission_resolved') {
@@ -915,7 +915,7 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
           updateSessionState(sessionId, { goal: data.goal ?? null })
           setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, goal: data.goal ?? null } : session))
         } else if (event === 'task_list_update') {
-          textScheduler.flush()
+          typewriter.flush()
           toolScheduler.flush()
           updateSessionState(sessionId, (current) => ({
             ...current,
@@ -930,7 +930,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         } else if (event === 'done') {
           const finishedAt = data.finishedAt || eventAt
           if (typeof data.text === 'string') responseText = data.text
-          textScheduler.cancel()
+          typewriter.setTarget(responseText, finishedAt)
+          typewriter.flush()
           toolScheduler.cancel()
           updateSessionState(sessionId, (current) => ({
             ...current,
@@ -954,7 +955,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
         } else if (event === 'error') {
           const finishedAt = data.finishedAt || eventAt
           if (typeof data.text === 'string') responseText = data.text
-          textScheduler.cancel()
+          typewriter.setTarget(responseText, finishedAt)
+          typewriter.flush()
           toolScheduler.cancel()
           updateSessionState(sessionId, (current) => ({
             ...current,
@@ -968,7 +970,8 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
           throw new Error(data.message)
         }
       })
-      textScheduler.flush()
+      typewriter.setTarget(responseText)
+      typewriter.flush()
       toolScheduler.flush()
       const fallbackFinishedAt = new Date().toISOString()
       const stillStreaming = Boolean(sessionStatesRef.current[sessionId]?.streaming)
@@ -992,13 +995,13 @@ function ChatPage({ mode, setMode, query, notify, browserNotify, registerPrimary
       }
       browserNotify?.('chat.completed', { chat: { title: completed?.name || t('{app} 对话', { app: APP_NAME }), summary: responseText.trim().slice(0, 260) || t('Agent 已完成回复。'), model: sessionStatesRef.current[sessionId]?.model || model } })
     } catch (caught) {
-      textScheduler.cancel()
+      typewriter.cancel()
       toolScheduler.cancel()
       const runFinishedAt = new Date().toISOString()
       updateSessionState(sessionId, (current) => ({ ...current, streaming: false, error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: caught.message }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || responseText || caught.message } : item) }))
       setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false } : session))
     } finally {
-      textScheduler.cancel()
+      typewriter.cancel()
       toolScheduler.cancel()
       updateSessionState(sessionId, { streaming: false })
       window.dispatchEvent(new Event(USAGE_UPDATED_EVENT))

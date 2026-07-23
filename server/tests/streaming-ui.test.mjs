@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { createStreamingTextScheduler, createToolUpdateScheduler } from '../../src/lib/streaming-ui.js'
+import { createStreamingTextScheduler, createToolUpdateScheduler, createTypewriterDisplay } from '../../src/lib/streaming-ui.js'
 
 test('streaming text scheduler coalesces rapid updates into one flush', async () => {
   const frames = []
@@ -29,4 +29,32 @@ test('tool update scheduler merges patches by tool id', async () => {
   assert.deepEqual(frames[0].batch['tool-2'], { message: 'x' })
   assert.equal(frames[0].activityAt, 't3')
   scheduler.cancel()
+})
+
+test('typewriter reveals gradually and snaps on flush', async () => {
+  const frames = []
+  const typewriter = createTypewriterDisplay((text) => frames.push(text), {
+    minCharsPerSecond: 20,
+    maxCharsPerSecond: 200,
+    catchUpRemaining: 40,
+    snapRemaining: 200,
+  })
+  typewriter.setTarget('hello world')
+  await new Promise((resolve) => setTimeout(resolve, 80))
+  assert.ok(frames.length >= 1)
+  assert.ok(frames.at(-1).length <= 'hello world'.length)
+  assert.ok(frames.at(-1).length > 0)
+  typewriter.setTarget('hello world!!!')
+  typewriter.flush()
+  assert.equal(frames.at(-1), 'hello world!!!')
+  typewriter.cancel()
+})
+
+test('typewriter snaps large backlogs in one paint', async () => {
+  const frames = []
+  const typewriter = createTypewriterDisplay((text) => frames.push(text), { snapRemaining: 50 })
+  typewriter.setTarget('x'.repeat(120))
+  await new Promise((resolve) => setTimeout(resolve, 40))
+  assert.equal(frames.at(-1), 'x'.repeat(120))
+  typewriter.cancel()
 })
