@@ -20,6 +20,13 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/ling-kong-ran/vesper/releases/latest">
+    <img src="https://img.shields.io/badge/Download%20Desktop-Windows%20%7C%20macOS%20%7C%20Linux-F59E0B?style=for-the-badge&logo=github&logoColor=17141F" alt="Download Vesper desktop installers" />
+  </a>
+</p>
+<p align="center"><sub>Install Vesper directly—no source checkout or Node.js development environment required.</sub></p>
+
+<p align="center">
   <a href="#about">The Evening Star</a> ·
   <a href="#glance">Vesper at a Glance</a> ·
   <a href="#capabilities">Constellation of Capabilities</a> ·
@@ -138,13 +145,23 @@ vesper/
 
 ## ✦ Begin Here
 
-### Prerequisites
+### Download the Desktop App
+
+No source build is required. Visit the [latest GitHub Release](https://github.com/ling-kong-ran/vesper/releases/latest) to download an installer for Windows, macOS, or Linux.
+
+> [Download the latest Vesper desktop installer →](https://github.com/ling-kong-ran/vesper/releases/latest)
+
+### Run from Source
+
+The following requirements apply only when developing Vesper, running the Web app, or packaging the desktop app yourself.
+
+#### Prerequisites
 
 - Node.js 20 or later
 - npm
 - At least one supported model provider and API key
 
-### Installation
+#### Install Dependencies
 
 ```bash
 git clone https://github.com/ling-kong-ran/vesper.git

@@ -20,6 +20,13 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/ling-kong-ran/vesper/releases/latest">
+    <img src="https://img.shields.io/badge/下载桌面版-Windows%20%7C%20macOS%20%7C%20Linux-F59E0B?style=for-the-badge&logo=github&logoColor=17141F" alt="下载 Vesper 桌面版安装包" />
+  </a>
+</p>
+<p align="center"><sub>可直接下载安装包，无需克隆源码或配置 Node.js 开发环境。</sub></p>
+
+<p align="center">
   <a href="#about">暮星之名</a> ·
   <a href="#glance">一眼 Vesper</a> ·
   <a href="#capabilities">能力星图</a> ·
@@ -138,13 +145,23 @@ vesper/
 
 ## ✦ 从这里启程
 
-### 环境要求
+### 直接下载桌面版
+
+无需从源码构建。前往 [GitHub Releases 最新版本](https://github.com/ling-kong-ran/vesper/releases/latest)，即可直接下载 Windows、macOS 或 Linux 安装包。
+
+> [下载最新版 Vesper 桌面安装包 →](https://github.com/ling-kong-ran/vesper/releases/latest)
+
+### 从源码运行
+
+以下环境要求仅适用于开发、Web 版运行或自行打包桌面应用。
+
+#### 环境要求
 
 - Node.js 20 或更高版本
 - npm
 - 至少一个受支持的模型 Provider 和 API Key
 
-### 安装
+#### 安装依赖
 
 ```bash
 git clone https://github.com/ling-kong-ran/vesper.git
