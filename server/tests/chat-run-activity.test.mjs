@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { deriveRunActivity, formatRunDuration, groupToolCalls, RUN_INACTIVITY_THRESHOLD_MS, settleToolCalls } from '../../src/features/chat/run-activity.js'
+import { deriveRunActivity, formatRunDuration, groupToolCalls, latestUnrecoveredToolError, RUN_INACTIVITY_THRESHOLD_MS, settleToolCalls } from '../../src/features/chat/run-activity.js'
 
 test('chat activity derives meaningful stages and inactivity states', () => {
   const now = Date.parse('2026-07-20T10:00:20.000Z')
@@ -26,6 +26,27 @@ test('chat activity groups completed tools while preserving running and failed c
   assert.equal(grouped.completed[0].message, 'done')
   assert.deepEqual(grouped.running.map((tool) => tool.id), ['bash-1'])
   assert.deepEqual(grouped.errors.map((tool) => tool.id), ['edit-1'])
+})
+
+test('recoverable tool failures stop being prominent after later progress', () => {
+  const failedAt = '2026-07-20T10:00:10.000Z'
+  const failure = { id: 'bash-1', name: 'bash', status: 'error', message: 'failed', updatedAt: failedAt }
+  assert.equal(latestUnrecoveredToolError([failure], { streaming: true, lastActivityAt: failedAt }), failure)
+  assert.equal(latestUnrecoveredToolError([failure], { streaming: true, lastActivityAt: '2026-07-20T10:00:11.000Z' }), null)
+  assert.equal(latestUnrecoveredToolError([
+    failure,
+    { id: 'bash-2', name: 'bash', status: 'running', startedAt: failedAt },
+  ], { streaming: true, lastActivityAt: failedAt }), null)
+  assert.equal(latestUnrecoveredToolError([failure], { streaming: false, lastActivityAt: failedAt }), null)
+})
+
+test('only the latest unresolved failure remains prominent while streaming', () => {
+  const first = { id: 'read-1', name: 'read', status: 'error', updatedAt: '2026-07-20T10:00:09.000Z' }
+  const latest = { id: 'read-2', name: 'read', status: 'error', updatedAt: '2026-07-20T10:00:10.000Z' }
+  assert.equal(latestUnrecoveredToolError([first, latest], {
+    streaming: true,
+    lastActivityAt: '2026-07-20T10:00:10.000Z',
+  }), latest)
 })
 
 test('chat activity formats short and long elapsed time', () => {

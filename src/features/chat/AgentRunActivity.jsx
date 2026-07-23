@@ -9,7 +9,7 @@ import {
 } from 'lucide-react'
 import { useI18n } from '../../app/use-i18n.js'
 import { formatTokenCount } from '../../lib/format.js'
-import { deriveRunActivity, formatRunDuration, groupToolCalls, runDurationMs } from './run-activity.js'
+import { deriveRunActivity, formatRunDuration, groupToolCalls, latestUnrecoveredToolError, runDurationMs } from './run-activity.js'
 
 const EMPTY_LIST = []
 
@@ -56,6 +56,13 @@ function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, compaction, err
   const completedCount = tools.filter((tool) => tool.status === 'done').length
   const runningCount = groups.running.length
   const errorCount = groups.errors.length
+  const latestVisibleError = latestUnrecoveredToolError(tools, { streaming, lastActivityAt })
+  const prominentErrors = activity.stage === 'failed'
+    ? groups.errors.slice(-1)
+    : latestVisibleError
+      ? [latestVisibleError]
+      : []
+  const prominentErrorCount = activity.stage === 'failed' ? errorCount : prominentErrors.length
   const toolLabel = (name) => t(TOOL_ACTIVITY_LABELS[name] || name || '使用工具')
   const stageLabel = ({ stage, activeTool }) => ({
     thinking: t('正在理解任务'),
@@ -76,7 +83,7 @@ function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, compaction, err
   const summary = [
     completedCount ? t('已完成 {count} 项操作', { count: completedCount }) : '',
     runningCount ? t('{count} 项运行中', { count: runningCount }) : '',
-    errorCount ? t('{count} 项失败', { count: errorCount }) : '',
+    prominentErrorCount ? t('{count} 项失败', { count: prominentErrorCount }) : '',
   ].filter(Boolean).join(' · ')
   const inactivity = activity.inactiveMs >= 10_000
     ? t('{count} 秒无新进度', { count: Math.floor(activity.inactiveMs / 1000) })
@@ -108,7 +115,7 @@ function AgentRunActivity({ streaming, text, tools = EMPTY_LIST, compaction, err
       ]
     : [
         ...groups.running.map((tool) => ({ ...tool, count: 1 })),
-        ...groups.errors.map((tool) => ({ ...tool, count: 1 })),
+        ...prominentErrors.map((tool) => ({ ...tool, count: 1 })),
       ]
   const expandable = !compact && tools.length > 0
 

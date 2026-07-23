@@ -43,6 +43,22 @@ export function deriveRunActivity({ streaming, text, tools = [], compaction, err
   return { stage: 'thinking', inactiveMs, activeTool: null }
 }
 
+export function latestUnrecoveredToolError(tools = [], { streaming = true, lastActivityAt } = {}) {
+  if (!streaming) return null
+  let errorIndex = -1
+  for (let index = tools.length - 1; index >= 0; index -= 1) {
+    if (tools[index]?.status === 'error') { errorIndex = index; break }
+  }
+  if (errorIndex < 0) return null
+
+  const error = tools[errorIndex]
+  const hasLaterToolProgress = tools.slice(errorIndex + 1).some((tool) => tool?.status !== 'error')
+  const errorAt = timestamp(error.finishedAt || error.updatedAt || error.startedAt)
+  const activityAt = timestamp(lastActivityAt)
+  if (hasLaterToolProgress || (errorAt && activityAt > errorAt)) return null
+  return error
+}
+
 export function groupToolCalls(tools = []) {
   const running = []
   const errors = []
