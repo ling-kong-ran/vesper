@@ -16,7 +16,6 @@ import {
   FolderOpen,
   Gauge,
   Link2,
-  ListChecks,
   Menu,
   MessageSquare,
   Monitor,
@@ -374,7 +373,7 @@ function App() {
           </div>
         </main>
       </div>
-      <StatusBar page={page} pluginStats={pluginStats} />
+      <StatusBar page={page} pluginStats={pluginStats} onOpenMemory={() => navigate('memory')} />
       {toast && <Toast message={toast.message} tone={toast.tone} />}
       <AppDialog dialog={appDialog.dialog} onClose={appDialog.close} onFinish={appDialog.finish} />
       {paletteOpen && <CommandPalette navigation={navigation} onClose={() => setPaletteOpen(false)} onNavigate={navigate} onOpenSession={(id) => { requestSessionSelection(id); navigate('chat') }} onNewChat={() => { navigate('chat'); requestAnimationFrame(() => requestAnimationFrame(invokePrimaryAction)) }} />}
@@ -383,10 +382,11 @@ function App() {
   )
 }
 
-function StatusBar({ page, pluginStats }) {
+function StatusBar({ page, pluginStats, onOpenMemory }) {
   const { t, language } = useI18n()
   const [usage, setUsage] = useState(null)
   const [modelLabel, setModelLabel] = useState('')
+  const [memoryDraftCount, setMemoryDraftCount] = useState(0)
   const modelRequest = useRef(0)
 
   const refreshUsage = useCallback(async () => {
@@ -436,6 +436,26 @@ function StatusBar({ page, pluginStats }) {
     }
   }, [refreshModel])
 
+  const refreshMemoryDrafts = useCallback(async () => {
+    try {
+      const result = await apiJson('/api/memory/candidates?limit=1')
+      setMemoryDraftCount(Number(result.count) || 0)
+    } catch {}
+  }, [])
+
+  useEffect(() => {
+    void refreshMemoryDrafts()
+    const timer = window.setInterval(refreshMemoryDrafts, 15_000)
+    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void refreshMemoryDrafts() }
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    window.addEventListener(MEMORY_CANDIDATES_CHANGED_EVENT, refreshMemoryDrafts)
+    return () => {
+      window.clearInterval(timer)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      window.removeEventListener(MEMORY_CANDIDATES_CHANGED_EVENT, refreshMemoryDrafts)
+    }
+  }, [refreshMemoryDrafts])
+
   const usageTitle = usage
     ? t('输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {cacheRead}', {
         input: usage.input.toLocaleString(language),
@@ -447,11 +467,14 @@ function StatusBar({ page, pluginStats }) {
 
   return <footer className="status-bar">
     <span className="status-model"><Bot size={12} />{modelLabel || t('未配置模型')}</span>
-    <span className="status-usage">{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page)
-      ? <>{t('原生运行时')} <em>{t('已接入')}</em></>
-      : page === 'plugins'
-        ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' })
-        : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</span>
+    <div className="status-trailing">
+      {memoryDraftCount > 0 && <button className="status-memory-drafts" title={t('{count} 份星忆草稿，可稍后处理', { count: memoryDraftCount })} onClick={onOpenMemory}><span>✦</span>{t('{count} 份星忆草稿', { count: memoryDraftCount })}</button>}
+      <span className="status-usage">{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page)
+        ? <>{t('原生运行时')} <em>{t('已接入')}</em></>
+        : page === 'plugins'
+          ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' })
+          : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</span>
+    </div>
   </footer>
 }
 
@@ -465,7 +488,6 @@ function Sidebar({ page, navigation, navigate, open, onClose, collapsed, onToggl
   const [sessions, setSessions] = useState([])
   const [historyExpanded, setHistoryExpanded] = useState(true)
   const [activeSessionId, setActiveSessionId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
-  const [memoryCandidateCount, setMemoryCandidateCount] = useState(0)
   const active = page === 'workflowCreate' ? 'workflows' : page === 'chatHistory' ? 'chat' : page
 
   const refreshSessions = useCallback(async () => {
@@ -492,26 +514,6 @@ function Sidebar({ page, navigation, navigate, open, onClose, collapsed, onToggl
       window.removeEventListener(ACTIVE_SESSION_CHANGED_EVENT, syncActive)
     }
   }, [refreshSessions])
-
-  const refreshMemoryCandidates = useCallback(async () => {
-    try {
-      const result = await apiJson('/api/memory/candidates?limit=1')
-      setMemoryCandidateCount(Number(result.count) || 0)
-    } catch {}
-  }, [])
-
-  useEffect(() => {
-    void refreshMemoryCandidates()
-    const timer = window.setInterval(refreshMemoryCandidates, 15_000)
-    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void refreshMemoryCandidates() }
-    document.addEventListener('visibilitychange', refreshWhenVisible)
-    window.addEventListener(MEMORY_CANDIDATES_CHANGED_EVENT, refreshMemoryCandidates)
-    return () => {
-      window.clearInterval(timer)
-      document.removeEventListener('visibilitychange', refreshWhenVisible)
-      window.removeEventListener(MEMORY_CANDIDATES_CHANGED_EVENT, refreshMemoryCandidates)
-    }
-  }, [refreshMemoryCandidates])
 
   const openRecentSession = (id) => {
     setActiveSessionId(id)
@@ -545,7 +547,6 @@ function Sidebar({ page, navigation, navigate, open, onClose, collapsed, onToggl
           </section>
         </div>
         <div className="mt-auto grid gap-2">
-          {memoryCandidateCount > 0 && <button className="memory-inbox-button" title={t('{count} 条候选记忆待处理，不影响当前会话', { count: memoryCandidateCount })} onClick={() => navigate('memory')}><ListChecks size={16} /><span><strong>{t('记忆待办')}</strong><small>{t('有空时处理')}</small></span><em>{memoryCandidateCount > 99 ? '99+' : memoryCandidateCount}</em></button>}
           <SidebarUpdateStatus update={update} collapsed={collapsed} onOpen={onOpenUpdates} />
           <button className="sidebar-collapse !mt-0" title={t(collapsed ? '展开侧栏' : '收起侧栏')} aria-label={t(collapsed ? '展开侧栏' : '收起侧栏')} onClick={onToggleCollapse}>{collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}<span>{t(collapsed ? '展开侧栏' : '收起侧栏')}</span></button>
         </div>

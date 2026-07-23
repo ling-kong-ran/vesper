@@ -381,16 +381,14 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .nav-list .nav-history-item.active-session { box-shadow: inset 2px 0 var(--brand-blue); }
 .nav-history-empty { padding: 8px; color: var(--muted); font-size: 11px; }
 .nav-scrim { display: none; }
-.memory-inbox-button { display: grid; width: 100%; min-height: 46px; grid-template-columns: auto minmax(0,1fr) auto; align-items: center; gap: 9px; border: 1px solid var(--stroke); border-radius: var(--r-sm); background: var(--surface-subtle); padding: 6px 8px; color: var(--text-secondary); text-align: left; cursor: pointer; transition: var(--d1) var(--ease-out); }
-.memory-inbox-button:hover { border-color: var(--accent-border); background: var(--star-soft); color: var(--text); }
-.memory-inbox-button > span { display: flex; min-width: 0; flex-direction: column; gap: 1px; }
-.memory-inbox-button strong { font-size: 12px; font-weight: 650; }
-.memory-inbox-button small { color: var(--muted); font-size: 10px !important; }
-.memory-inbox-button em { display: grid; min-width: 22px; height: 20px; place-items: center; border-radius: var(--r-pill); background: var(--star-strong); color: var(--on-accent); padding: 0 6px; font-size: 10px; font-style: normal; font-weight: 700; }
 .sidebar-collapse { display: flex; height: 34px; flex: none; align-items: center; gap: 8px; margin-top: auto; border: 1px solid var(--stroke); border-radius: var(--r-sm); background: transparent; padding: 0 10px; color: var(--muted); font-size: 12px; cursor: pointer; transition: var(--d1) var(--ease-out); }
 .sidebar-collapse:hover { background: var(--surface-hover); color: var(--text); }
 .status-bar { display: flex; height: 28px; flex: none; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--stroke); background: var(--sidebar-bg); padding: 0 14px; color: var(--muted); font-size: 11px; backdrop-filter: blur(20px); }
 .status-bar .status-model { display: flex; min-width: 0; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-trailing { display: flex; min-width: 0; align-items: center; gap: 12px; }
+.status-memory-drafts { display: inline-flex; height: 21px; min-height: 21px; align-items: center; gap: 5px; border: 0; border-radius: var(--r-pill); background: transparent; padding: 0 6px; color: var(--muted); font-size: 10px; cursor: pointer; transition: var(--d1) var(--ease-out); }
+.status-memory-drafts:hover { background: var(--star-soft); color: var(--star-strong); }
+.status-memory-drafts > span { color: var(--star); font-size: 9px; }
 .status-bar .status-usage { display: flex; flex: none; align-items: center; gap: 6px; }
 .status-bar em { color: var(--star-strong); font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; font-style: normal; font-weight: 700; }
 .status-bar em::before { content: '✦'; margin-right: 4px; color: var(--star); font-size: 9px; }
@@ -406,9 +404,6 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
   .sidebar.collapsed .nav-list button { justify-content: center; gap: 0; padding: 0; }
   .sidebar.collapsed .nav-list button span { display: none; }
   .sidebar.collapsed .nav-list button.active::before { left: 0; }
-  .sidebar.collapsed .memory-inbox-button { position: relative; display: flex; min-height: 38px; justify-content: center; padding: 0; }
-  .sidebar.collapsed .memory-inbox-button > span { display: none; }
-  .sidebar.collapsed .memory-inbox-button em { position: absolute; top: -5px; right: -5px; min-width: 17px; height: 17px; padding: 0 4px; font-size: 9px; }
   .sidebar.collapsed .sidebar-collapse { justify-content: center; gap: 0; padding: 0; }
   .sidebar.collapsed .sidebar-collapse span { display: none; }
 }

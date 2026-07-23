@@ -196,8 +196,8 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
           <div className="galaxy-legend">{Object.entries(TYPE_LABELS).map(([type, label]) => <span key={type}><i className={`g-dot g-${type}`} />{t(label)}</span>)}</div>
         </Panel>
         <Panel className="memory-candidates-panel">
-          <SectionTitle title={`${t('记忆待办')} · ${data.candidates?.length || 0}`} />
-          <p className="muted-copy">{t('候选只会在后台进入这里，不会暂停、阻止或打断当前会话。你可以有空时集中处理。')}</p>
+          <SectionTitle title={`${t('星忆草稿')} · ${data.candidates?.length || 0}`} />
+          <p className="muted-copy">{t('自动提取的内容会安静地留在这里，不会打断会话。你可以稍后决定是否点亮。')}</p>
           <div className="memory-candidate-list">
             {(data.candidates || []).map((candidate) => <div className="memory-candidate" key={candidate.id}>
               <strong>{candidate.title}</strong>
