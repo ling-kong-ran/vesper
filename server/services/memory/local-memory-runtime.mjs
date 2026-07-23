@@ -582,6 +582,12 @@ export class LocalMemoryRuntime {
     return result.changes > 0 ? this.getCandidate(id) : null
   }
 
+  rejectAllCandidates() {
+    const now = new Date().toISOString()
+    const result = this.requireDb().prepare("UPDATE memory_candidates SET status = 'rejected', resolved_at = ? WHERE status = 'pending'").run(now)
+    return { rejected: result.changes }
+  }
+
   updateMemory(id, input = {}) {
     const current = this.getMemory(id)
     if (!current || current.status === 'deleted') return null

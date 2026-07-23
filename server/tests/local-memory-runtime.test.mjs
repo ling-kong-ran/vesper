@@ -153,6 +153,13 @@ test('accepting and rejecting candidates is explicit and auditable', async () =>
     assert.equal(memory.candidateInbox().count, 0)
     assert.equal(memory.search('pnpm 包管理器', { cwd })[0].id, resolution.memory.id)
     assert.equal(memory.search('yarn', { cwd }).length, 0)
+
+    const laterOne = memory.propose({ spaceId, title: '草稿一', content: '稍后处理一。', sourceType: 'agent' })
+    const laterTwo = memory.propose({ spaceId: 'global', title: '草稿二', content: '稍后处理二。', sourceType: 'conversation' })
+    assert.deepEqual(memory.rejectAllCandidates(), { rejected: 2 })
+    assert.equal(memory.getCandidate(laterOne.id).status, 'rejected')
+    assert.equal(memory.getCandidate(laterTwo.id).status, 'rejected')
+    assert.equal(memory.candidateInbox().count, 0)
   })
 })
 
@@ -370,20 +377,25 @@ test('memory candidate API exposes a lightweight inbox plus explicit accept and 
     getMemoryCandidateInbox(input) { calls.push(['inbox', input.limit]); return { count: 3, candidates: [{ id: 'candidate-1' }] } },
     acceptMemoryCandidate(id) { calls.push(['accept', id]); return { memory: { id: 'memory-1' } } },
     rejectMemoryCandidate(id) { calls.push(['reject', id]); return { id, status: 'rejected' } },
+    rejectAllMemoryCandidates() { calls.push(['reject-all']); return { rejected: 3 } },
   }
   const handler = createApiHandler(runtime)
   const inboxResponse = response()
   const acceptResponse = response()
   const rejectResponse = response()
+  const rejectAllResponse = response()
 
   assert.equal(await handler(request('GET'), inboxResponse, new URL('http://localhost/api/memory/candidates?limit=1')), true)
   assert.equal(await handler(request('POST', {}), acceptResponse, new URL('http://localhost/api/memory/candidates/candidate%201/accept')), true)
   assert.equal(await handler(request('POST', {}), rejectResponse, new URL('http://localhost/api/memory/candidates/candidate%202/reject')), true)
+  assert.equal(await handler(request('POST', {}), rejectAllResponse, new URL('http://localhost/api/memory/candidates/reject-all')), true)
   assert.equal(inboxResponse.status, 200)
   assert.deepEqual(JSON.parse(inboxResponse.body), { count: 3, candidates: [{ id: 'candidate-1' }] })
   assert.equal(acceptResponse.status, 200)
   assert.equal(rejectResponse.status, 200)
-  assert.deepEqual(calls, [['inbox', '1'], ['accept', 'candidate 1'], ['reject', 'candidate 2']])
+  assert.equal(rejectAllResponse.status, 200)
+  assert.deepEqual(JSON.parse(rejectAllResponse.body), { rejected: 3 })
+  assert.deepEqual(calls, [['inbox', '1'], ['accept', 'candidate 1'], ['reject', 'candidate 2'], ['reject-all']])
 })
 
 test('memory tools migrate once and can still be disabled in plugin settings', async () => {

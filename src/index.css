@@ -385,10 +385,6 @@ h1, h2, h3, strong { overflow-wrap: anywhere; }
 .sidebar-collapse:hover { background: var(--surface-hover); color: var(--text); }
 .status-bar { display: flex; height: 28px; flex: none; align-items: center; justify-content: space-between; gap: 12px; border-top: 1px solid var(--stroke); background: var(--sidebar-bg); padding: 0 14px; color: var(--muted); font-size: 11px; backdrop-filter: blur(20px); }
 .status-bar .status-model { display: flex; min-width: 0; align-items: center; gap: 6px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.status-trailing { display: flex; min-width: 0; align-items: center; gap: 12px; }
-.status-memory-drafts { display: inline-flex; height: 21px; min-height: 21px; align-items: center; gap: 5px; border: 0; border-radius: var(--r-pill); background: transparent; padding: 0 6px; color: var(--muted); font-size: 10px; cursor: pointer; transition: var(--d1) var(--ease-out); }
-.status-memory-drafts:hover { background: var(--star-soft); color: var(--star-strong); }
-.status-memory-drafts > span { color: var(--star); font-size: 9px; }
 .status-bar .status-usage { display: flex; flex: none; align-items: center; gap: 6px; }
 .status-bar em { color: var(--star-strong); font-family: ui-monospace, SFMono-Regular, Consolas, 'Liberation Mono', monospace; font-style: normal; font-weight: 700; }
 .status-bar em::before { content: '✦'; margin-right: 4px; color: var(--star); font-size: 9px; }

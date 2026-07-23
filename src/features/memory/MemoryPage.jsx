@@ -5,7 +5,6 @@ import { useI18n } from '../../app/use-i18n.js'
 import { StarOrbit } from '../../components/StarOrbit.jsx'
 import { apiJson } from '../../lib/api.js'
 import { usePagePrimaryAction } from '../../hooks/usePagePrimaryAction.js'
-import { announceMemoryCandidatesChanged } from './events.js'
 
 const GALAXY_VIEW = { width: 600, height: 420, cx: 300, cy: 206 }
 const MAX_STARS = 24
@@ -165,7 +164,18 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
     try {
       await apiJson(`/api/memory/candidates/${encodeURIComponent(candidate.id)}/${action}`, { method: 'POST', body: '{}' })
       notify(t(action === 'accept' ? '候选记忆已确认' : '候选记忆已忽略'))
-      announceMemoryCandidatesChanged()
+      await load(spaceId)
+    } catch (candidateError) { setError(candidateError.message) }
+    finally { setResolvingCandidateId('') }
+  }
+
+  const ignoreAllCandidates = async () => {
+    if (resolvingCandidateId || !data.candidates?.length) return
+    setResolvingCandidateId('__all__')
+    setError('')
+    try {
+      const result = await apiJson('/api/memory/candidates/reject-all', { method: 'POST', body: '{}' })
+      notify(t('已忽略 {count} 份星忆草稿', { count: result.rejected || 0 }))
       await load(spaceId)
     } catch (candidateError) { setError(candidateError.message) }
     finally { setResolvingCandidateId('') }
@@ -196,7 +206,7 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
           <div className="galaxy-legend">{Object.entries(TYPE_LABELS).map(([type, label]) => <span key={type}><i className={`g-dot g-${type}`} />{t(label)}</span>)}</div>
         </Panel>
         <Panel className="memory-candidates-panel">
-          <SectionTitle title={`${t('星忆草稿')} · ${data.candidates?.length || 0}`} />
+          <div className="card-head"><SectionTitle title={`${t('星忆草稿')} · ${data.candidates?.length || 0}`} />{Boolean(data.candidates?.length) && <button className="button secondary tiny" disabled={Boolean(resolvingCandidateId)} onClick={ignoreAllCandidates}><X size={12} />{t('全部忽略')}</button>}</div>
           <p className="muted-copy">{t('自动提取的内容会安静地留在这里，不会打断会话。你可以稍后决定是否点亮。')}</p>
           <div className="memory-candidate-list">
             {(data.candidates || []).map((candidate) => <div className="memory-candidate" key={candidate.id}>

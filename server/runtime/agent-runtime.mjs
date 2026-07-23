@@ -1771,6 +1771,10 @@ export class AgentRuntimeService {
     return this.memory.rejectCandidate(id)
   }
 
+  rejectAllMemoryCandidates() {
+    return this.memory.rejectAllCandidates()
+  }
+
   async abortSession(id) {
     const value = this.sessions.get(id)
     if (!value) return false

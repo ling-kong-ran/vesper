@@ -172,6 +172,10 @@ export function createApiHandler(runtime, { updates } = {}) {
         else json(res, 200, { deleted: true })
         return true
       }
+      if (req.method === 'POST' && url.pathname === '/api/memory/candidates/reject-all') {
+        json(res, 200, runtime.rejectAllMemoryCandidates())
+        return true
+      }
       const memoryCandidateActionMatch = url.pathname.match(/^\/api\/memory\/candidates\/([^/]+)\/(accept|reject)$/)
       if (req.method === 'POST' && memoryCandidateActionMatch) {
         const id = decodeURIComponent(memoryCandidateActionMatch[1])

@@ -66,7 +66,6 @@ import { createToolUpdateScheduler, createTypewriterDisplay } from './lib/stream
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
 import { useAppUpdate } from './features/updates/useAppUpdate.js'
-import { MEMORY_CANDIDATES_CHANGED_EVENT } from './features/memory/events.js'
 
 const PluginsPage = lazy(() => import('./features/plugins/PluginsPage.jsx').then((module) => ({ default: module.PluginsPage })))
 const ChannelsPage = lazy(() => import('./features/channels/ChannelsPage.jsx').then((module) => ({ default: module.ChannelsPage })))
@@ -373,7 +372,7 @@ function App() {
           </div>
         </main>
       </div>
-      <StatusBar page={page} pluginStats={pluginStats} onOpenMemory={() => navigate('memory')} />
+      <StatusBar page={page} pluginStats={pluginStats} />
       {toast && <Toast message={toast.message} tone={toast.tone} />}
       <AppDialog dialog={appDialog.dialog} onClose={appDialog.close} onFinish={appDialog.finish} />
       {paletteOpen && <CommandPalette navigation={navigation} onClose={() => setPaletteOpen(false)} onNavigate={navigate} onOpenSession={(id) => { requestSessionSelection(id); navigate('chat') }} onNewChat={() => { navigate('chat'); requestAnimationFrame(() => requestAnimationFrame(invokePrimaryAction)) }} />}
@@ -382,11 +381,10 @@ function App() {
   )
 }
 
-function StatusBar({ page, pluginStats, onOpenMemory }) {
+function StatusBar({ page, pluginStats }) {
   const { t, language } = useI18n()
   const [usage, setUsage] = useState(null)
   const [modelLabel, setModelLabel] = useState('')
-  const [memoryDraftCount, setMemoryDraftCount] = useState(0)
   const modelRequest = useRef(0)
 
   const refreshUsage = useCallback(async () => {
@@ -436,26 +434,6 @@ function StatusBar({ page, pluginStats, onOpenMemory }) {
     }
   }, [refreshModel])
 
-  const refreshMemoryDrafts = useCallback(async () => {
-    try {
-      const result = await apiJson('/api/memory/candidates?limit=1')
-      setMemoryDraftCount(Number(result.count) || 0)
-    } catch {}
-  }, [])
-
-  useEffect(() => {
-    void refreshMemoryDrafts()
-    const timer = window.setInterval(refreshMemoryDrafts, 15_000)
-    const refreshWhenVisible = () => { if (document.visibilityState === 'visible') void refreshMemoryDrafts() }
-    document.addEventListener('visibilitychange', refreshWhenVisible)
-    window.addEventListener(MEMORY_CANDIDATES_CHANGED_EVENT, refreshMemoryDrafts)
-    return () => {
-      window.clearInterval(timer)
-      document.removeEventListener('visibilitychange', refreshWhenVisible)
-      window.removeEventListener(MEMORY_CANDIDATES_CHANGED_EVENT, refreshMemoryDrafts)
-    }
-  }, [refreshMemoryDrafts])
-
   const usageTitle = usage
     ? t('输入 {input} · 输出 {output} · 推理 {reasoning} · 缓存读取 {cacheRead}', {
         input: usage.input.toLocaleString(language),
@@ -467,14 +445,11 @@ function StatusBar({ page, pluginStats, onOpenMemory }) {
 
   return <footer className="status-bar">
     <span className="status-model"><Bot size={12} />{modelLabel || t('未配置模型')}</span>
-    <div className="status-trailing">
-      {memoryDraftCount > 0 && <button className="status-memory-drafts" title={t('{count} 份星忆草稿，可稍后处理', { count: memoryDraftCount })} onClick={onOpenMemory}><span>✦</span>{t('{count} 份星忆草稿', { count: memoryDraftCount })}</button>}
-      <span className="status-usage">{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page)
-        ? <>{t('原生运行时')} <em>{t('已接入')}</em></>
-        : page === 'plugins'
-          ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' })
-          : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</span>
-    </div>
+    <span className="status-usage">{['skills', 'mcp', 'workflows', 'workflowCreate'].includes(page)
+      ? <>{t('原生运行时')} <em>{t('已接入')}</em></>
+      : page === 'plugins'
+        ? t('已启用 {enabled} / {total}', { enabled: pluginStats?.enabled ?? '—', total: pluginStats?.total ?? '—' })
+        : <>{t('今日 tokens')} <em title={usageTitle}>{usage ? formatTokenCount(usage.totalTokens) : '—'}</em></>}</span>
   </footer>
 }
 
