@@ -1,4 +1,5 @@
-import { isAbsolute, relative, resolve, sep } from 'node:path'
+import { existsSync, realpathSync } from 'node:fs'
+import { dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { TOOL_CATALOG } from '../tools/registry.mjs'
 
@@ -33,21 +34,42 @@ function safeArgs(value, depth = 0, key = '') {
   return value
 }
 
+function canonicalPath(input) {
+  let target = resolve(input)
+  const suffix = []
+  while (!existsSync(target)) {
+    const parent = dirname(target)
+    if (parent === target) break
+    suffix.unshift(target.slice(parent.length).replace(/^[/\\]+/, ''))
+    target = parent
+  }
+  try { target = realpathSync.native(target) } catch {}
+  return suffix.reduce((current, part) => join(current, part), target)
+}
+
 function pathOutsideWorkspace(cwd, input) {
   const rawPath = String(input || '').trim()
   if (!rawPath) return false
-  const root = resolve(cwd)
-  const target = isAbsolute(rawPath) ? resolve(rawPath) : resolve(root, rawPath)
+  const root = canonicalPath(cwd)
+  const unresolved = isAbsolute(rawPath) ? resolve(rawPath) : resolve(root, rawPath)
+  const target = canonicalPath(unresolved)
   const result = relative(root, target)
   return result === '..' || result.startsWith(`..${sep}`) || isAbsolute(result)
 }
 
-export function permissionRequirement({ mode, cwd, toolName, args, toolRisk }) {
-  if (INTERNAL_SAFE_TOOLS.has(toolName) || mode === 'ignore') return null
+export function permissionRequirement({ mode, executionMode, cwd, toolName, args, toolRisk }) {
+  if (executionMode === 'full-access') return null
+  if (toolName === 'bash' && args?.sandbox_permissions === 'require_escalated') {
+    return { risk: '高风险', reason: String(args?.justification || 'Shell 命令请求在工作区沙箱之外执行。') }
+  }
+  if (INTERNAL_SAFE_TOOLS.has(toolName)) return null
   const risk = toolRisk || TOOL_RISKS.get(toolName) || '高风险'
   if (['read', 'ls', 'grep', 'find', 'edit', 'write'].includes(toolName) && pathOutsideWorkspace(cwd, args?.path || args?.file_path)) {
     return { risk: '高风险', reason: `${toolName} 将访问当前工作目录之外的文件。` }
   }
+  // Legacy "ignore" may suppress application-level prompts, but it must not
+  // disable the workspace filesystem boundary. Only full-access can do that.
+  if (mode === 'ignore') return null
   if (mode === 'ask' && SENSITIVE_RISKS.has(risk)) {
     return { risk, reason: `${toolName} 属于${risk}工具，需要确认后执行。` }
   }
@@ -62,8 +84,9 @@ export function permissionRequirement({ mode, cwd, toolName, args, toolRisk }) {
 }
 
 export class SessionPermissionService {
-  constructor({ getMode, getToolRisk, timeoutMs = 10 * 60_000 } = {}) {
+  constructor({ getMode, getExecutionMode, getToolRisk, timeoutMs = 10 * 60_000 } = {}) {
     this.getMode = getMode || (() => DEFAULT_PERMISSION_MODE)
+    this.getExecutionMode = getExecutionMode || (() => 'workspace')
     this.getToolRisk = getToolRisk || (() => null)
     this.timeoutMs = timeoutMs
     this.pending = new Map()
@@ -117,7 +140,8 @@ export class SessionPermissionService {
 
   async authorize({ sessionId, cwd, toolName, toolCallId, args, signal }) {
     const mode = PERMISSION_MODES.has(this.getMode(sessionId)) ? this.getMode(sessionId) : DEFAULT_PERMISSION_MODE
-    const requirement = permissionRequirement({ mode, cwd, toolName, args, toolRisk: this.getToolRisk(toolName) })
+    const executionMode = this.getExecutionMode(sessionId)
+    const requirement = permissionRequirement({ mode, executionMode, cwd, toolName, args, toolRisk: this.getToolRisk(toolName) })
     if (!requirement) return undefined
     const approval = await this.requestApproval({ sessionId, toolName, toolCallId, args, mode, ...requirement, signal })
     if (approval.approved) return undefined

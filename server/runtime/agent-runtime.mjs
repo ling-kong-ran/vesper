@@ -21,7 +21,7 @@ import { ProviderModelDiscoveryService } from '../services/provider-model-discov
 import { ScheduleService } from '../services/schedule-service.mjs'
 import { WorkflowService } from '../services/workflow-service.mjs'
 import { SkillsService } from '../services/skills-service.mjs'
-import { DEFAULT_PERMISSION_MODE, PERMISSION_MODES, SessionPermissionService } from '../services/session-permission-service.mjs'
+import { PERMISSION_MODES, SessionPermissionService } from '../services/session-permission-service.mjs'
 import { ToolPluginService } from '../services/tool-plugin-service.mjs'
 import { WebSearchService } from '../services/web-search-service.mjs'
 import { extractConversationMemories } from '../services/memory/conversation-memory.mjs'
@@ -31,12 +31,14 @@ import { MultiAgentService, MULTI_AGENT_TOOL_NAMES } from '../services/multi-age
 import { GoalService, goalBudgetPrompt, goalContinuationPrompt, isGoalContinuationMessage } from '../services/goal-service.mjs'
 import { TaskListService } from '../services/task-list-service.mjs'
 import { BrowserAutomationService } from '../services/browser-automation-service.mjs'
+import { LocalSandboxService } from '../services/local-sandbox-service.mjs'
 import { assetMessageAttachment, attachGeneratedAssets } from '../services/session-assets.mjs'
 import { forceNextToolCall, isVisualGenerationRequest } from '../services/visual-tool-routing.mjs'
 import { createAppTools, createMultiAgentTools, TOOL_PRESETS, toolsFromConfig } from '../tools/registry.mjs'
 import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
 import { createTaskListTools, TASK_LIST_TOOL_NAMES } from '../tools/app/task-list.mjs'
-import { createWindowsUtf8BashTool } from '../tools/windows-utf8-bash.mjs'
+import { createVesperBashTool } from '../tools/sandboxed-bash.mjs'
+import { DEFAULT_EXECUTION_MODE, EXECUTION_MODES, filterToolsForExecutionMode, migrateLegacyExecutionMode, normalizeExecutionMode, permissionModeForExecutionMode } from '../security/execution-mode.mjs'
 import { createStreamingSecretRedactor, installSessionPersistenceRedaction, redactPersistedSessionFiles, redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
 import { applyVesperSystemPrompt, vesperPromptExtension } from '../prompts/vesper-system-prompt.mjs'
 
@@ -403,8 +405,10 @@ export class AgentRuntimeService {
     this.modelRuntime = null
     this.settingsManager = null
     this.sessionMeta = {}
+    this.sandbox = new LocalSandboxService({ dataDir })
     this.permissions = new SessionPermissionService({
-      getMode: (sessionId) => this.sessionMeta[sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
+      getMode: (sessionId) => this.sessionMeta[sessionId]?.permissionMode || permissionModeForExecutionMode(this.getSessionExecutionMode(sessionId)),
+      getExecutionMode: (sessionId) => this.getSessionExecutionMode(sessionId),
       getToolRisk: (toolName) => this.mcp.getToolRisk(toolName),
     })
     this.multiAgents = new MultiAgentService({
@@ -426,6 +430,7 @@ export class AgentRuntimeService {
     await redactPersistedSessionFiles(this.sessionDir)
     await mkdir(this.assetsDir, { recursive: true })
     this.sessionMeta = await readJson(this.sessionMetaPath, {})
+    await this.migrateSessionExecutionModes()
     this.usageLedger = await readJson(this.usagePath, { days: {} })
     this.usageLedger.days ||= {}
     this.assetIndex = await readJson(this.assetIndexPath, { assets: [] })
@@ -481,14 +486,36 @@ export class AgentRuntimeService {
     try { send?.('task_list_update', { sessionId, taskList: taskList || this.taskLists.get(sessionId) }) } catch {}
   }
 
+  getSessionExecutionMode(sessionId) {
+    return normalizeExecutionMode(this.sessionMeta[sessionId]?.executionMode, DEFAULT_EXECUTION_MODE)
+  }
+
+  async migrateSessionExecutionModes() {
+    const sessions = await SessionManager.list(this.cwd, this.sessionDir)
+    let changed = false
+    for (const session of sessions) {
+      const current = this.sessionMeta[session.id] || {}
+      if (EXECUTION_MODES.has(current.executionMode)) continue
+      const executionMode = migrateLegacyExecutionMode(current)
+      this.sessionMeta[session.id] = {
+        ...current,
+        executionMode,
+        permissionMode: permissionModeForExecutionMode(executionMode),
+      }
+      changed = true
+    }
+    if (changed) await this.saveSessionMeta()
+  }
+
   syncGoalTools(value, goal) {
     if (!value?.session) return
-    const names = [...new Set([
+    const mode = this.getSessionExecutionMode(value.session.sessionId)
+    const names = filterToolsForExecutionMode([
       ...(value.baseToolNames || []),
       ...TASK_LIST_TOOL_NAMES,
       ...MULTI_AGENT_TOOL_NAMES,
       ...(goal?.status === 'active' ? GOAL_TOOL_NAMES : []),
-    ])]
+    ], mode, (toolName) => this.mcp.getToolRisk(toolName))
     value.session.setActiveToolsByName(names)
   }
 
@@ -775,7 +802,8 @@ export class AgentRuntimeService {
         created: session.created.toISOString(),
         modified: session.modified.toISOString(),
         streaming: Boolean(active?.session.isStreaming),
-        permissionMode: this.sessionMeta[session.id]?.permissionMode || DEFAULT_PERMISSION_MODE,
+        permissionMode: this.sessionMeta[session.id]?.permissionMode || permissionModeForExecutionMode(this.getSessionExecutionMode(session.id)),
+        executionMode: this.getSessionExecutionMode(session.id),
         goal: this.goals.get(session.id),
         taskList: this.taskLists.get(session.id),
       }
@@ -793,7 +821,8 @@ export class AgentRuntimeService {
         created: value.created,
         modified: value.modified,
         streaming: Boolean(value.session.isStreaming),
-        permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
+        permissionMode: this.sessionMeta[id]?.permissionMode || permissionModeForExecutionMode(this.getSessionExecutionMode(id)),
+        executionMode: this.getSessionExecutionMode(id),
         goal: this.goals.get(id),
         taskList: this.taskLists.get(id),
       })
@@ -804,6 +833,12 @@ export class AgentRuntimeService {
   async createSession(name) {
     const resolvedName = cleanSessionTitle(name) || DEFAULT_SESSION_NAME
     const manager = SessionManager.create(this.cwd, this.sessionDir)
+    this.sessionMeta[manager.getSessionId()] = {
+      ...(this.sessionMeta[manager.getSessionId()] || {}),
+      executionMode: DEFAULT_EXECUTION_MODE,
+      permissionMode: permissionModeForExecutionMode(DEFAULT_EXECUTION_MODE),
+    }
+    await this.saveSessionMeta()
     const value = await this.createSessionRuntime(manager, resolvedName)
     value.session.setSessionName(resolvedName)
     await this.markSessionTitle(value.session.sessionId, resolvedName, resolvedName !== DEFAULT_SESSION_NAME)
@@ -815,7 +850,8 @@ export class AgentRuntimeService {
       cwd: value.cwd || this.cwd,
       created: new Date().toISOString(),
       modified: new Date().toISOString(),
-      permissionMode: this.sessionMeta[value.session.sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
+      permissionMode: this.sessionMeta[value.session.sessionId]?.permissionMode || permissionModeForExecutionMode(this.getSessionExecutionMode(value.session.sessionId)),
+      executionMode: this.getSessionExecutionMode(value.session.sessionId),
       goal: null,
       taskList: this.taskLists.get(value.session.sessionId),
       contextUsage: this.compactionAwareContextUsage(value.session),
@@ -1020,7 +1056,8 @@ export class AgentRuntimeService {
       finishedAt: live?.finishedAt || null,
       model: active?.session.model ? `${active.session.model.provider}/${active.session.model.id}` : '',
       cwd: active?.cwd || this.sessionMeta[id]?.cwd || this.cwd,
-      permissionMode: this.sessionMeta[id]?.permissionMode || DEFAULT_PERMISSION_MODE,
+      permissionMode: this.sessionMeta[id]?.permissionMode || permissionModeForExecutionMode(this.getSessionExecutionMode(id)),
+      executionMode: this.getSessionExecutionMode(id),
       goal: live?.goal ?? this.goals.get(id),
       taskList: live?.taskList ?? this.taskLists.get(id),
       contextUsage: this.compactionAwareContextUsage(active?.session, live?.compaction) || page.contextUsage,
@@ -1085,7 +1122,28 @@ export class AgentRuntimeService {
     this.sessionMeta[id] = { ...(this.sessionMeta[id] || {}), permissionMode }
     await this.saveSessionMeta()
     if (permissionMode !== 'ask') this.permissions.resolveSession(id, true, `权限模式已切换为${permissionMode === 'ignore' ? '忽略' : '自动'}。`)
-    return { id, permissionMode }
+    return { id, permissionMode, executionMode: this.getSessionExecutionMode(id) }
+  }
+
+  async setSessionExecutionMode(id, mode) {
+    const executionMode = normalizeExecutionMode(mode, '')
+    if (!executionMode) throw new Error('执行模式无效。')
+    if (!this.sessions.has(id) && !(await this.findSessionInfo(id))) return null
+    const permissionMode = permissionModeForExecutionMode(executionMode)
+    this.sessionMeta[id] = { ...(this.sessionMeta[id] || {}), executionMode, permissionMode }
+    await this.saveSessionMeta()
+    const active = this.sessions.get(id)
+    if (active) this.syncGoalTools(active, this.goals.get(id))
+    this.permissions.resolveSession(id, executionMode === 'full-access', executionMode === 'full-access' ? '已切换为完全访问。' : '执行模式已切换，请重新发起工具调用。')
+    return { id, executionMode, permissionMode }
+  }
+
+  getSandboxStatus() {
+    return this.sandbox.getStatus()
+  }
+
+  installLocalSandbox() {
+    return this.sandbox.install()
   }
 
   resolveToolApproval(sessionId, approvalId, approved) {
@@ -1193,7 +1251,11 @@ export class AgentRuntimeService {
       this.emitGoalUpdate(runtimeSession.sessionId, updatedGoal)
       await accounting
     }
-    const parentActiveToolNames = () => [...baseToolNames]
+    const parentActiveToolNames = () => filterToolsForExecutionMode(
+      baseToolNames,
+      this.getSessionExecutionMode(runtimeSessionId),
+      (toolName) => this.mcp.getToolRisk(toolName),
+    )
     const multiAgentRuntime = {
       spawn: (input) => {
         if (!runtimeSession?.model) throw new Error('当前会话没有可用模型，无法启动 Agent。')
@@ -1239,7 +1301,10 @@ export class AgentRuntimeService {
         },
       }),
       ...mcpTools,
-      ...(enabledTools.includes('bash') ? [createWindowsUtf8BashTool(effectiveCwd)].filter(Boolean) : []),
+      ...(enabledTools.includes('bash') ? [createVesperBashTool(effectiveCwd, {
+        sandboxService: this.sandbox,
+        getExecutionMode: () => this.getSessionExecutionMode(runtimeSessionId),
+      })] : []),
     ]
     const { session, modelFallbackMessage } = await createAgentSession({
       cwd: effectiveCwd,
@@ -1315,7 +1380,8 @@ export class AgentRuntimeService {
       model: `${session.model.provider}/${session.model.id}`,
       thinkingLevel: session.thinkingLevel,
       cwd: value.cwd,
-      permissionMode: this.sessionMeta[session.sessionId]?.permissionMode || DEFAULT_PERMISSION_MODE,
+      permissionMode: this.sessionMeta[session.sessionId]?.permissionMode || permissionModeForExecutionMode(this.getSessionExecutionMode(session.sessionId)),
+      executionMode: this.getSessionExecutionMode(session.sessionId),
       goal,
       taskList: live.taskList,
       contextUsage: live.contextUsage,
@@ -1855,6 +1921,7 @@ export class AgentRuntimeService {
     await this.browserAutomation.dispose()
     this.permissions.dispose()
     await this.disposeSessions()
+    await this.sandbox.dispose()
     await this.mcp.dispose()
     this.memory.dispose()
   }

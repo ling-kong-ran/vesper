@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict'
-import { resolve } from 'node:path'
+import { mkdtemp, mkdir, rm, symlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import test from 'node:test'
 import { createApiHandler } from '../http/api-handler.mjs'
 import { permissionRequirement, SessionPermissionService } from '../services/session-permission-service.mjs'
@@ -17,7 +19,27 @@ test('permission modes progress from ask to automatic to ignored checks', () => 
   assert.equal(permissionRequirement({ mode: 'auto', cwd, toolName: 'write', args: { path: 'README.md' } }), null)
   assert.match(permissionRequirement({ mode: 'auto', cwd, toolName: 'write', args: { path: outside } }).reason, /工作目录之外/)
   assert.match(permissionRequirement({ mode: 'auto', cwd, toolName: 'bash', args: { command: 'git reset --hard' } }).reason, /Shell/)
+  assert.match(permissionRequirement({ mode: 'ignore', executionMode: 'workspace', cwd, toolName: 'write', args: { path: outside } }).reason, /工作目录之外/)
   assert.equal(permissionRequirement({ mode: 'ignore', cwd, toolName: 'bash', args: { command: 'rm -rf /' } }), null)
+})
+
+test('workspace path checks resolve symbolic links before authorization', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-permission-path-'))
+  const workspace = join(directory, 'workspace')
+  const outside = join(directory, 'outside')
+  await mkdir(workspace)
+  await mkdir(outside)
+  await symlink(outside, join(workspace, 'linked-outside'), process.platform === 'win32' ? 'junction' : 'dir')
+  t.after(() => rm(directory, { recursive: true, force: true }))
+
+  const requirement = permissionRequirement({
+    mode: 'auto',
+    executionMode: 'workspace',
+    cwd: workspace,
+    toolName: 'write',
+    args: { path: join(workspace, 'linked-outside', 'escaped.txt') },
+  })
+  assert.match(requirement.reason, /工作目录之外/)
 })
 
 test('pending tool approval can be accepted or denied', async () => {

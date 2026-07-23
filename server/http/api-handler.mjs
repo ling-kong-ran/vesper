@@ -22,6 +22,14 @@ export function createApiHandler(runtime, { updates } = {}) {
         json(res, 200, await runtime.getConfig())
         return true
       }
+      if (req.method === 'GET' && url.pathname === '/api/sandbox/status') {
+        json(res, 200, await runtime.getSandboxStatus())
+        return true
+      }
+      if (req.method === 'POST' && url.pathname === '/api/sandbox/install') {
+        json(res, 200, await runtime.installLocalSandbox())
+        return true
+      }
       if (req.method === 'GET' && url.pathname === '/api/settings/notifications') {
         json(res, 200, await runtime.getNotificationSettings())
         return true
@@ -411,6 +419,14 @@ export function createApiHandler(runtime, { updates } = {}) {
         const goal = await runtime.pauseSessionGoal(id)
         if (!goal) json(res, 404, { error: '当前会话没有进行中的 Goal。' })
         else json(res, 200, { goal })
+        return true
+      }
+      const sessionExecutionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/execution-mode$/)
+      if (req.method === 'PUT' && sessionExecutionMatch) {
+        const body = await bodyJson(req)
+        const updated = await runtime.setSessionExecutionMode(decodeURIComponent(sessionExecutionMatch[1]), body.mode)
+        if (!updated) json(res, 404, { error: '会话不存在。' })
+        else json(res, 200, updated)
         return true
       }
       const sessionPermissionMatch = url.pathname.match(/^\/api\/sessions\/([^/]+)\/permission$/)

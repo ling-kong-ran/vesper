@@ -45,7 +45,7 @@
 
 When the noise of daylight recedes, a small light remains beside unfinished work. Vesper is built to be that kind of presence: quiet, lucid, and always within reach, gathering scattered models, tools, and context into a workspace you can see, control, and continue to shape.
 
-Vesper is a **local-first multi-agent workspace**. Run independent sessions in parallel, each with its own model, permissions, context, and working directory. Arrange them in an IDE-style workspace with draggable tabs, `Split Left` / `Split Right`, adjustable panes, and layouts that restore automatically.
+Vesper is a **local-first multi-agent workspace**. Run independent sessions in parallel, each with its own model, execution mode, context, and working directory. Arrange them in an IDE-style workspace with draggable tabs, `Split Left` / `Split Right`, adjustable panes, and layouts that restore automatically.
 
 > Let every agent follow its own orbit, and every thought find a place to return to.
 
@@ -97,15 +97,17 @@ Vesper is a **local-first multi-agent workspace**. Run independent sessions in p
 
 | Area | Capability |
 | :--- | :--- |
-| **Multi-session chat** | Run independent Agent sessions in parallel with distinct models, permissions, context, and working directories, plus tab groups, left/right splits, drag-to-dock panels, resizing, and layout restoration. |
-| **Agent Runtime** | Built on Pi Coding Agent with permission controls, structured tool activity, goals, reusable skills, and isolated subagent delegation. |
+| **Multi-session chat** | Run independent Agent sessions in parallel with distinct models, execution modes, context, and working directories, plus tab groups, left/right splits, drag-to-dock panels, resizing, and layout restoration. |
+| **Agent Runtime** | Built on Pi Coding Agent with structured tool activity, goals, reusable skills, and isolated subagent delegation. |
 | **Tools & MCP** | Bring built-in tools, application plugins, and MCP services into one capability layer, with credential-safe structured configuration. |
 | **Memory** | Store preferences, facts, decisions, and tasks in lightweight local SQLite memory, scoped by workspace and searchable, editable, or captured from conversations. |
 | **Multimodal** | Read images, documents, and code, then generate or edit visual content through configured OpenAI-compatible, Gemini, Imagen, Veo, or xAI models. |
 | **Automation** | Let scheduled tasks and visual workflows carry repetitive work with model selection, retries, timeouts, failure policies, run history, and notifications. |
 | **Two-way channels** | Connect Feishu and personal Weixin with per-channel reply models, workspace routing, attachments, and reusable notification templates. |
 | **Desktop app** | Use a native Electron window with single-instance behavior, branded icons, in-app release notes, and GitHub Releases update support. |
-| **Security boundaries** | Per-session permission modes, approval gates for sensitive actions, server-side secret redaction, and local user data stored outside the repository. |
+| **Security boundaries** | Per-session `Read only / Workspace / Full access` execution modes, one-shot approval for out-of-workspace actions, server-side secret redaction, and local user data stored outside the repository. |
+
+> **Local sandbox note:** The default Workspace mode uses the open-source [Anthropic Sandbox Runtime](https://github.com/anthropic-experimental/sandbox-runtime) to restrict Shell filesystem writes, credentials, and network access. On Windows, first use requires one UAC prompt to install a low-privilege account and network isolation; the Agent itself does not receive administrator privileges. Multiple sessions in the same workspace can run concurrently, while different workspaces safely queue a single-root grant switch to prevent cross-project writes by the shared sandbox account and repeated deny-ACL propagation across large directory trees. If sandbox initialization fails, Vesper blocks execution instead of silently falling back to unrestricted host access. The runtime is currently a Beta Research Preview: it reduces risk, but cannot make unknown code absolutely safe.
 
 ---
 

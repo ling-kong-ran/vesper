@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Download,
   ExternalLink,
+  Eye,
   File,
   FolderOpen,
   Gauge,
@@ -34,7 +35,9 @@ import {
   Save,
   Search,
   Send,
+  Shield,
   ShieldCheck,
+  ShieldOff,
   Square,
   Sun,
   Target,
@@ -348,7 +351,7 @@ function App() {
           />
           <div className={`page-content page-${page}`} key={page}>
             <Routes>
-              <Route path={PAGE_PATHS.chat} element={<ChatPage notify={notify} browserNotify={browserNotify} registerPrimaryAction={registerPrimaryAction} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestText={appDialog.prompt} />} />
+              <Route path={PAGE_PATHS.chat} element={<ChatPage notify={notify} browserNotify={browserNotify} registerPrimaryAction={registerPrimaryAction} pendingAsset={pendingAsset} onAssetConsumed={() => setPendingAsset(null)} requestText={appDialog.prompt} requestConfirm={appDialog.confirm} />} />
               <Route path={PAGE_PATHS.chatHistory} element={<ChatHistoryPage query={query} navigate={navigate} notify={notify} requestConfirm={appDialog.confirm} requestText={appDialog.prompt} />} />
               <Route path={PAGE_PATHS.assets} element={<Suspense fallback={<PageLoader />}><AssetsPage query={query} notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} onUse={(asset) => { const targetSessionId = localStorage.getItem(STORAGE_KEYS.activeSession) || ''; setPendingAsset({ asset, targetSessionId }); if (targetSessionId) requestSessionSelection(targetSessionId); navigate('chat') }} /></Suspense>} />
               <Route path={PAGE_PATHS.channels} element={<Suspense fallback={<PageLoader />}><ChannelsPage notify={notify} registerPrimaryAction={registerPrimaryAction} requestConfirm={appDialog.confirm} /></Suspense>} />
@@ -581,7 +584,7 @@ function PageHeader({ meta, page, query, setQuery, configSection, onMenu, onPrim
 
 const ChatDockContext = createContext(null)
 
-function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, onAssetConsumed, requestText }) {
+function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, onAssetConsumed, requestText, requestConfirm }) {
   const { t } = useI18n()
   const [remoteSessions, setRemoteSessions] = useState([])
   const [activeId, setActiveId] = useState(() => localStorage.getItem(STORAGE_KEYS.activeSession) || '')
@@ -590,6 +593,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
   const [error, setError] = useState('')
   const [model, setModel] = useState(() => t('等待配置'))
   const [availableModels, setAvailableModels] = useState([])
+  const [sandboxStatus, setSandboxStatus] = useState({ state: 'checking', supported: true, platform: '' })
   const [workspaceSession, setWorkspaceSession] = useState(null)
   const [dockReady, setDockReady] = useState(0)
   const [compactDock, setCompactDock] = useState(() => window.matchMedia('(max-width: 900px)').matches)
@@ -658,6 +662,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           model: data.model || current.model,
           cwd: data.cwd || current.cwd,
           permissionMode: data.permissionMode || current.permissionMode,
+          executionMode: data.executionMode || current.executionMode,
           goal: data.goal ?? current.goal ?? null,
           taskList: data.taskList ?? current.taskList ?? null,
           contextUsage: data.contextUsage ?? current.contextUsage ?? null,
@@ -665,7 +670,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           approvals: data.approvals || [],
         }
       })
-      setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
+      setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, executionMode: data.executionMode || session.executionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
     } catch (caught) {
       updateSessionState(id, { recovering: false, loading: false, error: caught.message })
     }
@@ -841,7 +846,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           sessionsRef.current = next
           return next
         })
-        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', goal: created.goal || null, taskList: created.taskList || null, contextUsage: created.contextUsage || null, compaction: null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
+        updateSessionState(created.id, { messages: [], tools: [], approvals: [], permissionMode: created.permissionMode || 'auto', executionMode: created.executionMode || 'workspace', goal: created.goal || null, taskList: created.taskList || null, contextUsage: created.contextUsage || null, compaction: null, streaming: false, error: '', loaded: true, pageSize: FOCUS_MESSAGE_PAGE_SIZE, messageStart: 0, hasOlder: false, olderCursor: null, runStartedAt: null, lastActivityAt: null, runFinishedAt: null, runStopped: false, runNotice: '' })
         try {
           await refreshSessions(created.id)
         } catch (caught) {
@@ -865,8 +870,13 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
 
   useEffect(() => {
     let active = true
-    Promise.all([apiJson('/api/sessions'), apiJson('/api/config')])
-      .then(async ([sessionData, configData]) => {
+    Promise.all([
+      apiJson('/api/sessions'),
+      apiJson('/api/config'),
+      apiJson('/api/sandbox/status'),
+    ])
+      .then(async ([sessionData, configData, sandboxData]) => {
+        setSandboxStatus(sandboxData)
         if (!active) return
         setModel(configData.model ? `${configData.provider}/${configData.model}` : t('未配置模型'))
         setAvailableModels(configData.providers.flatMap((provider) => provider.configured && provider.enabled
@@ -1053,6 +1063,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             model: data.model,
             cwd: data.cwd,
             permissionMode: data.permissionMode,
+            executionMode: data.executionMode,
             goal: data.goal ?? null,
             // Prefer explicit meta.taskList (including empty) over leftover client state.
             taskList: data.taskList !== undefined ? data.taskList : current.taskList,
@@ -1060,11 +1071,12 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             runStartedAt: data.startedAt || current.runStartedAt,
             lastActivityAt: data.lastActivityAt || eventAt,
           }))
-          if (data.cwd || data.permissionMode || data.goal !== undefined || data.taskList !== undefined) {
+          if (data.cwd || data.permissionMode || data.executionMode || data.goal !== undefined || data.taskList !== undefined) {
             setRemoteSessions((current) => current.map((session) => session.id === sessionId ? {
               ...session,
               cwd: data.cwd || session.cwd,
               permissionMode: data.permissionMode || session.permissionMode,
+              executionMode: data.executionMode || session.executionMode,
               goal: data.goal ?? session.goal ?? null,
               taskList: data.taskList !== undefined ? data.taskList : session.taskList,
             } : session))
@@ -1292,18 +1304,67 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     }
   }
 
-  const switchSessionPermission = async (sessionId, permissionMode) => {
-    if (!sessionId) return
+  const refreshSandboxStatus = useCallback(async () => {
+    const next = await apiJson('/api/sandbox/status')
+    setSandboxStatus(next)
+    return next
+  }, [])
+
+  const ensureWorkspaceSandbox = async () => {
+    const status = await refreshSandboxStatus()
+    if (status.state === 'ready' || status.state === 'active') return true
+    if (status.platform !== 'win32' || status.state !== 'not-installed') {
+      notify(t('当前设备无法启用工作区沙箱：{reason}', { reason: status.message || status.errors?.join('、') || t('环境不受支持') }), 'error')
+      return false
+    }
+    const confirmed = await requestConfirm({
+      title: t('首次启用安全执行'),
+      message: t('Vesper 将创建低权限沙箱账户并配置网络隔离。Windows 会显示一次管理员权限确认，Agent 不会获得管理员权限。'),
+      confirmLabel: t('继续安装'),
+      tone: 'primary',
+    })
+    if (!confirmed) return false
+    setSandboxStatus((current) => ({ ...current, state: 'installing' }))
+    const installed = await apiJson('/api/sandbox/install', { method: 'POST', body: '{}' })
+    setSandboxStatus(installed)
+    if (installed.cancelled) { notify(t('沙箱安装已取消'), 'info'); return false }
+    if (installed.state !== 'ready' && installed.state !== 'active') {
+      notify(t('本地沙箱安装失败：{reason}', { reason: installed.message || t('请检查系统设置后重试') }), 'error')
+      return false
+    }
+    notify(t('本地沙箱已启用'))
+    return true
+  }
+
+  const switchSessionExecutionMode = async (sessionId, executionMode) => {
+    if (!sessionId) return false
     updateSessionState(sessionId, { switchingPermission: true, error: '' })
     try {
-      const updated = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/permission`, {
-        method: 'PUT', body: JSON.stringify({ mode: permissionMode }),
+      if (executionMode === 'workspace' && !(await ensureWorkspaceSandbox())) {
+        updateSessionState(sessionId, { switchingPermission: false })
+        return false
+      }
+      if (executionMode === 'full-access') {
+        const confirmed = await requestConfirm({
+          title: t('启用完全访问'),
+          message: t('完全访问允许 Agent 操作工作区之外的文件和网络服务，并且 Shell 命令不再使用本地沙箱。'),
+          confirmLabel: t('启用完全访问'),
+        })
+        if (!confirmed) {
+          updateSessionState(sessionId, { switchingPermission: false })
+          return false
+        }
+      }
+      const updated = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/execution-mode`, {
+        method: 'PUT', body: JSON.stringify({ mode: executionMode }),
       })
-      updateSessionState(sessionId, { permissionMode: updated.permissionMode, switchingPermission: false })
-      setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, permissionMode: updated.permissionMode } : session))
-      notify(t('权限模式已切换为{mode}', { mode: t(updated.permissionMode === 'ask' ? '询问' : updated.permissionMode === 'ignore' ? '忽略' : '自动') }))
+      updateSessionState(sessionId, { executionMode: updated.executionMode, permissionMode: updated.permissionMode, switchingPermission: false })
+      setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, executionMode: updated.executionMode, permissionMode: updated.permissionMode } : session))
+      notify(t('执行模式已切换为{mode}', { mode: t(updated.executionMode === 'read-only' ? '只读' : updated.executionMode === 'full-access' ? '完全访问' : '工作区') }))
+      return true
     } catch (caught) {
       updateSessionState(sessionId, { switchingPermission: false, error: caught.message })
+      return false
     }
   }
 
@@ -1395,7 +1456,8 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     abort,
     pauseGoal,
     switchSessionModel,
-    switchSessionPermission,
+    switchSessionExecutionMode,
+    sandboxStatus,
     resolveToolApproval,
     setWorkspaceSession,
     renameSession,
@@ -1454,7 +1516,8 @@ function SessionDockPanel({ params, api }) {
       loadingOlder={state.loadingOlder}
       olderError={state.olderError}
       model={state.model || session.model || context.defaultModel}
-      permissionMode={state.permissionMode || session.permissionMode || 'auto'}
+      executionMode={state.executionMode || session.executionMode || 'workspace'}
+      sandboxStatus={context.sandboxStatus}
       goal={state.goal ?? session.goal ?? null}
       taskList={resolveSessionTaskList(state, session)}
       compaction={state.compaction}
@@ -1477,7 +1540,7 @@ function SessionDockPanel({ params, api }) {
       onAssetConsumed={context.onAssetConsumed}
       onLoadOlder={() => context.loadOlderMessages(sessionId)}
       onModelChange={(nextModel) => context.switchSessionModel(sessionId, nextModel)}
-      onPermissionChange={(nextMode) => context.switchSessionPermission(sessionId, nextMode)}
+      onExecutionModeChange={(nextMode) => context.switchSessionExecutionMode(sessionId, nextMode)}
       onGoalPause={() => context.pauseGoal(sessionId)}
       onApproval={(approvalId, approved) => context.resolveToolApproval(sessionId, approvalId, approved)}
       onWorkspace={() => context.setWorkspaceSession(session)}
@@ -1626,30 +1689,43 @@ function welcomeChips(t) {
   ]
 }
 
-function permissionOptions(t) {
+function executionModeOptions(t, sandboxStatus) {
+  const workspaceDescription = sandboxStatus?.state === 'not-installed'
+    ? t('可以修改当前项目；首次使用需要安装本地沙箱')
+    : sandboxStatus?.supported === false || ['unsupported', 'unavailable', 'error'].includes(sandboxStatus?.state)
+      ? t('当前设备无法使用本地沙箱')
+      : t('可以修改当前项目；越界操作需要确认')
   return [
-    ['ask', t('询问'), t('敏感工具执行前需要确认')],
-    ['auto', t('自动'), t('自动执行，危险操作仍会询问')],
-    ['ignore', t('忽略'), t('跳过额外审批，仅受已启用工具限制')],
+    ['read-only', t('只读'), t('只能查看和分析代码'), Eye],
+    ['workspace', t('工作区'), workspaceDescription, Shield],
+    ['full-access', t('完全访问'), t('不使用沙箱，可以访问本机文件和网络'), ShieldOff],
   ]
 }
 
-function PermissionModeSelect({ value, onChange, disabled, compact = false }) {
+function ExecutionModeSelect({ value, sandboxStatus, onChange, disabled, compact = false }) {
   const { t } = useI18n()
   const [open, setOpen] = useState(false)
-  const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0, width: 250 })
+  const [menuPosition, setMenuPosition] = useState({ left: 0, top: 0, width: 270 })
   const rootRef = useRef(null)
   const menuRef = useRef(null)
-  const options = permissionOptions(t)
+  const options = executionModeOptions(t, sandboxStatus)
   const current = options.find((item) => item[0] === value) || options[1]
+  const CurrentIcon = current[3]
+  const sandboxTone = sandboxStatus?.state === 'installing' || sandboxStatus?.state === 'checking'
+    ? 'checking'
+    : sandboxStatus?.state === 'not-installed' || sandboxStatus?.state === 'unavailable' || sandboxStatus?.state === 'error'
+      ? 'warning'
+      : sandboxStatus?.supported === false
+        ? 'danger'
+        : 'ready'
   const positionMenu = useCallback(() => {
     const trigger = rootRef.current?.querySelector('button')
     if (!trigger) return
     const rect = trigger.getBoundingClientRect()
     const edge = 8
     const gap = 8
-    const width = Math.min(250, window.innerWidth - edge * 2)
-    const height = menuRef.current?.offsetHeight || 180
+    const width = Math.min(270, window.innerWidth - edge * 2)
+    const height = menuRef.current?.offsetHeight || 190
     const left = Math.max(edge, Math.min(rect.right - width, window.innerWidth - width - edge))
     const top = rect.top >= height + gap + edge
       ? rect.top - height - gap
@@ -1676,8 +1752,8 @@ function PermissionModeSelect({ value, onChange, disabled, compact = false }) {
     document.addEventListener('keydown', escape)
     return () => { document.removeEventListener('mousedown', close); document.removeEventListener('keydown', escape) }
   }, [open])
-  const menu = open && createPortal(<div ref={menuRef} className="permission-mode-menu !fixed !right-auto !bottom-auto z-[80]" style={menuPosition} role="menu">{options.map(([mode, label, description]) => <button type="button" role="menuitemradio" aria-checked={mode === current[0]} className={mode === current[0] ? 'active' : ''} onClick={() => { onChange(mode); setOpen(false) }} key={mode}><span className={`permission-level level-${mode}`}><ShieldCheck size={13} /></span><span><strong>{label}</strong><small>{description}</small></span>{mode === current[0] && <Check size={13} />}</button>)}</div>, document.body)
-  return <><div ref={rootRef} className={`permission-mode-select icon-only ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}><button type="button" className={`permission-mode-trigger icon-only mode-${current[0]}`} title={t('权限模式：{mode}——{description}', { mode: current[1], description: current[2] })} disabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-label={t('权限模式：{mode}', { mode: current[1] })} onClick={() => setOpen((visible) => !visible)}><ShieldCheck size={compact ? 11 : 14} /></button></div>{menu}</>
+  const menu = open && createPortal(<div ref={menuRef} className="permission-mode-menu execution-mode-menu !fixed !right-auto !bottom-auto z-[80]" style={menuPosition} role="menu"><div className="execution-mode-menu-title">{t('执行模式')}</div>{options.map(([mode, label, description, Icon]) => <button type="button" role="menuitemradio" aria-checked={mode === current[0]} className={mode === current[0] ? 'active' : ''} onClick={() => { onChange(mode); setOpen(false) }} key={mode}><span className={`permission-level level-${mode}`}><Icon size={13} /></span><span><strong>{label}{mode === 'workspace' && <small className="recommended-mode">{t('推荐')}</small>}</strong><small>{description}</small></span>{mode === current[0] && <Check size={13} />}</button>)}</div>, document.body)
+  return <><div ref={rootRef} className={`permission-mode-select execution-mode-select icon-only ${compact ? 'compact' : ''} ${open ? 'open' : ''}`}><button type="button" className={`permission-mode-trigger icon-only mode-${current[0]}`} title={t('执行模式：{mode}——{description}', { mode: current[1], description: current[2] })} disabled={disabled} aria-haspopup="menu" aria-expanded={open} aria-label={t('执行模式：{mode}', { mode: current[1] })} onClick={() => setOpen((visible) => !visible)}><CurrentIcon size={compact ? 11 : 14} />{value === 'workspace' && <i className={`sandbox-status-dot ${sandboxTone}`} />}</button></div>{menu}</>
 }
 
 function ToolApproval({ approvals, onResolve, compact = false }) {
@@ -1686,13 +1762,14 @@ function ToolApproval({ approvals, onResolve, compact = false }) {
   const resolvingRef = useRef(false)
   const approval = approvals[0]
   if (!approval) return null
+  const escalated = approval.toolName === 'bash' && approval.args?.sandbox_permissions === 'require_escalated'
   const resolve = async (approved) => {
     if (resolvingRef.current) return
     resolvingRef.current = true
     setResolving(true)
     try { await onResolve(approval.id, approved) } finally { resolvingRef.current = false; setResolving(false) }
   }
-  return <div className={`tool-approval ${compact ? 'compact' : ''}`}><div><ShieldCheck size={compact ? 12 : 15} /><span><strong>{t('{tool} 请求授权', { tool: approval.toolName })}</strong><small>{approval.reason}{approvals.length > 1 ? ` · ${t('另有 {count} 项等待', { count: approvals.length - 1 })}` : ''}</small></span></div>{!compact && <details><summary>{t('查看调用参数')}</summary><pre>{JSON.stringify(approval.args, null, 2)}</pre></details>}<div className="tool-approval-actions"><button type="button" className="button secondary" disabled={resolving} onClick={() => resolve(false)}>{t('拒绝')}</button><button type="button" className="button primary" disabled={resolving} onClick={() => resolve(true)}>{resolving ? <RefreshCw className="spin" size={12} /> : <Check size={12} />}{t('允许')}</button></div></div>
+  return <div className={`tool-approval ${compact ? 'compact' : ''}`}><div><ShieldCheck size={compact ? 12 : 15} /><span><strong>{t(escalated ? '{tool} 请求在沙箱外执行' : '{tool} 请求授权', { tool: approval.toolName })}</strong><small>{approval.reason}{approvals.length > 1 ? ` · ${t('另有 {count} 项等待', { count: approvals.length - 1 })}` : ''}</small></span></div>{!compact && <details><summary>{t('查看调用参数')}</summary><pre>{JSON.stringify(approval.args, null, 2)}</pre></details>}<div className="tool-approval-actions"><button type="button" className="button secondary" disabled={resolving} onClick={() => resolve(false)}>{t('拒绝')}</button><button type="button" className="button primary" disabled={resolving} onClick={() => resolve(true)}>{resolving ? <RefreshCw className="spin" size={12} /> : <Check size={12} />}{t(escalated ? '本次允许' : '允许')}</button></div></div>
 }
 
 function WorkspacePicker({ session, onClose, onSelect }) {
@@ -1755,7 +1832,7 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, permissionMode, goal, taskList, compaction, contextUsage, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onPermissionChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onAbort, onOpenRail }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, executionMode, sandboxStatus, goal, taskList, compaction, contextUsage, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, tools, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onExecutionModeChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onAbort, onOpenRail }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const [goalArmed, setGoalArmed] = useState(false)
@@ -1817,9 +1894,13 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
       el.style.height = `${Math.min(el.scrollHeight, 220)}px`
     })
   }
-  const submit = (event) => {
+  const submit = async (event) => {
     event.preventDefault()
     if (!value.trim() && !selection.attachments.length) return
+    if (executionMode === 'workspace' && !['ready', 'active'].includes(sandboxStatus?.state)) {
+      const ready = await onExecutionModeChange('workspace')
+      if (!ready) return
+    }
     onSend(value, selection.attachments, goalArmed)
     scrollToBottom('smooth')
     setValue('')
@@ -1834,7 +1915,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
       <TaskListPanel taskList={taskList} streaming={streaming} />
       <div className="transcript" ref={transcriptRef} onScroll={handleTranscriptScroll}>
         {(hasOlder || loadingOlder || olderError) && <div className="history-page-loader">{olderError ? <button type="button" className="button secondary" onClick={loadOlder}><RefreshCw size={13} />{t('重试加载更早消息')}</button> : loadingOlder ? <><RefreshCw className="spin" size={14} />{t('正在加载更早消息…')}</> : <button type="button" className="button secondary" onClick={loadOlder}><ArrowDown className="history-up-arrow" size={14} />{t('加载更早消息')}</button>}</div>}
-        {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>{t('让我们从一束想法开始')}</h2><p>{t('Vesper 已准备好读取当前工作区、搜索代码，并陪你把任务推进到完成。默认从只读权限开始。')}</p><div className="welcome-chips">{welcomeChips(t).map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
+        {!messages.length && <div className="agent-welcome"><BrandLogo size={44} className="welcome-logo" /><h2>{t('让我们从一束想法开始')}</h2><p>{t('Vesper 已准备好读取当前工作区、搜索代码，并陪你把任务推进到完成。默认在工作区沙箱中运行。')}</p><div className="welcome-chips">{welcomeChips(t).map((chip) => <button type="button" key={chip.label} onClick={() => applyWelcomeChip(chip.prompt)}>{chip.label}</button>)}</div></div>}
         {messages.map((message, index) => {
           const isLatestAgent = message.role === 'agent' && index === messages.length - 1
           const agentState = message.streaming || (isLatestAgent && streaming) ? 'thinking' : isLatestAgent && !message.error ? 'waiting' : 'idle'
@@ -1850,7 +1931,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
         {error && <div className="chat-error"><AlertTriangle size={14} />{error}</div>}
       </div>
       {hasUnread && <button type="button" className="button secondary jump-to-latest" onClick={() => scrollToBottom('smooth')}><ArrowDown size={14} />{t('有新内容')}</button>}
-      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title={t('添加附件')} aria-label={t('添加附件')} onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><PermissionModeSelect value={permissionMode} onChange={onPermissionChange} disabled={switchingPermission} /><div className="focus-composer-secondary"><ContextUsageIndicator usage={contextUsage} /><GoalModeControl goal={goal} armed={goalArmed} onChange={(enabled) => { if (!enabled && goal?.status === 'active') void onGoalPause?.(); else setGoalArmed(enabled) }} /></div><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onPaste={selection.pasteImages} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={t(streaming ? 'Agent 正在运行，可停止后继续输入' : '写下你想完成的事，Shift + Enter 换行')} disabled={streaming} /><button className="send-button" title={t('发送消息')} aria-label={t('发送消息')} disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
+      <form className="focus-composer-shell" onSubmit={submit}><ToolApproval approvals={approvals} onResolve={onApproval} /><AttachmentTray attachments={selection.attachments} onRemove={selection.removeAttachment} />{selection.attachmentError && <span className="attachment-error">{selection.attachmentError}</span>}<div className="focus-composer"><button type="button" className="attach-trigger" title={t('添加附件')} aria-label={t('添加附件')} onClick={() => selection.inputRef.current?.click()} disabled={streaming}><Paperclip size={17} />{selection.attachments.length > 0 && <i>{selection.attachments.length}</i>}</button><input ref={selection.inputRef} className="sr-only" type="file" multiple accept="image/*,.txt,.md,.json,.js,.jsx,.ts,.tsx,.css,.html,.xml,.yaml,.yml,.csv,.log,.py,.java,.go,.rs,.sh,.ps1,.toml,.sql,.pdf,.docx,.pptx,.xlsx,.odt,.odp,.ods,.rtf,.epub" onChange={selection.chooseFiles} /><SessionModelSelect value={model} models={availableModels} onChange={onModelChange} disabled={streaming || switchingModel} /><ExecutionModeSelect value={executionMode} sandboxStatus={sandboxStatus} onChange={onExecutionModeChange} disabled={streaming || switchingPermission} /><div className="focus-composer-secondary"><ContextUsageIndicator usage={contextUsage} /><GoalModeControl goal={goal} armed={goalArmed} onChange={(enabled) => { if (!enabled && goal?.status === 'active') void onGoalPause?.(); else setGoalArmed(enabled) }} /></div><textarea ref={promptRef} rows="1" value={value} onChange={(event) => { setValue(event.target.value); event.currentTarget.style.height = 'auto'; event.currentTarget.style.height = `${Math.min(event.currentTarget.scrollHeight, 220)}px` }} onPaste={selection.pasteImages} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); event.currentTarget.form?.requestSubmit() } }} placeholder={t(streaming ? 'Agent 正在运行，可停止后继续输入' : '写下你想完成的事，Shift + Enter 换行')} disabled={streaming} /><button className="send-button" title={t('发送消息')} aria-label={t('发送消息')} disabled={(!value.trim() && !selection.attachments.length) || streaming}><Send size={18} /></button></div></form>
     </Panel>
   )
 }

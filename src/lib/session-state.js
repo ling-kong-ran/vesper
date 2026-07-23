@@ -3,6 +3,7 @@ export const DEFAULT_SESSION_STATE = Object.freeze({
   tools: [],
   approvals: [],
   taskList: null,
+  executionMode: null,
   contextUsage: null,
   compaction: null,
   streaming: false,

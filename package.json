@@ -23,6 +23,7 @@
     "start": "node server/index.mjs --production"
   },
   "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "^0.0.67",
     "@earendil-works/pi-coding-agent": "^0.80.10",
     "@larksuiteoapi/node-sdk": "^1.71.1",
     "@modelcontextprotocol/sdk": "^1.29.0",
@@ -61,6 +62,9 @@
     "productName": "Vesper",
     "artifactName": "${productName}-${version}-${os}-${arch}.${ext}",
     "asar": true,
+    "asarUnpack": [
+      "node_modules/@anthropic-ai/sandbox-runtime/vendor/**/*"
+    ],
     "npmRebuild": false,
     "directories": {
       "output": "release",
