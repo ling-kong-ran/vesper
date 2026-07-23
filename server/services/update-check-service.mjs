@@ -2,7 +2,8 @@ import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { DEFAULT_BRANCH, normalizedVersion, REPOSITORY_API, REPOSITORY_URL } from '../../shared/app-update.mjs'
 
-const DEFAULT_CACHE_MS = 15 * 60_000
+// Keep the web source-check cache short so “检查更新” does not look stuck on stale main tips.
+const DEFAULT_CACHE_MS = 60_000
 const execFileAsync = promisify(execFile)
 
 function validCommit(value) {

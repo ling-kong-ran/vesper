@@ -31,7 +31,7 @@ test('server update checks compare the current commit with main and cache respon
 
   const first = await service.check()
   const cached = await service.check()
-  now += 16 * 60_000
+  now += 2 * 60_000
   await service.check()
 
   assert.equal(first.state, 'available')

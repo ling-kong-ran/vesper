@@ -7,11 +7,15 @@ import { createVesperServer } from '../server/app-server.mjs'
 import { createElectronBrowserAutomationDriver } from './browser-automation.mjs'
 import { enableResumableUpdateDownloads } from './resumable-update-download.mjs'
 import { createUpdateLogger, shutdownWithDeadline } from './update-lifecycle.mjs'
-import { LATEST_RELEASE_API, newerVersion, normalizedVersion, RELEASES_URL } from '../shared/app-update.mjs'
+import { LATEST_RELEASE_API, newerVersion, normalizedVersion, reconcileDesktopUpdateCheck, RELEASES_URL } from '../shared/app-update.mjs'
 import { releaseNotesMarkdown } from '../shared/release-notes.mjs'
 
 const { autoUpdater } = updater
 const UPDATE_CHANNEL = 'vesper:update-status'
+const NO_CACHE_HEADERS = Object.freeze({
+  'Cache-Control': 'no-cache',
+  Pragma: 'no-cache',
+})
 let mainWindow = null
 let vesperServer = null
 let updateCheck = null
@@ -24,15 +28,45 @@ let installingUpdate = false
 process.env.PI_SKIP_VERSION_CHECK ||= '1'
 process.env.PI_TELEMETRY ||= '0'
 
-function publishUpdate(patch) {
-  updateState = { ...updateState, ...patch }
+function emitUpdateState() {
   for (const window of BrowserWindow.getAllWindows()) window.webContents.send(UPDATE_CHANNEL, updateState)
   return updateState
 }
 
+function publishUpdate(patch) {
+  updateState = { ...updateState, ...patch }
+  return emitUpdateState()
+}
+
+function beginUpdateCheck() {
+  // Full replace so a previous 0.1.x result cannot linger while checking for 0.2.x.
+  updateState = {
+    state: 'checking',
+    message: '',
+    availableVersion: '',
+    releaseDate: null,
+    notes: '',
+    releaseUrl: RELEASES_URL,
+    canDownload: false,
+    canInstall: false,
+    canResume: false,
+    percent: 0,
+    bytesPerSecond: 0,
+    transferred: 0,
+    total: 0,
+    checkedAt: null,
+  }
+  return emitUpdateState()
+}
+
 async function githubLatestRelease() {
-  const response = await net.fetch(LATEST_RELEASE_API, {
-    headers: { Accept: 'application/vnd.github+json', 'User-Agent': `Vesper/${app.getVersion()}` },
+  const response = await net.fetch(`${LATEST_RELEASE_API}?_=${Date.now()}`, {
+    headers: {
+      Accept: 'application/vnd.github+json',
+      'X-GitHub-Api-Version': '2022-11-28',
+      'User-Agent': `Vesper/${app.getVersion()}`,
+      ...NO_CACHE_HEADERS,
+    },
   })
   if (!response.ok) throw new Error(`GitHub Release 请求失败：HTTP ${response.status}`)
   const release = await response.json()
@@ -46,40 +80,89 @@ async function githubLatestRelease() {
   }
 }
 
+function invalidateUpdaterMetadata() {
+  autoUpdater.requestHeaders = { ...NO_CACHE_HEADERS }
+  // Drop provider/client cache so the next check re-reads GitHub channel files.
+  autoUpdater.clientPromise = null
+  autoUpdater.updateInfoAndProvider = null
+}
+
 async function checkForUpdates({ silent = false } = {}) {
   if (updateCheck) return updateCheck
-  if (!silent) publishUpdate({ state: 'checking', message: '', checkedAt: null })
+  if (!silent) beginUpdateCheck()
+  else if (updateState.state === 'idle') publishUpdate({ state: 'checking', message: '' })
+
   updateCheck = (async () => {
     try {
-      if (app.isPackaged) {
-        await autoUpdater.checkForUpdates()
-        return updateState
-      }
       const latest = await githubLatestRelease()
-      return publishUpdate(latest.available ? {
-        state: 'available',
-        availableVersion: latest.version,
-        releaseDate: latest.releaseDate,
-        notes: latest.notes,
-        releaseUrl: latest.releaseUrl,
-        canDownload: false,
+      if (!app.isPackaged) {
+        return publishUpdate({
+          ...reconcileDesktopUpdateCheck({
+            appVersion: app.getVersion(),
+            githubVersion: latest.version,
+            githubReleaseDate: latest.releaseDate,
+            githubNotes: latest.notes,
+            githubReleaseUrl: latest.releaseUrl,
+          }),
+          canDownload: false,
+          checkedAt: new Date().toISOString(),
+          message: latest.available
+            ? '开发模式仅检查版本，请从 GitHub Releases 下载正式安装包。'
+            : '当前已是最新版本。',
+        })
+      }
+
+      invalidateUpdaterMetadata()
+      let result = await autoUpdater.checkForUpdates()
+      let updaterVersion = normalizedVersion(result?.updateInfo?.version || updateState.availableVersion || '')
+
+      // GitHub API is authoritative; if the channel metadata lags, force one more lookup.
+      if (latest.version && updaterVersion && newerVersion(latest.version, updaterVersion)) {
+        updateLogger.warn('Update channel metadata lagged behind GitHub Releases; rechecking.', {
+          githubVersion: latest.version,
+          updaterVersion,
+        })
+        invalidateUpdaterMetadata()
+        result = await autoUpdater.checkForUpdates()
+        updaterVersion = normalizedVersion(result?.updateInfo?.version || updateState.availableVersion || '')
+      }
+
+      const reconciled = reconcileDesktopUpdateCheck({
+        appVersion: app.getVersion(),
+        githubVersion: latest.version,
+        githubReleaseDate: latest.releaseDate,
+        githubNotes: latest.notes || updateState.notes || '',
+        githubReleaseUrl: latest.releaseUrl,
+        updaterVersion,
+        updaterIsAvailable: Boolean(result?.isUpdateAvailable),
+        previousState: updateState.state,
+        previousAvailableVersion: updateState.availableVersion,
+      })
+
+      return publishUpdate({
+        ...reconciled,
+        // Keep live download metrics if a matching download is already in progress.
+        ...(updateState.state === 'downloading' && updateState.availableVersion === reconciled.availableVersion
+          ? {
+              state: 'downloading',
+              percent: updateState.percent,
+              bytesPerSecond: updateState.bytesPerSecond,
+              transferred: updateState.transferred,
+              total: updateState.total,
+              canDownload: false,
+              canResume: false,
+              message: '',
+            }
+          : {}),
         checkedAt: new Date().toISOString(),
-        message: '开发模式仅检查版本，请从 GitHub Releases 下载正式安装包。',
-      } : {
-        state: 'current',
-        availableVersion: latest.version,
-        releaseDate: latest.releaseDate,
-        notes: latest.notes,
-        releaseUrl: latest.releaseUrl,
-        canDownload: false,
-        checkedAt: new Date().toISOString(),
-        message: '当前已是最新版本。',
       })
     } catch (error) {
       return publishUpdate({
         state: 'error',
         message: error instanceof Error ? error.message : String(error),
         canResume: false,
+        canDownload: false,
+        canInstall: false,
         checkedAt: new Date().toISOString(),
       })
     } finally {
@@ -98,6 +181,7 @@ function configureUpdater() {
   autoUpdater.autoInstallOnAppQuit = false
   autoUpdater.autoRunAppAfterInstall = true
   autoUpdater.allowPrerelease = false
+  autoUpdater.requestHeaders = { ...NO_CACHE_HEADERS }
   updateLogger.info('Updater initialized.', { version: app.getVersion(), packaged: app.isPackaged, executable: app.getPath('exe') })
   nativeAutoUpdater?.on?.('before-quit-for-update', () => updateLogger.info('Electron requested application quit for an update.'))
   autoUpdater.on('checking-for-update', () => {
