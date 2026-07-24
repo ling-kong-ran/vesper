@@ -282,7 +282,7 @@ export class SkillsService {
 
   packageManager(cwd = this.cwd) {
     const settingsManager = this.getSettingsManager()
-    if (!settingsManager) throw new Error('Pi SettingsManager 尚未初始化。')
+    if (!settingsManager) throw new Error('Vesper 技能运行时尚未初始化。')
     return this.createPackageManager({ cwd, agentDir: this.agentDir, settingsManager })
   }
 

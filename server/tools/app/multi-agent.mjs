@@ -1,20 +1,16 @@
 import { DEFAULT_MAX_BYTES, defineTool } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import {
-  AGENT_ROLES,
-  DEFAULT_AGENT_MAX_DURATION_SECONDS,
-  DEFAULT_AGENT_MAX_TOOL_CALLS,
-  MAX_AGENT_DEPENDENCIES,
-  MAX_AGENT_MAX_DURATION_SECONDS,
-  MAX_AGENT_MAX_TOOL_CALLS,
+  DEFAULT_AGENT_MAX_TURNS,
+  MAX_AGENT_MAX_TURNS,
 } from '../../services/multi-agent-service.mjs'
 
 const category = '协作'
 const source = 'app'
 
 export const manifests = [
-  { id: 'spawn_agent', name: 'Spawn Agent', category, risk: '中风险', description: '按角色启动独立 Agent，并支持依赖队列。', scope: '当前会话工作目录与权限边界', capability: '异步启动或排队 Agent，不阻塞主 Agent', source },
-  { id: 'list_agents', name: 'List Agents', category, risk: '低风险', description: '查看当前会话的 Agent 图与运行状态。', scope: '当前会话', capability: '列出角色、依赖、状态、耗时、工具与结果', source },
+  { id: 'spawn_agent', name: 'Spawn Agent', category, risk: '中风险', description: '用独立上下文启动一个边界明确的子任务。', scope: '当前会话工作目录与权限边界', capability: '异步启动或排队 Agent，不阻塞主 Agent', source },
+  { id: 'list_agents', name: 'List Agents', category, risk: '低风险', description: '查看当前会话创建的 Agent 与运行状态。', scope: '当前会话', capability: '列出状态、耗时、工具与结果', source },
   { id: 'send_message', name: 'Send Message', category, risk: '低风险', description: '向运行中的 Agent 发送补充信息。', scope: '当前会话的 Agent', capability: '发送消息但不主动启动新一轮任务', source },
   { id: 'followup_task', name: 'Follow-up Task', category, risk: '中风险', description: '让已有 Agent 继续执行后续任务。', scope: '当前会话的 Agent', capability: '复用 Agent 上下文继续工作', source },
   { id: 'wait_agent', name: 'Wait Agent', category, risk: '低风险', description: '等待 Agent 完成、失败或被中断。', scope: '当前会话', capability: '短暂等待终态结果，不承担总任务超时', source },
@@ -41,15 +37,14 @@ function utf8Prefix(value, maxBytes) {
 function boundedToolText(value) {
   const textValue = String(value || '')
   if (Buffer.byteLength(textValue, 'utf8') <= DEFAULT_MAX_BYTES) return textValue
-  const suffix = '\n\n[Agent summary truncated to the Pi tool-output limit.]'
+  const suffix = '\n\n[Agent summary truncated to the Vesper tool-output limit.]'
   return `${utf8Prefix(textValue, DEFAULT_MAX_BYTES - Buffer.byteLength(suffix, 'utf8'))}${suffix}`
 }
 
 function compactAgent(agent) {
   const elapsed = Number.isFinite(agent.durationMs) ? `, ${(agent.durationMs / 1000).toFixed(1)}s` : ''
-  const dependency = agent.status === 'queued' && agent.dependsOn?.length ? ` · waiting for ${agent.dependsOn.length}` : ''
   const output = agent.output ? `\n${agent.output}` : agent.error ? `\nError: ${agent.error}` : ''
-  return `${agent.canonicalName} · ${agent.role || 'worker'} · ${agent.status}${dependency}${elapsed}${output}`
+  return `${agent.canonicalName} · ${agent.status}${elapsed}${output}`
 }
 
 function compactAgents(agents) {
@@ -70,8 +65,6 @@ function createSpawnAgentTool({ multiAgentRuntime }) {
     promptGuidelines: [
       'Do not use spawn_agent unless the user explicitly asks for subagents, delegation, parallel agent work, or an applicable project instruction requires it.',
       'Use spawn_agent only for a concrete, bounded task that can run independently while you continue non-overlapping local work.',
-      'Choose explorer or reviewer for read-only parallel investigation, tester for validation, and worker only for a clearly isolated implementation scope.',
-      'Use dependsOn to express ordering between delegated tasks instead of polling or manually waiting; queued Agents start automatically when dependencies and concurrency slots are ready.',
       'Do not delegate the immediate critical-path step and then wait idly for it.',
       'Provide a self-contained message with every constraint and piece of context the Agent needs; Agents never inherit the parent transcript.',
       'Agents inherit the current model, current reasoning level, tools, permission mode, and workspace boundary. They cannot recursively spawn more Agents.',
@@ -82,15 +75,12 @@ function createSpawnAgentTool({ multiAgentRuntime }) {
     parameters: Type.Object({
       taskName: Type.String({ minLength: 1, maxLength: 48, description: 'Stable short task name using letters, digits, hyphens, or underscores.' }),
       message: Type.String({ minLength: 1, maxLength: 12_000, description: 'Concrete, self-contained delegated task including all required context and constraints.' }),
-      role: Type.Optional(Type.Union(AGENT_ROLES.map((role) => Type.Literal(role)), { description: 'Role-specific behavior and tool scope. Defaults to worker.' })),
-      dependsOn: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { maxItems: MAX_AGENT_DEPENDENCIES, description: 'Existing Agent ids, task names, or canonical names that must complete first.' })),
-      maxDurationSeconds: Type.Optional(Type.Integer({ minimum: 15, maximum: MAX_AGENT_MAX_DURATION_SECONDS, description: `Hard total duration limit. Defaults to ${DEFAULT_AGENT_MAX_DURATION_SECONDS} seconds.` })),
-      maxToolCalls: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_MAX_TOOL_CALLS, description: `Maximum tool calls. Defaults to ${DEFAULT_AGENT_MAX_TOOL_CALLS}.` })),
+      maxTurns: Type.Optional(Type.Integer({ minimum: 1, maximum: MAX_AGENT_MAX_TURNS, description: `Maximum Agent Loop turns. Defaults to ${DEFAULT_AGENT_MAX_TURNS}.` })),
     }),
     async execute(_toolCallId, params) {
       const agent = await requireRuntime(multiAgentRuntime, 'spawn')(params)
       const action = agent.status === 'queued' ? 'Queued' : 'Started'
-      return { ...text(`${action} ${agent.canonicalName} as ${agent.role || 'worker'} in the background.`), details: agent }
+      return { ...text(`${action} ${agent.canonicalName} in the background.`), details: agent }
     },
   })
 }
@@ -108,8 +98,7 @@ function createListAgentsTool({ multiAgentRuntime }) {
     parameters: Type.Object({}),
     async execute() {
       const agents = await requireRuntime(multiAgentRuntime, 'list')()
-      const graph = typeof multiAgentRuntime?.graph === 'function' ? await multiAgentRuntime.graph() : null
-      return { ...text(agents.length ? compactAgents(agents) : 'No Agents have been created in this session.'), details: { agents: agents.map(agentDetails), ...(graph ? { graph } : {}) } }
+      return { ...text(agents.length ? compactAgents(agents) : 'No Agents have been created in this session.'), details: { agents: agents.map(agentDetails) } }
     },
   })
 }

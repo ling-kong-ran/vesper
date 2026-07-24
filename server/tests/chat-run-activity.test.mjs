@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { activityDurationMs, deriveRunActivity, formatRunDuration, groupToolCalls, latestUnrecoveredToolError, primaryRunActivity, pushCurrentActivity, RUN_INACTIVITY_THRESHOLD_MS, settleToolCalls, taskListChanges } from '../../src/features/chat/run-activity.js'
+import { activityDurationMs, agentActivityState, deriveRunActivity, formatRunDuration, groupToolCalls, latestUnrecoveredToolError, primaryRunActivity, pushCurrentActivity, RUN_INACTIVITY_THRESHOLD_MS, settleToolCalls, taskListChanges } from '../../src/features/chat/run-activity.js'
 
 test('chat activity derives meaningful stages and inactivity states', () => {
   const now = Date.parse('2026-07-20T10:00:20.000Z')
@@ -12,6 +12,13 @@ test('chat activity derives meaningful stages and inactivity states', () => {
   assert.equal(waiting.stage, 'waiting_tool')
   assert.equal(waiting.inactiveMs, RUN_INACTIVITY_THRESHOLD_MS)
   assert.equal(deriveRunActivity({ streaming: false, stopped: true }).stage, 'stopped')
+})
+
+test('unknown Subagent states render neutrally instead of as failures', () => {
+  assert.deepEqual(agentActivityState('failed'), { titleKey: '{name} 执行失败', tone: 'failed' })
+  assert.deepEqual(agentActivityState('queued'), { titleKey: '{name} 等待调度', tone: 'waiting' })
+  assert.deepEqual(agentActivityState(undefined), { titleKey: '{name} 状态已更新', tone: 'waiting' })
+  assert.deepEqual(agentActivityState('future-status'), { titleKey: '{name} 状态已更新', tone: 'waiting' })
 })
 
 test('primary Agent activity never duplicates the latest tool row', () => {

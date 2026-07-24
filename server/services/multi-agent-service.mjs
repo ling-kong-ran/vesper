@@ -5,15 +5,13 @@ import { createCompactionSettingsManager, vesperCompactionExtension } from '../r
 import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
 import { redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
 
-export const DEFAULT_AGENT_MAX_DURATION_SECONDS = 180
-export const MAX_AGENT_MAX_DURATION_SECONDS = 600
-export const DEFAULT_AGENT_MAX_TOOL_CALLS = 24
-export const MAX_AGENT_MAX_TOOL_CALLS = 100
+export const DEFAULT_AGENT_MAX_TURNS = 30
+export const MAX_AGENT_MAX_TURNS = 100
 export const MAX_CONCURRENT_AGENTS = 4
 export const MAX_AGENTS_PER_PARENT = 64
 export const MAX_AGENT_TASK_CHARS = 12_000
-export const MAX_AGENT_DEPENDENCIES = 8
-export const AGENT_ROLES = Object.freeze(['explorer', 'reviewer', 'worker', 'tester'])
+
+const AGENT_REGISTRY_VERSION = 4
 
 export const MULTI_AGENT_TOOL_NAMES = Object.freeze([
   'spawn_agent',
@@ -35,11 +33,8 @@ const PARENT_ONLY_TOOL_NAMES = new Set([
   'mcp_manage',
 ])
 
-const EXECUTING_AGENT_STATUSES = new Set(['starting', 'running'])
-const ACTIVE_AGENT_STATUSES = new Set(['queued', ...EXECUTING_AGENT_STATUSES])
+const ACTIVE_AGENT_STATUSES = new Set(['queued', 'starting', 'running'])
 const TERMINAL_AGENT_STATUSES = new Set(['completed', 'failed', 'interrupted'])
-const READ_ONLY_ROLE_TOOLS = new Set(['read', 'ls', 'grep', 'find', 'memory_search', 'web_search'])
-const TESTER_ROLE_TOOLS = new Set([...READ_ONLY_ROLE_TOOLS, 'bash'])
 const RESTART_INTERRUPTION_REASON = 'Agent was interrupted because Vesper restarted.'
 
 export const MULTI_AGENT_SYSTEM_PROMPT = `You are a Vesper subagent working in an isolated context on one delegated task.
@@ -47,17 +42,10 @@ export const MULTI_AGENT_SYSTEM_PROMPT = `You are a Vesper subagent working in a
 Guidelines:
 - Complete only the concrete task you were given and return a concise, evidence-based result.
 - Inspect the relevant files before drawing conclusions or editing.
-- Respect the tools, permission mode, workspace boundary, duration, and tool-call budget provided by the parent session.
+- Respect the tools, permission mode, workspace boundary, and turn limit provided by the parent session.
 - Do not duplicate unrelated work or wait for additional instructions.
 - You cannot spawn other agents.
 - Respond in the language used by the delegated task.`
-
-const ROLE_SYSTEM_PROMPTS = Object.freeze({
-  explorer: 'Role: explorer. Investigate and map the relevant code or evidence. Do not modify files. Return findings, exact file references, risks, and recommended next steps.',
-  reviewer: 'Role: reviewer. Review the delegated scope without modifying files. Prioritize concrete defects, severity, evidence, and missing tests. Avoid speculative style comments.',
-  worker: 'Role: worker. Implement only the delegated change. Avoid files owned by other tasks, validate the result, and report changed files, tests, and residual risks.',
-  tester: 'Role: tester. Reproduce and validate behavior without modifying source files. Report commands, observed results, failures, and the smallest actionable diagnosis.',
-})
 
 function textFromContent(content) {
   if (typeof content === 'string') return content
@@ -103,15 +91,13 @@ function durableRecord(record) {
     taskName: record.taskName,
     canonicalName: record.canonicalName,
     parentSessionId: record.parentSessionId,
-    role: record.role,
-    dependsOn: [...record.dependsOn],
     cwd: record.cwd,
     model: modelLabel(record.model),
     thinkingLevel: record.thinkingLevel,
     message: redactSecretText(record.message),
     availableTools: [...record.availableTools],
-    maxDurationSeconds: record.maxDurationSeconds,
-    maxToolCalls: record.maxToolCalls,
+    maxTurns: record.maxTurns,
+    turnCount: record.turnCount,
     toolCallCount: record.toolCallCount,
     tools: redactSecretValue(record.tools.map((tool) => ({ ...tool }))),
     output: redactSecretText(record.output),
@@ -120,7 +106,6 @@ function durableRecord(record) {
     runUsage: { ...record.runUsage },
     runNumber: record.runNumber,
     resultVersion: record.resultVersion,
-    deliveredVersion: record.deliveredVersion,
     error: redactSecretText(record.error),
     startedAt: record.startedAt,
     lastActivityAt: record.lastActivityAt,
@@ -129,6 +114,20 @@ function durableRecord(record) {
     status: record.status,
     currentActivity: redactSecretValue(record.currentActivity),
   }
+}
+
+function durableMailboxEntry(entry) {
+  const { fullOutput: _fullOutput, ...durable } = entry
+  return redactSecretValue(durable)
+}
+
+function restoredMailboxEntry(value) {
+  const mailboxId = String(value?.mailboxId || '').trim()
+  const id = String(value?.id || '').trim()
+  const parentSessionId = String(value?.parentSessionId || '').trim()
+  const resultVersion = positiveInteger(value?.resultVersion)
+  if (!mailboxId || !id || !parentSessionId || !resultVersion || !TERMINAL_AGENT_STATUSES.has(value?.status)) return null
+  return { ...value, mailboxId, id, parentSessionId, resultVersion, fullOutput: String(value?.output || '') }
 }
 
 function restoredRecord(value) {
@@ -143,16 +142,14 @@ function restoredRecord(value) {
     taskName: normalizeTaskName(value?.taskName),
     canonicalName: String(value?.canonicalName || `/root/${normalizeTaskName(value?.taskName)}_restored`),
     parentSessionId,
-    role: normalizeRole(value?.role),
-    dependsOn: Array.isArray(value?.dependsOn) ? [...new Set(value.dependsOn.map(String).filter(Boolean))].slice(0, MAX_AGENT_DEPENDENCIES) : [],
     cwd: String(value?.cwd || ''),
     model,
     thinkingLevel: String(value?.thinkingLevel || 'medium'),
     message: String(value?.message || ''),
     availableTools: childTools(value?.availableTools),
     customTools: [],
-    maxDurationSeconds: boundedInteger(value?.maxDurationSeconds, DEFAULT_AGENT_MAX_DURATION_SECONDS, MAX_AGENT_MAX_DURATION_SECONDS),
-    maxToolCalls: boundedInteger(value?.maxToolCalls, DEFAULT_AGENT_MAX_TOOL_CALLS, MAX_AGENT_MAX_TOOL_CALLS),
+    maxTurns: boundedInteger(value?.maxTurns, DEFAULT_AGENT_MAX_TURNS, MAX_AGENT_MAX_TURNS),
+    turnCount: positiveInteger(value?.turnCount) || 0,
     toolCallCount: positiveInteger(value?.toolCallCount) || 0,
     tools: Array.isArray(value?.tools) ? value.tools.map((tool) => ({ ...tool })) : [],
     output,
@@ -162,10 +159,8 @@ function restoredRecord(value) {
     runUsage: { ...emptyUsage(), ...(value?.runUsage || {}) },
     runNumber: positiveInteger(value?.runNumber) || 0,
     runGeneration: 0,
-    timerGeneration: 0,
     slotActive: false,
     resultVersion: positiveInteger(value?.resultVersion) || 0,
-    deliveredVersion: positiveInteger(value?.deliveredVersion) || 0,
     error: String(value?.error || ''),
     startedAt: value?.startedAt || new Date().toISOString(),
     lastActivityAt: value?.lastActivityAt || null,
@@ -175,7 +170,6 @@ function restoredRecord(value) {
     currentActivity: value?.currentActivity && typeof value.currentActivity === 'object' ? { ...value.currentActivity } : null,
     session: null,
     unsubscribe: () => {},
-    timer: null,
     aborted: false,
     abortReason: '',
     runningPromise: Promise.resolve(),
@@ -225,7 +219,7 @@ function contextLimitedText(value, model) {
   if (!tokenTruncated && !byteTruncated) {
     return { text, fullText: text, truncated: false, estimatedTokens, tokenLimit, outputBytes, byteLimit: DEFAULT_MAX_BYTES }
   }
-  const reasons = [tokenTruncated ? 'model context' : '', byteTruncated ? `${formatSize(DEFAULT_MAX_BYTES)} Pi tool-output limit` : ''].filter(Boolean).join(' and ')
+  const reasons = [tokenTruncated ? 'model context' : '', byteTruncated ? `${formatSize(DEFAULT_MAX_BYTES)} Vesper tool-output limit` : ''].filter(Boolean).join(' and ')
   const suffix = `\n\n[Output truncated for ${reasons}.]`
   const byteBudget = Math.max(0, DEFAULT_MAX_BYTES - Buffer.byteLength(suffix, 'utf8'))
   const charBudget = tokenTruncated ? Math.max(0, tokenLimit * 4 - suffix.length) : text.length
@@ -243,21 +237,6 @@ function contextLimitedText(value, model) {
 function childTools(allowedTools) {
   return [...new Set(Array.isArray(allowedTools) ? allowedTools.filter(Boolean) : [])]
     .filter((tool) => !PARENT_ONLY_TOOL_NAMES.has(tool))
-}
-
-function normalizeRole(value) {
-  return AGENT_ROLES.includes(value) ? value : 'worker'
-}
-
-function toolsForRole(role, allowedTools) {
-  const tools = childTools(allowedTools)
-  if (role === 'explorer' || role === 'reviewer') return tools.filter((tool) => READ_ONLY_ROLE_TOOLS.has(tool))
-  if (role === 'tester') return tools.filter((tool) => TESTER_ROLE_TOOLS.has(tool))
-  return tools
-}
-
-function roleSystemPrompt(role) {
-  return `${MULTI_AGENT_SYSTEM_PROMPT}\n\n${ROLE_SYSTEM_PROMPTS[normalizeRole(role)]}`
 }
 
 function inheritedCustomTools(tools, customTools) {
@@ -292,8 +271,6 @@ function publicRecord(record) {
     taskName: record.taskName,
     canonicalName: record.canonicalName,
     parentSessionId: record.parentSessionId,
-    role: record.role,
-    dependsOn: [...record.dependsOn],
     status: record.status,
     message: record.message,
     model: modelLabel(record.model),
@@ -303,8 +280,8 @@ function publicRecord(record) {
     lastActivityAt: record.lastActivityAt,
     completedAt: record.completedAt,
     durationMs: record.durationMs,
-    maxDurationSeconds: record.maxDurationSeconds,
-    maxToolCalls: record.maxToolCalls,
+    maxTurns: record.maxTurns,
+    turnCount: record.turnCount,
     toolCallCount: record.toolCallCount,
     tools: record.tools.map((tool) => ({ ...tool })),
     output: record.output,
@@ -314,7 +291,6 @@ function publicRecord(record) {
     runUsage: { ...record.runUsage },
     runNumber: record.runNumber,
     resultVersion: record.resultVersion,
-    deliveredVersion: record.deliveredVersion,
     error: record.error,
     currentActivity: record.currentActivity ? { ...record.currentActivity } : null,
   }
@@ -346,7 +322,8 @@ export class MultiAgentService {
     this.clearTimer = clearTimer
     this.now = now
     this.records = new Map()
-    this.waiters = new Map()
+    this.mailbox = new Map()
+    this.mailboxWaiters = new Map()
     this.sequence = 0
     this.write = Promise.resolve()
     this.disposing = false
@@ -354,9 +331,20 @@ export class MultiAgentService {
 
   async init() {
     if (!this.path) return
-    const state = await readJson(this.path, { version: 1, sequence: 0, records: [] })
-    this.sequence = Math.max(0, Number(state?.sequence) || 0)
+    const state = await readJson(this.path, null)
+    this.sequence = 0
     this.records.clear()
+    this.mailbox.clear()
+    if (!state) return
+    if (state.version !== AGENT_REGISTRY_VERSION) {
+      await this.save()
+      return
+    }
+    this.sequence = Math.max(0, Number(state.sequence) || 0)
+    for (const value of Array.isArray(state.mailbox) ? state.mailbox : []) {
+      const entry = restoredMailboxEntry(value)
+      if (entry) this.mailbox.set(entry.mailboxId, entry)
+    }
     let changed = false
     for (const value of Array.isArray(state?.records) ? state.records : []) {
       const record = restoredRecord(value)
@@ -370,6 +358,7 @@ export class MultiAgentService {
         record.lastActivityAt = completedAt
         record.durationMs = Math.max(0, this.now() - new Date(record.startedAt).getTime())
         record.resultVersion += 1
+        this.enqueueMailbox(publicRecord(record))
         changed = true
       }
       this.records.set(record.id, record)
@@ -380,9 +369,10 @@ export class MultiAgentService {
   save() {
     if (!this.path) return Promise.resolve()
     const snapshot = {
-      version: 2,
+      version: AGENT_REGISTRY_VERSION,
       sequence: this.sequence,
       records: [...this.records.values()].map(durableRecord),
+      mailbox: [...this.mailbox.values()].map(durableMailboxEntry),
     }
     this.write = this.write.catch(() => {}).then(() => writeJsonAtomic(this.path, snapshot))
     return this.write
@@ -392,18 +382,32 @@ export class MultiAgentService {
     return this.write
   }
 
+  enqueueMailbox(agent) {
+    const mailboxId = `${agent.id}:${agent.resultVersion}`
+    const existing = this.mailbox.get(mailboxId)
+    if (existing) return existing
+    const entry = { ...agent, mailboxId, queuedAt: new Date(this.now()).toISOString() }
+    this.mailbox.set(mailboxId, entry)
+    return entry
+  }
+
   peekMailbox(parentSessionId) {
-    return this.list(parentSessionId).filter((record) => TERMINAL_AGENT_STATUSES.has(record.status) && record.resultVersion > record.deliveredVersion)
+    return [...this.mailbox.values()]
+      .filter((entry) => entry.parentSessionId === parentSessionId)
+      .sort((left, right) => left.queuedAt.localeCompare(right.queuedAt))
+      .map((entry) => ({ ...entry }))
   }
 
   async acknowledge(parentSessionId, agents = []) {
-    const versions = new Map((Array.isArray(agents) ? agents : []).map((agent) => [agent.id, Number(agent.resultVersion) || 0]))
+    const deliveries = Array.isArray(agents) ? agents : []
     let changed = false
-    for (const record of this.records.values()) {
-      if (record.parentSessionId !== parentSessionId || !TERMINAL_AGENT_STATUSES.has(record.status)) continue
-      const version = versions.get(record.id)
-      if (!version || version <= record.deliveredVersion) continue
-      record.deliveredVersion = Math.min(record.resultVersion, version)
+    for (const [mailboxId, entry] of this.mailbox) {
+      if (entry.parentSessionId !== parentSessionId) continue
+      const delivered = deliveries.some((agent) => agent?.mailboxId
+        ? agent.mailboxId === mailboxId
+        : agent?.id === entry.id && Number(agent?.resultVersion) === entry.resultVersion)
+      if (!delivered) continue
+      this.mailbox.delete(mailboxId)
       changed = true
     }
     if (changed) await this.save()
@@ -424,44 +428,10 @@ export class MultiAgentService {
     })
   }
 
-  graph(parentSessionId) {
-    const agents = this.summaries(parentSessionId)
-    const nodes = [
-      { id: `session:${parentSessionId}`, kind: 'parent', status: 'active' },
-      ...agents.map((agent) => ({ id: agent.id, kind: 'agent', role: agent.role, taskName: agent.taskName, canonicalName: agent.canonicalName, status: agent.status })),
-    ]
-    const edges = agents.flatMap((agent) => [
-      { sourceId: `session:${parentSessionId}`, targetId: agent.id, relation: 'delegates' },
-      ...agent.dependsOn.map((dependencyId) => ({ sourceId: dependencyId, targetId: agent.id, relation: 'depends_on' })),
-    ])
-    return {
-      parentSessionId,
-      nodes,
-      edges,
-      counts: {
-        queued: agents.filter((agent) => agent.status === 'queued').length,
-        active: agents.filter((agent) => EXECUTING_AGENT_STATUSES.has(agent.status)).length,
-        completed: agents.filter((agent) => agent.status === 'completed').length,
-        failed: agents.filter((agent) => ['failed', 'interrupted'].includes(agent.status)).length,
-      },
-    }
-  }
-
   find(parentSessionId, target) {
     const value = String(target || '').trim()
     return [...this.records.values()].reverse().find((record) => record.parentSessionId === parentSessionId
       && [record.id, record.taskName, record.canonicalName].includes(value))
-  }
-
-  resolveDependencies(parentSessionId, targets) {
-    const dependencies = []
-    for (const target of Array.isArray(targets) ? targets : []) {
-      const record = this.find(parentSessionId, target)
-      if (!record) throw new Error(`Unknown dependency agent: ${target}`)
-      if (!dependencies.includes(record.id)) dependencies.push(record.id)
-    }
-    if (dependencies.length > MAX_AGENT_DEPENDENCIES) throw new Error(`Agent dependencies are limited to ${MAX_AGENT_DEPENDENCIES}.`)
-    return dependencies
   }
 
   prune(parentSessionId) {
@@ -476,33 +446,23 @@ export class MultiAgentService {
     }
   }
 
-  notify(parentSessionId) {
-    const waiters = this.waiters.get(parentSessionId)
+  notifyMailbox(agent) {
+    if (!TERMINAL_AGENT_STATUSES.has(agent?.status)) return
+    const waiters = this.mailboxWaiters.get(agent.parentSessionId)
     if (!waiters?.size) return
-    const agents = this.list(parentSessionId)
     for (const waiter of [...waiters]) {
-      if (waiter.predicate(agents)) waiter.finish(agents, false)
+      if (waiter.matches(agent)) waiter.finish(agent, false)
     }
   }
 
   emit(record, onProgress) {
     record.lastActivityAt = new Date(this.now()).toISOString()
     try { onProgress?.(publicRecord(record)) } catch {}
-    this.notify(record.parentSessionId)
     void this.save().catch(() => {})
   }
 
   executingCount() {
     return [...this.records.values()].filter((record) => record.slotActive).length
-  }
-
-  dependencyState(record) {
-    const dependencies = record.dependsOn.map((id) => this.records.get(id))
-    const missingId = record.dependsOn.find((_id, index) => !dependencies[index])
-    if (missingId) return { ready: false, failed: { canonicalName: missingId, status: 'missing' } }
-    const failed = dependencies.find((dependency) => ['failed', 'interrupted'].includes(dependency.status))
-    if (failed) return { ready: false, failed }
-    return { ready: dependencies.every((dependency) => dependency.status === 'completed'), failed: null }
   }
 
   async scheduleQueued() {
@@ -512,20 +472,7 @@ export class MultiAgentService {
       .filter((record) => record.status === 'queued')
       .sort((left, right) => left.startedAt.localeCompare(right.startedAt))
     for (const record of queued) {
-      const dependency = this.dependencyState(record)
-      if (dependency.failed) {
-        const completedAt = new Date(this.now()).toISOString()
-        record.status = 'failed'
-        record.error = `Dependency ${dependency.failed.canonicalName} ended as ${dependency.failed.status}.`
-        record.completedAt = completedAt
-        record.currentActivity = null
-        record.durationMs = Math.max(0, this.now() - new Date(record.startedAt).getTime())
-        record.resultVersion += 1
-        this.emit(record, record.onProgress)
-        try { await record.onTerminal?.(publicRecord(record)) } catch {}
-        continue
-      }
-      if (!dependency.ready || slots <= 0) continue
+      if (slots <= 0) break
       slots -= 1
       record.status = 'starting'
       record.slotActive = true
@@ -540,35 +487,40 @@ export class MultiAgentService {
     const current = this.list(parentSessionId)
     const targetRecord = target ? this.find(parentSessionId, target) : null
     if (target && !targetRecord) throw new Error(`Unknown agent: ${target}`)
-    if (targetRecord && TERMINAL_AGENT_STATUSES.has(targetRecord.status)) return { timedOut: false, agents: current }
+    const pendingMailbox = this.peekMailbox(parentSessionId)
+    const pendingDelivery = targetRecord
+      ? pendingMailbox.find((agent) => agent.id === targetRecord.id)
+      : pendingMailbox[0]
+    if (pendingDelivery) return { timedOut: false, agents: current, agent: pendingDelivery }
+    if (targetRecord && TERMINAL_AGENT_STATUSES.has(targetRecord.status)) return { timedOut: false, agents: current, agent: publicRecord(targetRecord) }
     const activeIds = new Set(current.filter((record) => ACTIVE_AGENT_STATUSES.has(record.status)).map((record) => record.id))
-    if (!activeIds.size) return { timedOut: false, agents: current }
-    const predicate = targetRecord
-      ? (agents) => agents.some((record) => record.id === targetRecord.id && TERMINAL_AGENT_STATUSES.has(record.status))
-      : (agents) => agents.some((record) => activeIds.has(record.id) && TERMINAL_AGENT_STATUSES.has(record.status))
+    if (!activeIds.size) return { timedOut: false, agents: current, agent: null }
+    const matches = targetRecord
+      ? (agent) => agent.id === targetRecord.id
+      : (agent) => activeIds.has(agent.id)
     return new Promise((resolve) => {
       let settled = false
       let timer = null
       let waiter = null
-      const finish = (agents, timedOut) => {
+      const finish = (agent, timedOut) => {
         if (settled) return
         settled = true
         this.clearTimer(timer)
-        const waiters = this.waiters.get(parentSessionId)
+        const waiters = this.mailboxWaiters.get(parentSessionId)
         waiters?.delete(waiter)
-        if (!waiters?.size) this.waiters.delete(parentSessionId)
-        resolve({ timedOut, agents })
+        if (!waiters?.size) this.mailboxWaiters.delete(parentSessionId)
+        resolve({ timedOut, agents: this.list(parentSessionId), agent: timedOut ? null : agent })
       }
-      waiter = { predicate, finish }
-      const waiters = this.waiters.get(parentSessionId) || new Set()
+      waiter = { matches, finish }
+      const waiters = this.mailboxWaiters.get(parentSessionId) || new Set()
       waiters.add(waiter)
-      this.waiters.set(parentSessionId, waiters)
-      timer = this.setTimer(() => finish(this.list(parentSessionId), true), Math.max(250, Math.min(30_000, Number(timeoutMs) || 15_000)))
+      this.mailboxWaiters.set(parentSessionId, waiters)
+      timer = this.setTimer(() => finish(null, true), Math.max(250, Math.min(30_000, Number(timeoutMs) || 15_000)))
       timer?.unref?.()
     })
   }
 
-  async spawn({ parentSessionId, cwd, model, thinkingLevel, taskName, message, role, dependsOn, allowedTools, customTools, maxDurationSeconds, maxToolCalls, onProgress, onSession, onCompleted, onTerminal } = {}) {
+  async spawn({ parentSessionId, cwd, model, thinkingLevel, taskName, message, allowedTools, customTools, maxTurns, onProgress, onSession, onCompleted, onTerminal } = {}) {
     if (!parentSessionId) throw new Error('Agent requires a parent session.')
     if (!cwd) throw new Error('Agent requires a workspace directory.')
     if (!model) throw new Error('Agent requires an active parent model.')
@@ -578,8 +530,6 @@ export class MultiAgentService {
     this.prune(parentSessionId)
     const parentRecordCount = [...this.records.values()].filter((record) => record.parentSessionId === parentSessionId).length
     if (parentRecordCount >= MAX_AGENTS_PER_PARENT) throw new Error(`Agent record limit reached for this session (${MAX_AGENTS_PER_PARENT}).`)
-    const normalizedRole = normalizeRole(role)
-    const dependencies = this.resolveDependencies(parentSessionId, dependsOn)
     const id = randomUUID()
     const normalizedName = normalizeTaskName(taskName)
     const record = {
@@ -587,16 +537,14 @@ export class MultiAgentService {
       taskName: normalizedName,
       canonicalName: `/root/${normalizedName}_${++this.sequence}`,
       parentSessionId,
-      role: normalizedRole,
-      dependsOn: dependencies,
       cwd,
       model,
       thinkingLevel: thinkingLevel || 'medium',
       message: normalizedMessage,
-      availableTools: toolsForRole(normalizedRole, allowedTools),
+      availableTools: childTools(allowedTools),
       customTools,
-      maxDurationSeconds: boundedInteger(maxDurationSeconds, DEFAULT_AGENT_MAX_DURATION_SECONDS, MAX_AGENT_MAX_DURATION_SECONDS),
-      maxToolCalls: boundedInteger(maxToolCalls, DEFAULT_AGENT_MAX_TOOL_CALLS, MAX_AGENT_MAX_TOOL_CALLS),
+      maxTurns: boundedInteger(maxTurns, DEFAULT_AGENT_MAX_TURNS, MAX_AGENT_MAX_TURNS),
+      turnCount: 0,
       toolCallCount: 0,
       tools: [],
       output: '',
@@ -607,8 +555,6 @@ export class MultiAgentService {
       runNumber: 0,
       runGeneration: 0,
       resultVersion: 0,
-      deliveredVersion: 0,
-      timerGeneration: 0,
       slotActive: false,
       error: '',
       startedAt: new Date(this.now()).toISOString(),
@@ -616,10 +562,9 @@ export class MultiAgentService {
       completedAt: null,
       durationMs: null,
       status: 'queued',
-      currentActivity: { type: 'queue', dependsOn: dependencies, updatedAt: new Date(this.now()).toISOString() },
+      currentActivity: { type: 'queue', updatedAt: new Date(this.now()).toISOString() },
       session: null,
       unsubscribe: () => {},
-      timer: null,
       aborted: false,
       abortReason: '',
       runningPromise: Promise.resolve(),
@@ -637,24 +582,10 @@ export class MultiAgentService {
     return publicRecord(record)
   }
 
-  clearRunTimer(record, generation) {
-    if (record.timerGeneration !== generation) return
-    if (record.timer) this.clearTimer(record.timer)
-    record.timer = null
-    record.timerGeneration = 0
-  }
-
   async startRun(record, message) {
     const generation = ++record.runGeneration
     const startedAt = this.now()
     const isCurrent = () => record.runGeneration === generation
-    this.clearRunTimer(record, record.timerGeneration)
-    record.timerGeneration = generation
-    record.timer = this.setTimer(() => {
-      if (record.runGeneration !== generation) return
-      this.interrupt(record.parentSessionId, record.id, `Agent exceeded its ${record.maxDurationSeconds}-second duration limit.`)
-    }, record.maxDurationSeconds * 1000)
-    record.timer?.unref?.()
     try {
       if (!isCurrent()) return
       if (record.aborted) throw new Error(record.abortReason || 'Agent was interrupted.')
@@ -663,7 +594,7 @@ export class MultiAgentService {
           this.getSettingsManager(),
           () => record.model?.contextWindow,
         )
-        const resourceLoader = await this.createResourceLoader({ cwd: record.cwd, agentDir: this.agentDir || record.cwd, settingsManager, appendSystemPrompt: roleSystemPrompt(record.role) })
+        const resourceLoader = await this.createResourceLoader({ cwd: record.cwd, agentDir: this.agentDir || record.cwd, settingsManager, appendSystemPrompt: MULTI_AGENT_SYSTEM_PROMPT })
         if (!isCurrent()) return
         if (record.aborted) throw new Error(record.abortReason || 'Agent was interrupted.')
         const sessionManager = this.createSessionManager(record.cwd)
@@ -694,15 +625,18 @@ export class MultiAgentService {
         applyVesperSystemPrompt(record.session, record.model)
         record.onSession?.(record.session)
         record.unsubscribe = record.session.subscribe((event) => {
-          // Session is reused across follow-up runs; always attribute live tool events to the current record state.
-          if (event.type === 'tool_execution_start') {
+          // Session is reused across follow-up runs; always attribute live events to the current record state.
+          if (event.type === 'turn_start') {
+            record.turnCount += 1
+            record.currentActivity = { type: 'model', stage: 'thinking', updatedAt: new Date(this.now()).toISOString() }
+            if (record.turnCount > record.maxTurns) {
+              this.interrupt(record.parentSessionId, record.id, `Agent exceeded its ${record.maxTurns}-turn limit.`)
+            }
+          } else if (event.type === 'tool_execution_start') {
             record.toolCallCount += 1
             const tool = { type: 'tool', id: event.toolCallId, name: event.toolName, args: event.args, status: 'running', startedAt: new Date(this.now()).toISOString() }
             record.tools.push(tool)
             record.currentActivity = tool
-            if (record.toolCallCount > record.maxToolCalls) {
-              this.interrupt(record.parentSessionId, record.id, `Agent exceeded its ${record.maxToolCalls}-tool-call budget.`)
-            }
           } else if (event.type === 'tool_execution_end') {
             const finishedAt = new Date(this.now()).toISOString()
             record.tools = record.tools.map((tool) => tool.id === event.toolCallId ? { ...tool, status: event.isError ? 'error' : 'done', finishedAt } : tool)
@@ -718,6 +652,7 @@ export class MultiAgentService {
       const usageBeforeRun = usageTotal(record.session.messages)
       record.runNumber += 1
       record.message = message
+      record.turnCount = 0
       record.toolCallCount = 0
       record.tools = []
       record.output = ''
@@ -753,11 +688,14 @@ export class MultiAgentService {
       record.status = 'completed'
       record.currentActivity = null
       record.completedAt = new Date(this.now()).toISOString()
+      record.lastActivityAt = record.completedAt
       record.durationMs = this.now() - startedAt
       record.resultVersion += 1
+      const terminal = publicRecord(record)
+      const delivery = this.enqueueMailbox(terminal)
       this.emit(record, record.onProgress)
       await this.save()
-      const terminal = publicRecord(record)
+      this.notifyMailbox(delivery)
       try { await record.onCompleted?.(terminal) } catch {}
       try { await record.onTerminal?.(terminal) } catch {}
     } catch (error) {
@@ -768,16 +706,19 @@ export class MultiAgentService {
       record.currentActivity = null
       record.tools = record.tools.map((tool) => tool.status === 'running' ? { ...tool, status: 'error', message: record.error } : tool)
       record.completedAt ||= new Date(this.now()).toISOString()
+      record.lastActivityAt = record.completedAt
       record.durationMs ??= this.now() - startedAt
       if (!wasTerminal) record.resultVersion += 1
       record.pendingMessages = []
+      const terminal = !wasTerminal ? publicRecord(record) : null
+      const delivery = terminal ? this.enqueueMailbox(terminal) : null
       this.emit(record, record.onProgress)
       await this.save()
-      if (!wasTerminal) {
-        try { await record.onTerminal?.(publicRecord(record)) } catch {}
+      if (terminal) {
+        this.notifyMailbox(delivery)
+        try { await record.onTerminal?.(terminal) } catch {}
       }
     } finally {
-      this.clearRunTimer(record, generation)
       if (record.runGeneration === generation) record.slotActive = false
       try { await this.scheduleQueued() } catch {}
     }
@@ -839,7 +780,7 @@ export class MultiAgentService {
       record.startedAt = new Date(this.now()).toISOString()
       record.message = text
       record.status = 'queued'
-      record.currentActivity = { type: 'queue', dependsOn: record.dependsOn, updatedAt: record.startedAt }
+      record.currentActivity = { type: 'queue', updatedAt: record.startedAt }
       record.error = ''
       record.completedAt = null
       record.durationMs = null
@@ -863,6 +804,7 @@ export class MultiAgentService {
     record.error = reason
     record.tools = record.tools.map((tool) => tool.status === 'running' ? { ...tool, status: 'error', message: reason } : tool)
     record.completedAt = new Date(this.now()).toISOString()
+    record.lastActivityAt = record.completedAt
     record.durationMs = Math.max(0, this.now() - new Date(record.startedAt).getTime())
     record.resultVersion += 1
     record.pendingMessages = []
@@ -870,12 +812,13 @@ export class MultiAgentService {
       const aborting = record.session?.abort?.()
       if (aborting?.catch) void aborting.catch(() => {})
     } catch {}
-    this.emit(record, record.onProgress)
     const terminal = publicRecord(record)
-    try {
-      const notifying = record.onTerminal?.(terminal)
-      if (notifying?.catch) void notifying.catch(() => {})
-    } catch {}
+    const delivery = this.enqueueMailbox(terminal)
+    this.emit(record, record.onProgress)
+    void this.flush().then(() => {
+      this.notifyMailbox(delivery)
+      return record.onTerminal?.(terminal)
+    }).catch(() => {})
     if (schedule) void this.scheduleQueued().catch(() => {})
     return terminal
   }
@@ -899,6 +842,9 @@ export class MultiAgentService {
       try { record.session?.dispose?.() } catch {}
       this.records.delete(id)
     }
+    for (const [mailboxId, entry] of this.mailbox) {
+      if (entry.parentSessionId === parentSessionId) this.mailbox.delete(mailboxId)
+    }
     await this.save()
   }
 
@@ -911,7 +857,8 @@ export class MultiAgentService {
     }
     await this.flush()
     this.records.clear()
-    for (const waiters of this.waiters.values()) for (const waiter of [...waiters]) waiter.finish([], false)
-    this.waiters.clear()
+    this.mailbox.clear()
+    for (const waiters of this.mailboxWaiters.values()) for (const waiter of [...waiters]) waiter.finish(null, false)
+    this.mailboxWaiters.clear()
   }
 }

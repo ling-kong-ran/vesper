@@ -56,7 +56,7 @@ export function SkillsPage({ notify, query = '', registerPrimaryAction, requestT
       title: t('安装技能'),
       message: t('输入本地技能目录、SKILL.md、npm 包或 git 来源。Vesper 只导入其中的技能资源。'),
       inputLabel: t('技能来源'),
-      placeholder: 'npm:@scope/pi-skills or ./path/to/skill',
+      placeholder: 'npm:@scope/vesper-skills or ./path/to/skill',
       maxLength: 2_000,
       confirmLabel: t('继续'),
     })

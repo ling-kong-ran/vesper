@@ -14,6 +14,8 @@ test('English interface translations resolve static and interpolated messages', 
   assert.equal(translateText('本机 Provider 配置', 'en-US'), 'Local provider configuration')
   assert.equal(translateText('需要 Codex CLI 登录', 'en-US'), 'Codex CLI login required')
   assert.equal(translateText('连接 MCP 服务', 'en-US'), 'Connect MCP server')
+  assert.equal(translateText('Vesper 应用工具', 'en-US'), 'Vesper app tools')
+  assert.equal(translateText('Vesper 内置工具', 'en-US'), 'Vesper built-in tools')
   assert.equal(translateText('让我们从一束想法开始', 'en-US'), 'Let’s begin with a spark of an idea')
   assert.equal(translateText('拆分到左侧', 'en-US'), 'Split to left')
   assert.equal(translateText('将 {name} 拆分到右侧', 'en-US', { name: 'Research' }), 'Split Research to the right')

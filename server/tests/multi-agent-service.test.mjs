@@ -117,8 +117,9 @@ test('spawn_agent starts asynchronously and inherits the active model, reasoning
 
   const started = await service.spawn(baseInput())
   assert.ok(['starting', 'running'].includes(started.status))
-  assert.equal(started.role, 'worker')
-  assert.deepEqual(started.dependsOn, [])
+  assert.equal(Object.hasOwn(started, 'role'), false)
+  assert.equal(Object.hasOwn(started, 'dependsOn'), false)
+  assert.equal(started.maxTurns, 30)
   await waitFor(() => session.promptCalls.length === 1, 'Agent prompt start')
   assert.equal(service.list('parent-1')[0].status, 'running')
   assert.equal(service.list('parent-1')[0].currentActivity.type, 'model')
@@ -140,25 +141,16 @@ test('spawn_agent starts asynchronously and inherits the active model, reasoning
   assert.deepEqual(completed.runUsage, { input: 20, output: 8, cacheRead: 0, cacheWrite: 0, reasoning: 0, totalTokens: 28 })
 })
 
-test('role profiles scope tools and inject role-specific result contracts', async () => {
-  const explorerSession = createFakeSession({
-    onPrompt: async ({ session }) => session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Mapped the runtime.' }] }),
+test('subagents inherit parent-safe tools without hard-coded roles', async () => {
+  const session = createFakeSession({
+    onPrompt: async ({ session: active }) => active.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Task complete.' }] }),
   })
-  const { service: explorerService, seen: explorerSeen } = createService(explorerSession)
-  await explorerService.spawn(baseInput({ role: 'explorer', allowedTools: ['read', 'grep', 'find', 'edit', 'bash', 'web_search'] }))
-  await waitFor(() => explorerService.list('parent-1')[0]?.status === 'completed', 'explorer completion')
-  assert.deepEqual(explorerSeen.options.tools, ['read', 'grep', 'find', 'web_search'])
-  assert.match(explorerSeen.options.resourceLoader.options.appendSystemPrompt, /Role: explorer/)
-  assert.match(explorerSeen.options.resourceLoader.options.appendSystemPrompt, /Do not modify files/)
-
-  const testerSession = createFakeSession({
-    onPrompt: async ({ session }) => session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Tests reproduced.' }] }),
-  })
-  const { service: testerService, seen: testerSeen } = createService(testerSession)
-  await testerService.spawn(baseInput({ role: 'tester', allowedTools: ['read', 'edit', 'write', 'bash'] }))
-  await waitFor(() => testerService.list('parent-1')[0]?.status === 'completed', 'tester completion')
-  assert.deepEqual(testerSeen.options.tools, ['read', 'bash'])
-  assert.match(testerSeen.options.resourceLoader.options.appendSystemPrompt, /Role: tester/)
+  const { service, seen } = createService(session)
+  await service.spawn(baseInput({ allowedTools: ['read', 'grep', 'find', 'edit', 'write', 'bash', 'spawn_agent'] }))
+  await waitFor(() => service.list('parent-1')[0]?.status === 'completed', 'generic subagent completion')
+  assert.deepEqual(seen.options.tools, ['read', 'grep', 'find', 'edit', 'write', 'bash'])
+  assert.match(seen.options.resourceLoader.options.appendSystemPrompt, /isolated context/)
+  assert.doesNotMatch(seen.options.resourceLoader.options.appendSystemPrompt, /Role:/)
 })
 
 test('send_message steers a running Agent and followup_task reuses its context', async () => {
@@ -180,6 +172,8 @@ test('send_message steers a running Agent and followup_task reuses its context',
 
   firstRun.resolve()
   await waitFor(() => service.list('parent-1')[0]?.status === 'completed', 'first Agent run')
+  const [firstDelivery] = service.peekMailbox('parent-1')
+  assert.equal(firstDelivery.resultVersion, 1)
   await assert.rejects(service.sendMessage('parent-1', started.id, 'Late message'), /not running/)
 
   const queued = await service.followup('parent-1', started.id, 'Review the completed result.')
@@ -188,9 +182,17 @@ test('send_message steers a running Agent and followup_task reuses its context',
   const completed = await waitFor(() => service.list('parent-1')[0]?.status === 'completed' && service.list('parent-1')[0]?.runNumber === 2 && service.list('parent-1')[0], 'follow-up completion')
   assert.equal(completed.runNumber, 2)
   assert.equal(completed.runUsage.totalTokens, 10)
+  const deliveries = service.peekMailbox('parent-1')
+  assert.deepEqual(deliveries.map((agent) => agent.resultVersion), [1, 2])
+  assert.match(deliveries[0].output, /Inspect the runtime/)
+  assert.match(deliveries[1].output, /Review the completed result/)
+  const pending = await service.wait('parent-1', 250)
+  assert.equal(pending.agent.mailboxId, firstDelivery.mailboxId)
+  await service.acknowledge('parent-1', [firstDelivery])
+  assert.deepEqual(service.peekMailbox('parent-1').map((agent) => agent.resultVersion), [2])
 })
 
-test('hard duration and tool-call budgets interrupt an Agent even while it remains active', async () => {
+test('Agents have no wall-clock timeout while Agent turn limits ignore ordinary tool calls', async () => {
   const timers = new Map()
   const setTimer = (callback, milliseconds) => {
     const handle = { milliseconds, unref() {} }
@@ -201,28 +203,34 @@ test('hard duration and tool-call budgets interrupt an Agent even while it remai
   const promptGate = deferred()
   const session = createFakeSession({ onPrompt: () => promptGate.promise })
   const { service } = createService(session, { setTimer, clearTimer })
-  await service.spawn(baseInput({ maxDurationSeconds: 15, maxToolCalls: 1 }))
-  await waitFor(() => service.list('parent-1')[0]?.status === 'running', 'budgeted Agent')
-  const durationTimer = [...timers.entries()].find(([handle]) => handle.milliseconds === 15_000)
-  assert.ok(durationTimer)
-  durationTimer[1]()
-  await waitFor(() => session.aborted, 'duration abort')
+  const started = await service.spawn(baseInput())
+  await waitFor(() => service.list('parent-1')[0]?.status === 'running', 'unbounded Agent')
+  assert.equal(timers.size, 0)
+  assert.equal(session.aborted, false)
+  service.interrupt('parent-1', started.id, 'explicit stop')
+  await waitFor(() => session.aborted, 'explicit Agent interruption')
   promptGate.resolve()
-  const interrupted = await waitFor(() => service.list('parent-1')[0]?.status === 'interrupted' && service.list('parent-1')[0], 'duration interruption')
-  assert.match(interrupted.error, /duration limit/)
+  const interrupted = await waitFor(() => service.list('parent-1')[0]?.status === 'interrupted' && service.list('parent-1')[0], 'explicit interruption')
+  assert.equal(interrupted.error, 'explicit stop')
 
   const secondGate = deferred()
   const secondSession = createFakeSession({ onPrompt: () => secondGate.promise })
   const { service: secondService } = createService(secondSession)
-  const second = await secondService.spawn(baseInput({ parentSessionId: 'parent-2', maxToolCalls: 1 }))
-  await waitFor(() => secondService.list('parent-2')[0]?.status === 'running', 'tool-budget Agent')
-  secondSession.emit({ type: 'tool_execution_start', toolCallId: 'read-1', toolName: 'read' })
-  secondSession.emit({ type: 'tool_execution_start', toolCallId: 'read-2', toolName: 'read' })
-  await waitFor(() => secondSession.aborted, 'tool budget abort')
+  const second = await secondService.spawn(baseInput({ parentSessionId: 'parent-2', maxTurns: 1 }))
+  await waitFor(() => secondService.list('parent-2')[0]?.status === 'running', 'turn-limited Agent')
+  secondSession.emit({ type: 'turn_start' })
+  for (let index = 0; index < 40; index += 1) {
+    secondSession.emit({ type: 'tool_execution_start', toolCallId: `read-${index}`, toolName: 'read' })
+    secondSession.emit({ type: 'tool_execution_end', toolCallId: `read-${index}`, toolName: 'read', isError: false })
+  }
+  assert.equal(secondSession.aborted, false)
+  assert.equal(secondService.list('parent-2')[0].toolCallCount, 40)
+  secondSession.emit({ type: 'turn_start' })
+  await waitFor(() => secondSession.aborted, 'turn limit abort')
   secondGate.resolve()
-  const toolInterrupted = await waitFor(() => secondService.list('parent-2')[0]?.status === 'interrupted' && secondService.list('parent-2')[0], 'tool budget interruption')
-  assert.equal(toolInterrupted.id, second.id)
-  assert.match(toolInterrupted.error, /tool-call budget/)
+  const turnInterrupted = await waitFor(() => secondService.list('parent-2')[0]?.status === 'interrupted' && secondService.list('parent-2')[0], 'turn limit interruption')
+  assert.equal(turnInterrupted.id, second.id)
+  assert.match(turnInterrupted.error, /1-turn limit/)
 })
 
 test('wait_agent ignores progress noise, returns on terminal state, and abortParent stays scoped', async () => {
@@ -246,8 +254,13 @@ test('wait_agent ignores progress noise, returns on terminal state, and abortPar
   gate.resolve()
   const update = await waiting
   assert.equal(update.timedOut, false)
+  assert.equal(update.agent.id, started.id)
+  assert.equal(update.agent.status, 'completed')
   assert.equal(update.agents[0].status, 'completed')
   assert.equal(update.agents[0].toolCallCount, 1)
+  assert.deepEqual(service.peekMailbox('parent-1').map((agent) => agent.id), [started.id])
+  await service.acknowledge('parent-1', [update.agent])
+  assert.deepEqual(service.peekMailbox('parent-1'), [])
 
   const secondGate = deferred()
   const secondSession = createFakeSession({ onPrompt: () => secondGate.promise })
@@ -285,7 +298,7 @@ test('completed, failed, and interrupted Agents emit terminal callbacks without 
   gate.resolve()
 })
 
-test('Agent output is UTF-8 safe and bounded to the Pi tool-output limit', async () => {
+test('Agent output is UTF-8 safe and bounded to the Vesper tool-output limit', async () => {
   const largeOutput = '你'.repeat(20_000)
   const session = createFakeSession({
     onPrompt: async ({ session: active }) => active.messages.push({ role: 'assistant', content: [{ type: 'text', text: largeOutput }] }),
@@ -296,6 +309,8 @@ test('Agent output is UTF-8 safe and bounded to the Pi tool-output limit', async
   assert.ok(Buffer.byteLength(completed.output, 'utf8') <= DEFAULT_MAX_BYTES)
   assert.equal(completed.output.includes('\ufffd'), false)
   assert.equal(completed.outputTruncated, true)
+  assert.match(completed.output, /Vesper tool-output limit/)
+  assert.doesNotMatch(completed.output, /Pi tool-output limit/)
   assert.equal(completed.fullOutput, largeOutput)
 })
 
@@ -307,26 +322,30 @@ test('Codex-style Agent tools replace delegate_task and stay hidden from the plu
     multiAgentRuntime: {
       spawn: async (value) => {
         input = value
-        return { id: 'agent-1', canonicalName: '/root/inspect_1', role: value.role || 'worker', status: 'starting' }
+        return { id: 'agent-1', canonicalName: '/root/inspect_1', status: 'starting' }
       },
     },
   })
-  const result = await tool.execute('spawn-1', { taskName: 'inspect', message: 'Inspect the runtime.', role: 'reviewer', dependsOn: ['agent-0'] })
-  assert.deepEqual(input, { taskName: 'inspect', message: 'Inspect the runtime.', role: 'reviewer', dependsOn: ['agent-0'] })
-  assert.match(result.content[0].text, /Started \/root\/inspect_1 as reviewer in the background/)
+  const result = await tool.execute('spawn-1', { taskName: 'inspect', message: 'Inspect the runtime.', maxTurns: 30 })
+  assert.deepEqual(input, { taskName: 'inspect', message: 'Inspect the runtime.', maxTurns: 30 })
+  assert.match(result.content[0].text, /Started \/root\/inspect_1 in the background/)
+  assert.equal(Object.hasOwn(tool.parameters.properties, 'role'), false)
+  assert.equal(Object.hasOwn(tool.parameters.properties, 'dependsOn'), false)
+  assert.equal(Object.hasOwn(tool.parameters.properties, 'maxToolCalls'), false)
+  assert.equal(Object.hasOwn(tool.parameters.properties, 'maxDurationSeconds'), false)
+  assert.ok(Object.hasOwn(tool.parameters.properties, 'maxTurns'))
 })
 
-test('list_agents exposes the Agent graph without expanding full outputs', async () => {
+test('list_agents returns statuses without a task graph or role expansion', async () => {
   const tools = createMultiAgentTools({
     multiAgentRuntime: {
-      list: async () => [{ id: 'agent-1', canonicalName: '/root/explore_1', role: 'explorer', status: 'queued', dependsOn: ['agent-0'], output: '', error: '' }],
-      graph: async () => ({ parentSessionId: 'parent-1', nodes: [{ id: 'agent-1' }], edges: [{ sourceId: 'agent-0', targetId: 'agent-1', relation: 'depends_on' }] }),
+      list: async () => [{ id: 'agent-1', canonicalName: '/root/inspect_1', status: 'queued', output: '', error: '' }],
     },
   })
   const list = tools.find((tool) => tool.name === 'list_agents')
   const result = await list.execute('list-1', {})
-  assert.match(result.content[0].text, /explorer · queued · waiting for 1/)
-  assert.equal(result.details.graph.edges[0].relation, 'depends_on')
+  assert.match(result.content[0].text, /\/root\/inspect_1 · queued/)
+  assert.equal(Object.hasOwn(result.details, 'graph'), false)
 })
 
 test('background Agents do not instruct the parent to poll or wait by default', () => {
@@ -341,8 +360,7 @@ test('background Agents do not instruct the parent to poll or wait by default', 
   assert.match(spawnGuidance, /must not delay replying to the user/)
   assert.match(spawnGuidance, /do not call list_agents or wait_agent merely to monitor progress/)
   assert.match(spawnGuidance, /spawning other independent Agents/)
-  assert.match(spawnGuidance, /explorer or reviewer for read-only/)
-  assert.match(spawnGuidance, /Use dependsOn to express ordering/)
+  assert.doesNotMatch(spawnGuidance, /explorer|reviewer|dependsOn/)
   assert.match(listGuidance, /Do not call list_agents repeatedly/)
   assert.match(waitGuidance, /Never call wait_agent repeatedly after a timeout/)
   assert.match(waitGuidance, /reply while Agents continue in the background/)
@@ -354,14 +372,7 @@ test('new installations enable the complete tool catalog by default', () => {
   assert.ok(MULTI_AGENT_TOOL_NAMES.every((name) => !TOOL_PRESETS.full.includes(name)))
 })
 
-test('interrupt then followup waits for the old run and preserves the new duration timer', async () => {
-  const timers = new Map()
-  const setTimer = (callback, milliseconds) => {
-    const handle = { milliseconds, unref() {} }
-    timers.set(handle, callback)
-    return handle
-  }
-  const clearTimer = (handle) => timers.delete(handle)
+test('interrupt then followup waits for the old run and keeps run generations isolated', async () => {
   const firstPrompt = deferred()
   const secondPrompt = deferred()
   let promptCount = 0
@@ -377,10 +388,9 @@ test('interrupt then followup waits for the old run and preserves the new durati
       active.messages.push({ role: 'assistant', content: [{ type: 'text', text: `fresh:${message}` }] })
     },
   })
-  const { service } = createService(session, { setTimer, clearTimer })
-  const started = await service.spawn(baseInput({ maxDurationSeconds: 20 }))
+  const { service } = createService(session)
+  const started = await service.spawn(baseInput())
   await waitFor(() => service.list('parent-1')[0]?.status === 'running', 'first run')
-  assert.equal(timers.size, 1)
 
   service.interrupt('parent-1', started.id, 'stop first run')
   const followup = service.followup('parent-1', started.id, 'Continue with the fixed plan.')
@@ -389,16 +399,12 @@ test('interrupt then followup waits for the old run and preserves the new durati
   firstPrompt.resolve()
   await followup
   await waitFor(() => promptCount === 2 && service.list('parent-1')[0]?.status === 'running', 'follow-up run')
-  assert.equal(timers.size, 1)
-  const followupTimer = [...timers.keys()][0]
-  assert.equal(followupTimer.milliseconds, 20_000)
 
   secondPrompt.resolve()
   const completed = await waitFor(() => service.list('parent-1')[0]?.status === 'completed' && service.list('parent-1')[0]?.runNumber === 2 && service.list('parent-1')[0], 'safe follow-up completion')
   assert.equal(completed.runNumber, 2)
   assert.match(completed.output, /fresh:Continue with the fixed plan/)
   assert.equal(completed.output.includes('stale:'), false)
-  assert.equal(timers.size, 0)
 })
 
 test('Agent registry survives restart and marks previously active runs as interrupted', async (t) => {
@@ -406,7 +412,7 @@ test('Agent registry survives restart and marks previously active runs as interr
   t.after(() => rm(directory, { recursive: true, force: true }))
   const path = join(directory, 'agents.json')
   await writeFile(path, `${JSON.stringify({
-    version: 1,
+    version: 4,
     sequence: 7,
     records: [{
       id: 'agent-running',
@@ -418,8 +424,8 @@ test('Agent registry survives restart and marks previously active runs as interr
       thinkingLevel: 'high',
       message: 'Review the runtime.',
       availableTools: ['read'],
-      maxDurationSeconds: 180,
-      maxToolCalls: 24,
+      maxTurns: 24,
+      turnCount: 3,
       toolCallCount: 1,
       tools: [{ id: 'read-1', name: 'read', status: 'running' }],
       output: '',
@@ -428,7 +434,6 @@ test('Agent registry survives restart and marks previously active runs as interr
       runUsage: {},
       runNumber: 1,
       resultVersion: 0,
-      deliveredVersion: 0,
       error: '',
       startedAt: '2026-07-23T10:00:00.000Z',
       lastActivityAt: '2026-07-23T10:00:05.000Z',
@@ -442,8 +447,8 @@ test('Agent registry survives restart and marks previously active runs as interr
 
   const [restored] = service.list('parent-persisted')
   assert.equal(restored.status, 'interrupted')
-  assert.equal(restored.role, 'worker')
-  assert.deepEqual(restored.dependsOn, [])
+  assert.equal(restored.maxTurns, 24)
+  assert.equal(restored.turnCount, 3)
   assert.match(restored.error, /Vesper restarted/)
   assert.equal(restored.completedAt, '2026-07-23T10:01:00.000Z')
   assert.equal(restored.resultVersion, 1)
@@ -453,7 +458,35 @@ test('Agent registry survives restart and marks previously active runs as interr
   assert.deepEqual(service.peekMailbox('parent-persisted'), [])
   const persisted = JSON.parse(await readFile(path, 'utf8'))
   assert.equal(persisted.records[0].status, 'interrupted')
-  assert.equal(persisted.records[0].deliveredVersion, 1)
+  assert.deepEqual(persisted.mailbox, [])
+})
+
+test('legacy Agent registries are discarded instead of migrated', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'vesper-agent-legacy-'))
+  t.after(() => rm(directory, { recursive: true, force: true }))
+  const path = join(directory, 'agents.json')
+  await writeFile(path, `${JSON.stringify({
+    version: 2,
+    sequence: 9,
+    records: [{
+      id: 'legacy-agent',
+      parentSessionId: 'parent-legacy',
+      model: 'openai/gpt-5',
+      role: 'reviewer',
+      dependsOn: ['another-agent'],
+      maxToolCalls: 30,
+      status: 'completed',
+    }],
+  }, null, 2)}\n`, 'utf8')
+
+  const service = new MultiAgentService({ path })
+  await service.init()
+
+  assert.deepEqual(service.list('parent-legacy'), [])
+  const persisted = JSON.parse(await readFile(path, 'utf8'))
+  assert.equal(persisted.version, 4)
+  assert.equal(persisted.sequence, 0)
+  assert.deepEqual(persisted.records, [])
 })
 
 test('completed Agent results persist across service instances', async (t) => {
@@ -465,7 +498,7 @@ test('completed Agent results persist across service instances', async (t) => {
   })
   const { service } = createService(session, { path })
   await service.init()
-  await service.spawn(baseInput({ cwd: directory, role: 'reviewer' }))
+  await service.spawn(baseInput({ cwd: directory, maxTurns: 12 }))
   await waitFor(() => service.list('parent-1')[0]?.status === 'completed', 'persisted Agent completion')
   await service.flush()
 
@@ -473,7 +506,8 @@ test('completed Agent results persist across service instances', async (t) => {
   await restored.init()
   const [record] = restored.list('parent-1')
   assert.equal(record.status, 'completed')
-  assert.equal(record.role, 'reviewer')
+  assert.equal(record.maxTurns, 12)
+  assert.equal(Object.hasOwn(record, 'role'), false)
   assert.equal(record.output, 'Persisted result.')
   assert.equal(restored.peekMailbox('parent-1').length, 1)
   await service.dispose()
@@ -519,54 +553,36 @@ test('messages sent while an Agent is starting are delivered after prompt startu
   await waitFor(() => service.list('parent-1')[0]?.status === 'completed', 'queued-message Agent completion')
 })
 
-test('dependency edges form a DAG and automatically release queued Agents', async () => {
+test('global concurrency queues Agents in FIFO order without task-graph semantics', async () => {
   const firstGate = deferred()
   const firstSession = createFakeSession({
     onPrompt: async ({ session }) => {
       await firstGate.promise
-      session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Exploration complete.' }] })
+      session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'First complete.' }] })
     },
   })
   const secondSession = createFakeSession({
-    onPrompt: async ({ session }) => session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Implementation complete.' }] }),
+    onPrompt: async ({ session }) => session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Second complete.' }] }),
   })
   const sessions = [firstSession, secondSession]
   const { service } = createService(firstSession, {
-    maxConcurrent: 2,
+    maxConcurrent: 1,
     createSession: async (options) => ({ session: sessions.shift(), options }),
   })
 
-  await assert.rejects(service.spawn(baseInput({ taskName: 'invalid', dependsOn: ['missing-agent'] })), /Unknown dependency agent/)
-  const explorer = await service.spawn(baseInput({ taskName: 'explore', role: 'explorer' }))
-  await waitFor(() => service.list('parent-1')[0]?.status === 'running', 'dependency explorer')
-  const worker = await service.spawn(baseInput({ taskName: 'implement', role: 'worker', dependsOn: [explorer.id] }))
-  assert.equal(worker.status, 'queued')
-  assert.deepEqual(worker.dependsOn, [explorer.id])
+  const first = await service.spawn(baseInput({ taskName: 'first' }))
+  await waitFor(() => service.list('parent-1').find((agent) => agent.id === first.id)?.status === 'running', 'first Agent')
+  const second = await service.spawn(baseInput({ taskName: 'second' }))
+  assert.equal(second.status, 'queued')
   assert.equal(secondSession.promptCalls.length, 0)
-  const graph = service.graph('parent-1')
-  assert.ok(graph.edges.some((edge) => edge.sourceId === explorer.id && edge.targetId === worker.id && edge.relation === 'depends_on'))
+  assert.equal(Object.hasOwn(second, 'dependsOn'), false)
 
   firstGate.resolve()
-  await waitFor(() => service.list('parent-1').find((agent) => agent.id === worker.id)?.status === 'completed', 'dependent worker')
+  await waitFor(() => service.list('parent-1').find((agent) => agent.id === second.id)?.status === 'completed', 'second Agent')
   assert.equal(secondSession.promptCalls.length, 1)
-  assert.equal(service.graph('parent-1').counts.completed, 2)
 })
 
-test('failed dependencies fail queued dependents without starting a Session', async () => {
-  const failedSession = createFakeSession({ onPrompt: async () => { throw new Error('exploration failed') } })
-  let createCount = 0
-  const { service } = createService(failedSession, {
-    createSession: async () => { createCount += 1; return { session: failedSession } },
-  })
-  const explorer = await service.spawn(baseInput({ taskName: 'explore' }))
-  const dependent = await service.spawn(baseInput({ taskName: 'implement', dependsOn: [explorer.id] }))
-  await waitFor(() => service.list('parent-1').find((agent) => agent.id === dependent.id)?.status === 'failed', 'dependency failure')
-  const failed = service.list('parent-1').find((agent) => agent.id === dependent.id)
-  assert.match(failed.error, /Dependency .* ended as failed/)
-  assert.equal(createCount, 1)
-})
-
-test('duration budget includes startup while global concurrency queues later Agents', async () => {
+test('slow startup remains active without a wall-clock timeout and retains its concurrency slot', async () => {
   const timers = new Map()
   const setTimer = (callback, milliseconds) => {
     const handle = { milliseconds, unref() {} }
@@ -576,11 +592,13 @@ test('duration budget includes startup while global concurrency queues later Age
   const clearTimer = (handle) => timers.delete(handle)
   const loaderGate = deferred()
   let loaderCount = 0
-  const firstSession = createFakeSession()
+  const firstSession = createFakeSession({
+    onPrompt: async ({ session }) => session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'First completed.' }] }),
+  })
   const secondSession = createFakeSession({
     onPrompt: async ({ session }) => session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'Second completed.' }] }),
   })
-  const sessions = [secondSession]
+  const sessions = [firstSession, secondSession]
   const { service } = createService(firstSession, {
     maxConcurrent: 1,
     setTimer,
@@ -592,19 +610,17 @@ test('duration budget includes startup while global concurrency queues later Age
     },
     createSession: async () => ({ session: sessions.shift() }),
   })
-  const started = await service.spawn(baseInput({ maxDurationSeconds: 15 }))
-  const durationTimer = [...timers.entries()].find(([handle]) => handle.milliseconds === 15_000)
-  assert.ok(durationTimer)
+  const started = await service.spawn(baseInput())
   const queued = await service.spawn(baseInput({ parentSessionId: 'parent-2', taskName: 'second' }))
   assert.equal(queued.status, 'queued')
-  assert.equal(service.graph('parent-2').counts.queued, 1)
-
-  durationTimer[1]()
-  assert.equal(service.list('parent-1')[0].status, 'interrupted')
-  assert.match(service.list('parent-1')[0].error, /duration limit/)
+  assert.equal(service.list('parent-1')[0].status, 'starting')
   assert.equal(service.list('parent-2')[0].status, 'queued')
+  assert.equal(timers.size, 0)
+
   loaderGate.resolve()
-  const completed = await waitFor(() => service.list('parent-2')[0]?.status === 'completed' && service.list('parent-2')[0], 'queued Agent completion')
-  assert.equal(completed.output, 'Second completed.')
+  const firstCompleted = await waitFor(() => service.list('parent-1')[0]?.status === 'completed' && service.list('parent-1')[0], 'first Agent completion')
+  const secondCompleted = await waitFor(() => service.list('parent-2')[0]?.status === 'completed' && service.list('parent-2')[0], 'queued Agent completion')
+  assert.equal(firstCompleted.output, 'First completed.')
+  assert.equal(secondCompleted.output, 'Second completed.')
   assert.equal(service.list('parent-1')[0].id, started.id)
 })

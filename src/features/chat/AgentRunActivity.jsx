@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { useI18n } from '../../app/use-i18n.js'
 import { formatTokenCount } from '../../lib/format.js'
-import { activityDurationMs, formatRunDuration, primaryRunActivity, runDurationMs } from './run-activity.js'
+import { activityDurationMs, agentActivityState, formatRunDuration, primaryRunActivity, runDurationMs } from './run-activity.js'
 
 const EMPTY_LIST = []
 
@@ -32,13 +32,6 @@ const TOOL_ACTIVITY_LABELS = {
   update_task_list: '正在更新计划',
   browser_automation: '正在操作浏览器',
   generate_visual: '正在生成视觉内容',
-}
-
-const AGENT_ROLE_LABELS = {
-  explorer: '探索',
-  reviewer: '审查',
-  worker: '执行',
-  tester: '验证',
 }
 
 const TOOL_COMPLETED_LABELS = {
@@ -148,16 +141,11 @@ function activityPresentation(activity, { t, text, thinkingText, compaction, err
   } else if (activity.type === 'agent') {
     const agent = activity.agent || {}
     const name = agent.canonicalName || agent.taskName || t('子 Agent')
-    const role = t(AGENT_ROLE_LABELS[agent.role] || agent.role || '执行')
-    if (agent.status === 'queued') { title = t('{name} 等待调度', { name }); tone = 'waiting' }
-    else if (agent.status === 'starting') title = t('{name} 正在启动', { name })
-    else if (agent.status === 'running') title = t('{name} 正在运行', { name })
-    else if (agent.status === 'completed') { title = t('{name} 已完成', { name }); tone = 'completed' }
-    else if (agent.status === 'interrupted') { title = t('{name} 已中断', { name }); tone = 'stopped' }
-    else { title = t('{name} 执行失败', { name }); tone = 'failed' }
+    const state = agentActivityState(agent.status)
+    title = t(state.titleKey, { name })
+    tone = state.tone
     const nestedTool = agent.currentActivity?.type === 'tool' ? toolDetail(agent.currentActivity).text || agent.currentActivity.name : ''
-    const waiting = agent.status === 'queued' && agent.dependsOn?.length ? t('等待 {count} 个依赖 Agent', { count: agent.dependsOn.length }) : ''
-    detail = [role, waiting || nestedTool || cleanInline(agent.message || agent.error)].filter(Boolean).join(' · ')
+    detail = nestedTool || cleanInline(agent.error || agent.message)
     output = agent.status === 'running' ? cleanInline(agent.output) : ''
     startedAt = agent.startedAt || startedAt
   } else if (activity.type === 'compaction') {

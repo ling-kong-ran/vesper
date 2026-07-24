@@ -5,6 +5,16 @@ const RESEARCH_TOOLS = new Set(['read', 'grep', 'find', 'ls', 'memory_search', '
 const EDIT_TOOLS = new Set(['edit', 'write', 'memory_remember'])
 const AGENT_TOOLS = new Set(['spawn_agent', 'list_agents', 'send_message', 'followup_task', 'wait_agent', 'interrupt_agent'])
 
+export function agentActivityState(status) {
+  if (status === 'queued') return { titleKey: '{name} 等待调度', tone: 'waiting' }
+  if (status === 'starting') return { titleKey: '{name} 正在启动', tone: 'running' }
+  if (status === 'running') return { titleKey: '{name} 正在运行', tone: 'running' }
+  if (status === 'completed') return { titleKey: '{name} 已完成', tone: 'completed' }
+  if (status === 'interrupted') return { titleKey: '{name} 已中断', tone: 'stopped' }
+  if (status === 'failed') return { titleKey: '{name} 执行失败', tone: 'failed' }
+  return { titleKey: '{name} 状态已更新', tone: 'waiting' }
+}
+
 function timestamp(value) {
   const parsed = new Date(value || 0).getTime()
   return Number.isFinite(parsed) ? parsed : 0
