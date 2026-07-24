@@ -49,7 +49,9 @@ test('only the latest unresolved failure remains prominent while streaming', () 
   }), latest)
 })
 
-test('chat activity formats short and long elapsed time', () => {
+test('chat activity formats millisecond, short, and long elapsed time', () => {
+  assert.equal(formatRunDuration(248, 'zh-CN'), '248 毫秒')
+  assert.equal(formatRunDuration(999, 'en-US'), '999ms')
   assert.equal(formatRunDuration(9_900, 'zh-CN'), '9 秒')
   assert.equal(formatRunDuration(65_000, 'zh-CN'), '1:05')
   assert.equal(formatRunDuration(3_665_000, 'en-US'), '1:01:05')

@@ -139,7 +139,9 @@ export function activityDurationMs(activity, runStartedAt, now = Date.now()) {
 }
 
 export function formatRunDuration(milliseconds, language = 'zh-CN') {
-  const totalSeconds = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000))
+  const totalMilliseconds = Math.max(0, Math.round(Number(milliseconds) || 0))
+  if (totalMilliseconds < 1000) return language === 'en-US' ? `${totalMilliseconds}ms` : `${totalMilliseconds} 毫秒`
+  const totalSeconds = Math.floor(totalMilliseconds / 1000)
   if (totalSeconds < 60) return language === 'en-US' ? `${totalSeconds}s` : `${totalSeconds} 秒`
   const minutes = Math.floor(totalSeconds / 60)
   const seconds = totalSeconds % 60

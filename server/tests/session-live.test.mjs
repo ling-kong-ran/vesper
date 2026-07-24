@@ -392,9 +392,9 @@ test('stream failures emit a single terminal error snapshot without throwing', a
   assert.equal(live.error, 'model failed')
 })
 
-test('context usage reports the current window share and automatic compaction threshold', () => {
+test('context usage reports the current window share and earlier automatic compaction threshold', () => {
   const runtime = new AgentRuntimeService({ cwd: process.cwd(), dataDir: process.cwd() })
-  runtime.settingsManager = { getCompactionSettings: () => ({ enabled: true, reserveTokens: 16_384 }) }
+  runtime.settingsManager = { getCompactionSettings: () => ({ enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 }) }
   const session = {
     model: { provider: 'openai', id: 'gpt-5.4', contextWindow: 200_000 },
     getContextUsage: () => ({ tokens: 120_000, contextWindow: 200_000, percent: 60 }),
@@ -405,8 +405,8 @@ test('context usage reports the current window share and automatic compaction th
     percent: 60,
     estimated: false,
     autoCompactEnabled: true,
-    compactAtTokens: 183_616,
-    compactAtPercent: 91.808,
+    compactAtTokens: 160_000,
+    compactAtPercent: 80,
   })
   assert.deepEqual(runtime.decorateContextUsage({ tokens: null, contextWindow: 200_000, percent: null }, { status: 'completed', estimatedTokensAfter: 18_500 }), {
     tokens: 18_500,
@@ -414,8 +414,8 @@ test('context usage reports the current window share and automatic compaction th
     percent: 9.25,
     estimated: true,
     autoCompactEnabled: true,
-    compactAtTokens: 183_616,
-    compactAtPercent: 91.808,
+    compactAtTokens: 160_000,
+    compactAtPercent: 80,
   })
 })
 

@@ -41,6 +41,7 @@ import { createVesperBashTool } from '../tools/sandboxed-bash.mjs'
 import { DEFAULT_EXECUTION_MODE, EXECUTION_MODES, filterToolsForExecutionMode, migrateLegacyExecutionMode, normalizeExecutionMode, permissionModeForExecutionMode } from '../security/execution-mode.mjs'
 import { createStreamingSecretRedactor, installSessionPersistenceRedaction, redactPersistedSessionFiles, redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
 import { applyVesperSystemPrompt, vesperPromptExtension } from '../prompts/vesper-system-prompt.mjs'
+import { createCompactionSettingsManager, effectiveCompactionSettings, vesperCompactionExtension } from './compaction-policy.mjs'
 
 const KNOWN_PROVIDERS = ['openai', 'anthropic', 'google', 'deepseek', 'xai', 'openrouter', 'kimi-coding', 'zai-coding-cn']
 const PROVIDER_LABELS = {
@@ -447,7 +448,7 @@ export class AgentRuntimeService {
       agentDir: dataDir,
       cwd,
       getSettingsManager: () => this.settingsManager,
-      extensionFactories: [vesperPromptExtension],
+      extensionFactories: [vesperPromptExtension, vesperCompactionExtension],
     })
     this.channels = new ChannelService({
       path: join(dataDir, 'vesper-channels.json'),
@@ -1105,7 +1106,10 @@ export class AgentRuntimeService {
       tokens = optionalTokenCount(compaction.estimatedTokensAfter)
       estimated = tokens != null
     }
-    const settings = this.settingsManager?.getCompactionSettings?.() || { enabled: true, reserveTokens: 16_384 }
+    const settings = effectiveCompactionSettings(
+      this.settingsManager?.getCompactionSettings?.() || { enabled: true, reserveTokens: 16_384, keepRecentTokens: 20_000 },
+      contextWindow,
+    )
     const compactAtTokens = settings.enabled ? Math.max(0, contextWindow - Math.max(0, Number(settings.reserveTokens) || 0)) : null
     return {
       tokens,
@@ -1437,11 +1441,15 @@ export class AgentRuntimeService {
         getExecutionMode: () => this.getSessionExecutionMode(runtimeSessionId),
       })] : []),
     ]
+    const sessionSettingsManager = createCompactionSettingsManager(
+      this.settingsManager,
+      () => runtimeSession?.model?.contextWindow,
+    )
     const { session, modelFallbackMessage } = await createAgentSession({
       cwd: effectiveCwd,
       agentDir: this.dataDir,
       modelRuntime: this.modelRuntime,
-      settingsManager: this.settingsManager,
+      settingsManager: sessionSettingsManager,
       resourceLoader,
       sessionManager,
       tools: [...baseToolNames, ...GOAL_TOOL_NAMES, ...TASK_LIST_TOOL_NAMES, ...MULTI_AGENT_TOOL_NAMES],

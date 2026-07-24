@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { createAgentSession, DefaultResourceLoader, estimateTokens, SessionManager } from '@earendil-works/pi-coding-agent'
 import { applyVesperSystemPrompt, vesperPromptExtension } from '../prompts/vesper-system-prompt.mjs'
+import { createCompactionSettingsManager, vesperCompactionExtension } from '../runtime/compaction-policy.mjs'
 import { readJson, writeJsonAtomic } from '../storage/json-file.mjs'
 import { redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
 
@@ -245,7 +246,7 @@ async function createAgentResourceLoader({ cwd, agentDir, settingsManager, appen
     cwd,
     agentDir: agentDir || cwd,
     ...(settingsManager ? { settingsManager } : {}),
-    extensionFactories: [vesperPromptExtension],
+    extensionFactories: [vesperPromptExtension, vesperCompactionExtension],
     appendSystemPromptOverride: (base) => [...base, appendSystemPrompt],
   })
   await loader.reload()
@@ -538,7 +539,10 @@ export class MultiAgentService {
       if (!isCurrent()) return
       if (record.aborted) throw new Error(record.abortReason || 'Agent was interrupted.')
       if (!record.session) {
-        const settingsManager = this.getSettingsManager()
+        const settingsManager = createCompactionSettingsManager(
+          this.getSettingsManager(),
+          () => record.model?.contextWindow,
+        )
         const resourceLoader = await this.createResourceLoader({ cwd: record.cwd, agentDir: this.agentDir || record.cwd, settingsManager, appendSystemPrompt: MULTI_AGENT_SYSTEM_PROMPT })
         if (!isCurrent()) return
         if (record.aborted) throw new Error(record.abortReason || 'Agent was interrupted.')
