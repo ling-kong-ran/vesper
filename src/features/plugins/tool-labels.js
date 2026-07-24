@@ -10,7 +10,7 @@ export const TOOL_NAME_KEYS = Object.freeze({
   browser_automation: '浏览器控制',
   generate_visual: '生成视觉内容',
   memory_search: '搜索星忆',
-  memory_remember: '创建星忆草稿',
+  memory_remember: '保存星忆',
   mcp_list: '查看 MCP 服务',
   mcp_manage: '管理 MCP 服务',
 })

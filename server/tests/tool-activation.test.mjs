@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { explicitlyRequestedToolNames, hotToolNames, selectedToolNames } from '../tools/tool-activation.mjs'
+import { explicitlyRequestedToolNames, hotToolNames, isExplicitMemoryRememberRequest, schemaOnlyToolDefinition, selectedToolNames } from '../tools/tool-activation.mjs'
 
 const available = [
   'read', 'grep', 'find', 'ls', 'edit', 'write', 'bash',
@@ -16,6 +16,21 @@ const mcpTools = [{
   label: 'MCP · pencil · batch_design',
   description: 'Remote MCP server: pencil. Remote tool name: batch_design.',
 }]
+
+test('schema-only cold tools move prompt guidance into their appended schema description', () => {
+  const execute = async () => ({ content: [] })
+  const tool = schemaOnlyToolDefinition({
+    name: 'cold_tool',
+    description: 'Cold capability.',
+    promptSnippet: 'Cold tool snippet',
+    promptGuidelines: ['Use only when explicitly requested.', 'Respect permission boundaries.'],
+    execute,
+  })
+  assert.equal(tool.description, 'Cold capability.\nUse only when explicitly requested.\nRespect permission boundaries.')
+  assert.equal(tool.promptSnippet, undefined)
+  assert.deepEqual(tool.promptGuidelines, [])
+  assert.equal(tool.execute, execute)
+})
 
 test('hot tools keep local coding and task progress available without injecting cold schemas', () => {
   assert.deepEqual(hotToolNames(available), [
@@ -33,6 +48,9 @@ test('explicit web, browser, visual, memory, and Agent requests activate only th
   assert.deepEqual(explicitlyRequestedToolNames('打开 https://example.com 并截一张图', { availableToolNames: available, mcpTools }), ['browser_automation'])
   assert.deepEqual(explicitlyRequestedToolNames('生成一张产品海报', { availableToolNames: available, mcpTools }), ['generate_visual'])
   assert.deepEqual(explicitlyRequestedToolNames('记住我的默认语言是中文', { availableToolNames: available, mcpTools }), ['memory_remember'])
+  assert.deepEqual(explicitlyRequestedToolNames('如何发版 写入记忆', { availableToolNames: available, mcpTools }), ['memory_remember'])
+  assert.equal(isExplicitMemoryRememberRequest('如何发版 写入记忆'), true)
+  assert.equal(isExplicitMemoryRememberRequest('修复登录组件并运行测试'), false)
   assert.deepEqual(explicitlyRequestedToolNames('派一个 Agent 并行审查测试', { availableToolNames: available, mcpTools }), [
     'spawn_agent', 'list_agents', 'send_message', 'followup_task', 'wait_agent', 'interrupt_agent',
   ])

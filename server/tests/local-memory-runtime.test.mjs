@@ -163,7 +163,7 @@ test('accepting and rejecting candidates is explicit and auditable', async () =>
   })
 })
 
-test('Agent memory tool creates a candidate instead of a trusted fact', async () => {
+test('Agent memory tool creates a candidate instead of a trusted fact by default', async () => {
   await withMemory(async (memory, cwd) => {
     const tool = createMemoryRememberTool({ cwd, memoryRuntime: memory })
     const result = await tool.execute('call-1', {
@@ -178,7 +178,53 @@ test('Agent memory tool creates a candidate instead of a trusted fact', async ()
     assert.match(result.content[0].text, /继续完成当前任务/)
     assert.doesNotMatch(result.content[0].text, /需用户确认|等待用户/)
     assert.equal(result.details.status, 'pending')
+    assert.equal(result.details.mode, 'candidate')
     assert.equal(memory.search('简洁回答').length, 0)
+  })
+})
+
+test('Agent memory tool stores explicit user requests without approval', async () => {
+  await withMemory(async (memory, cwd) => {
+    const tool = createMemoryRememberTool({
+      cwd,
+      memoryRuntime: memory,
+      getUserMessage: () => '如何发版 写入记忆',
+    })
+    const result = await tool.execute('call-2', {
+      title: 'Vesper 发版流程',
+      content: '使用 npm run release -- patch 发版，更新日志由 CI 自动注入。',
+      topic: 'project.release.workflow',
+      type: 'decision',
+      scope: 'project',
+      importance: 0.9,
+      userRequested: true,
+    })
+    assert.match(result.content[0].text, /已直接写入长期星忆/)
+    assert.equal(result.details.mode, 'stored')
+    assert.equal(result.details.sourceType, 'user_confirmed')
+    assert.equal(result.details.status, 'active')
+    assert.equal(memory.search('发版流程 release', { cwd })[0]?.id, result.details.id)
+    assert.equal(memory.candidateInbox().count, 0)
+  })
+})
+
+test('Agent memory tool infers explicit user requests from the latest user message', async () => {
+  await withMemory(async (memory, cwd) => {
+    const tool = createMemoryRememberTool({
+      cwd,
+      memoryRuntime: memory,
+      getUserMessage: () => '记住我的默认语言是中文',
+    })
+    const result = await tool.execute('call-3', {
+      title: '默认语言',
+      content: '用户默认语言是中文。',
+      topic: 'user.language',
+      type: 'preference',
+      scope: 'global',
+    })
+    assert.match(result.content[0].text, /已直接写入长期星忆/)
+    assert.equal(result.details.mode, 'stored')
+    assert.equal(memory.search('默认语言 中文')[0]?.id, result.details.id)
   })
 })
 

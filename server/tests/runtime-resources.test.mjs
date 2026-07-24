@@ -40,11 +40,17 @@ test('main runtime keeps cold MCP tools dormant until explicitly requested while
   assert.equal(value.session.getActiveToolNames().includes('mcp_manage'), false)
   assert.ok(value.session.getActiveToolNames().includes('read'))
   assert.ok(value.session.getActiveToolNames().includes('update_task_list'))
+  const hotToolNames = value.session.getActiveToolNames()
+  const hotSystemPrompt = value.session.agent.state.systemPrompt
 
   runtime.selectToolsForMessage(value, 'Use the MCP fixture echo tool for this task.')
   assert.ok(value.session.getActiveToolNames().includes('mcp_fixture_echo_12345678'))
   assert.ok(value.session.getActiveToolNames().includes('mcp_list'))
   assert.ok(value.session.getActiveToolNames().includes('mcp_manage'))
+  assert.deepEqual(value.session.getActiveToolNames().slice(0, hotToolNames.length), hotToolNames)
+  assert.equal(value.session.agent.state.systemPrompt, hotSystemPrompt)
+  assert.match(value.session.getToolDefinition('mcp_manage').description, /Always use mcp_manage for MCP configuration/)
+  assert.deepEqual(value.session.getToolDefinition('mcp_manage').promptGuidelines, [])
 
   runtime.selectToolsForMessage(value, 'Now update the local source file.')
   assert.equal(value.session.getActiveToolNames().includes('mcp_fixture_echo_12345678'), false)

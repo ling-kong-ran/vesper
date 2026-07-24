@@ -38,7 +38,7 @@ import { createAppTools, createMultiAgentTools, TOOL_PRESETS, toolsFromConfig } 
 import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
 import { createTaskListTools, TASK_LIST_TOOL_NAMES } from '../tools/app/task-list.mjs'
 import { createVesperBashTool } from '../tools/sandboxed-bash.mjs'
-import { explicitlyRequestedToolNames, selectedToolNames } from '../tools/tool-activation.mjs'
+import { explicitlyRequestedToolNames, isExplicitMemoryRememberRequest, schemaOnlyToolDefinitions, selectedToolNames } from '../tools/tool-activation.mjs'
 import { DEFAULT_EXECUTION_MODE, EXECUTION_MODES, filterToolsForExecutionMode, migrateLegacyExecutionMode, normalizeExecutionMode, permissionModeForExecutionMode } from '../security/execution-mode.mjs'
 import { createStreamingSecretRedactor, installSessionPersistenceRedaction, redactPersistedSessionFiles, redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
 import { applyVesperSystemPrompt, vesperPromptExtension } from '../prompts/vesper-system-prompt.mjs'
@@ -1441,7 +1441,7 @@ export class AgentRuntimeService {
     const baseToolNames = [...new Set([...enabledTools, ...mcpTools.map((tool) => tool.name)])]
     let runtimeValue = null
     let runtimeSession = null
-    const goalTools = createGoalTools({
+    const goalTools = schemaOnlyToolDefinitions(createGoalTools({
       getGoal: () => this.goals.get(runtimeSessionId),
       completeGoal: async () => {
         const goal = await this.goals.complete(runtimeSessionId)
@@ -1449,7 +1449,7 @@ export class AgentRuntimeService {
         this.emitGoalUpdate(runtimeSessionId, goal)
         return goal
       },
-    })
+    }))
     const taskListTools = createTaskListTools({
       getTaskList: () => this.taskLists.get(runtimeSessionId),
       updateTaskList: async (items) => {
@@ -1503,12 +1503,13 @@ export class AgentRuntimeService {
       wait: (timeoutMs, target) => waitForAgentMailbox(this.multiAgents, runtimeSession.sessionId, timeoutMs, target),
       interrupt: (target) => this.multiAgents.interrupt(runtimeSession.sessionId, target),
     }
-    const multiAgentTools = createMultiAgentTools({ multiAgentRuntime })
+    const multiAgentTools = schemaOnlyToolDefinitions(createMultiAgentTools({ multiAgentRuntime }))
     const createInheritedCustomTools = () => [
-      ...createAppTools({
+      ...schemaOnlyToolDefinitions(createAppTools({
         cwd: effectiveCwd,
         enabledTools,
         memoryRuntime: this.memory,
+        getUserMessage: () => runtimeValue?.pendingUserMessage || '',
         webSearchService: this.webSearch,
         browserAutomationService: this.browserAutomation,
         browserSessionId: runtimeSessionId,
@@ -1524,8 +1525,8 @@ export class AgentRuntimeService {
           test: (id, options) => this.mcp.test(id, options),
           setToolEnabled: (id, toolName, nextEnabled) => this.setMcpToolEnabled(id, toolName, nextEnabled),
         },
-      }),
-      ...mcpTools,
+      })),
+      ...schemaOnlyToolDefinitions(mcpTools),
       ...(enabledTools.includes('bash') ? [createVesperBashTool(effectiveCwd, {
         sandboxService: this.sandbox,
         getExecutionMode: () => this.getSessionExecutionMode(runtimeSessionId),
@@ -1577,6 +1578,7 @@ export class AgentRuntimeService {
     if (!value.session.isStreaming) throw new Error('当前会话已经结束运行，请作为新消息发送。')
     const streamingBehavior = behavior === 'followUp' ? 'followUp' : 'steer'
     this.selectToolsForMessage(value, text, { preserveRequested: true })
+    value.pendingUserMessage = text
     await value.session.prompt(text, { streamingBehavior, source: 'interactive' })
     value.modified = new Date().toISOString()
     return {
@@ -1606,6 +1608,7 @@ export class AgentRuntimeService {
         : await this.goals.start(session.sessionId, { objective: message })
     }
     this.selectToolsForMessage(value, message, { attachments })
+    value.pendingUserMessage = String(message || '')
     // Drop stale plans from previous turns unless a Goal is actively driving multi-turn work.
     const keepTaskList = goal?.status === 'active' || isGoalContinuationMessage(message)
     if (!keepTaskList) await this.taskLists.replace(session.sessionId, [])
@@ -1965,15 +1968,29 @@ export class AgentRuntimeService {
     if (result.usage) await this.recordUsage(localDayKey(result.timestamp || Date.now()), `memory:${sessionId}:${result.timestamp || Date.now()}`, result.usage)
     if (!result.memories.length) return []
     const projectSpaceId = await this.memory.ensureWorkspaceSpace(cwd)
-    return result.memories.map((item, index) => this.memory.propose({
-      ...item,
-      spaceId: item.scope === 'global' ? 'global' : projectSpaceId,
-      cwd,
-      sessionId,
-      sourceType: 'conversation',
-      sourceId: `${sessionId}:${sourceTimestamp || result.timestamp || Date.now()}:${index}`,
-      sourceTimestamp: sourceTimestamp || new Date(result.timestamp || Date.now()).toISOString(),
-    }))
+    const userRequested = isExplicitMemoryRememberRequest(user)
+    return result.memories.map((item, index) => {
+      const payload = {
+        ...item,
+        spaceId: item.scope === 'global' ? 'global' : projectSpaceId,
+        cwd,
+        sessionId,
+        sourceId: `${sessionId}:${sourceTimestamp || result.timestamp || Date.now()}:${index}`,
+        sourceTimestamp: sourceTimestamp || new Date(result.timestamp || Date.now()).toISOString(),
+      }
+      if (userRequested) {
+        return this.memory.remember({
+          ...payload,
+          sourceType: 'user_confirmed',
+          authority: 100,
+          evidence: item.evidence || '用户明确要求记住，会话结束后已直接写入长期星忆。',
+        })
+      }
+      return this.memory.propose({
+        ...payload,
+        sourceType: 'conversation',
+      })
+    })
   }
 
   getMemoryDashboard(input) {

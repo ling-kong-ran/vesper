@@ -1,5 +1,6 @@
 import { defineTool } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
+import { isExplicitMemoryRememberRequest } from '../tool-activation.mjs'
 
 export const manifests = [
   {
@@ -17,9 +18,9 @@ export const manifests = [
     name: 'Memory Remember',
     category: '星忆',
     risk: '中风险',
-    description: '将用户明确要求记住或未来可复用的信息静默加入候选星忆待办，不打断当前任务。',
+    description: '用户明确要求记住时直接写入长期星忆；否则将可复用信息静默加入候选待办，不打断当前任务。',
     scope: '全局星域或当前项目星域',
-    capability: '在后台新增长期记忆候选，自动隐藏常见密钥格式；候选处理不阻塞当前会话',
+    capability: '明确要求直接入库，推断内容进入候选；自动隐藏常见密钥格式，且不阻塞当前会话',
     source: 'app',
   },
 ]
@@ -48,7 +49,14 @@ export function createMemorySearchTool({ cwd, memoryRuntime }) {
   })
 }
 
-export function createMemoryRememberTool({ cwd, memoryRuntime }) {
+function resolveUserRequested(params, getUserMessage) {
+  if (params.userRequested === true) return true
+  if (params.userRequested === false) return false
+  const message = typeof getUserMessage === 'function' ? getUserMessage() : ''
+  return isExplicitMemoryRememberRequest(message)
+}
+
+export function createMemoryRememberTool({ cwd, memoryRuntime, getUserMessage } = {}) {
   return defineTool({
     name: 'memory_remember',
     label: 'Memory Remember',
@@ -56,11 +64,12 @@ export function createMemoryRememberTool({ cwd, memoryRuntime }) {
     promptSnippet: 'Store a durable user preference or project fact in long-term memory',
     promptGuidelines: [
       'Use memory_remember when the user explicitly asks you to remember something, or when a stable project decision will matter in future sessions.',
+      'When the user explicitly asks to remember, save, or write something into memory, set userRequested=true so it is stored immediately without approval.',
+      'When you are only capturing a reusable fact without an explicit remember request, omit userRequested or set it to false so it becomes a candidate draft.',
       'Never store API keys, passwords, access tokens, private credentials, or transient conversational details.',
       'Use global scope only for preferences that apply across projects; use project scope for codebase-specific facts and decisions.',
       'Provide a stable topic key and reuse it when a newer fact replaces an older fact on the same subject.',
-      'Queue the candidate silently and continue the current task. Never ask the user to stop, wait, or review the candidate during the current response.',
-      'A pending memory candidate is never a blocker, prerequisite, approval request, or reason to pause the Agent loop.',
+      'Do not ask the user to stop, wait, or review candidates during the current response. Candidate review is non-blocking background work.',
     ],
     parameters: Type.Object({
       title: Type.String({ minLength: 1, description: '简短、可辨识的星辰名称' }),
@@ -71,9 +80,36 @@ export function createMemoryRememberTool({ cwd, memoryRuntime }) {
       ])),
       scope: Type.Optional(Type.Union([Type.Literal('global'), Type.Literal('project')])),
       importance: Type.Optional(Type.Number({ minimum: 0.1, maximum: 1 })),
+      userRequested: Type.Optional(Type.Boolean({
+        description: '用户是否明确要求记住。true 时直接写入长期星忆且无需审批；false 或省略时仅加入候选待办。',
+      })),
     }),
     async execute(_toolCallId, params) {
       const spaceId = params.scope === 'global' ? 'global' : await memoryRuntime.ensureWorkspaceSpace(cwd)
+      const userRequested = resolveUserRequested(params, getUserMessage)
+
+      if (userRequested) {
+        const memory = memoryRuntime.remember({
+          ...params,
+          spaceId,
+          cwd,
+          sourceType: 'user_confirmed',
+          evidence: '用户明确要求记住，已直接写入长期星忆。',
+          authority: 100,
+        })
+        // remember() may fall back to a pending candidate when a higher-authority conflict exists.
+        if (memory?.status === 'pending') {
+          return {
+            content: [{ type: 'text', text: `候选记忆已在后台入列：${memory.title}\n候选 ID：${memory.id}\n原因：与更高可信度记忆冲突，需人工确认。继续完成当前任务。` }],
+            details: { ...memory, mode: 'candidate', reason: 'authority_conflict' },
+          }
+        }
+        return {
+          content: [{ type: 'text', text: `已直接写入长期星忆：${memory.title}\n星忆 ID：${memory.id}` }],
+          details: { ...memory, mode: 'stored' },
+        }
+      }
+
       const candidate = memoryRuntime.propose({
         ...params,
         spaceId,
@@ -84,7 +120,7 @@ export function createMemoryRememberTool({ cwd, memoryRuntime }) {
       })
       return {
         content: [{ type: 'text', text: `候选记忆已在后台入列：${candidate.title}\n候选 ID：${candidate.id}\n继续完成当前任务；不要要求用户现在处理候选。` }],
-        details: candidate,
+        details: { ...candidate, mode: 'candidate' },
       }
     },
   })

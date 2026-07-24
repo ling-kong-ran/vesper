@@ -207,7 +207,6 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
         </Panel>
         <Panel className="memory-candidates-panel">
           <div className="card-head"><SectionTitle title={`${t('星忆草稿')} · ${data.candidates?.length || 0}`} />{Boolean(data.candidates?.length) && <button className="button secondary tiny" disabled={Boolean(resolvingCandidateId)} onClick={ignoreAllCandidates}><X size={12} />{t('全部忽略')}</button>}</div>
-          <p className="muted-copy">{t('自动提取的内容会安静地留在这里，不会打断会话。你可以稍后决定是否点亮。')}</p>
           <div className="memory-candidate-list">
             {(data.candidates || []).map((candidate) => <div className="memory-candidate" key={candidate.id}>
               <strong>{candidate.title}</strong>
@@ -301,7 +300,7 @@ export function MemoryPage({ notify, query, registerPrimaryAction, requestConfir
             <h2>{selected.title}</h2>
             <p className="muted-copy">{selected.content}</p>
             <div className="key-value"><span>{t('星辰类型')}</span><strong className="type-with-dot"><i className={`g-dot g-${selected.type}`} />{t(TYPE_LABELS[selected.type] || selected.type)}</strong></div>
-            <div className="key-value"><span>{t('来源')}</span><strong>{t(selected.sourceType === 'conversation_confirmed' ? '用户确认的对话候选' : selected.sourceType === 'agent' ? 'Agent 点亮' : '手动添加')}</strong></div>
+            <div className="key-value"><span>{t('来源')}</span><strong>{t(selected.sourceType === 'conversation_confirmed' ? '用户确认的对话候选' : selected.sourceType === 'user_confirmed' ? '用户明确要求' : selected.sourceType === 'agent' ? 'Agent 点亮' : '手动添加')}</strong></div>
             <div className="key-value"><span>{t('可信度')}</span><strong>{selected.authority ?? 0}/100</strong></div>
             {selected.evidence && <div className="key-value"><span>{t('证据')}</span><strong>{selected.evidence}</strong></div>}
             <div className="key-value"><span>{t('创建时间')}</span><strong>{formatMemoryTime(selected.createdAt, language)}</strong></div>

@@ -17,7 +17,7 @@ const BROWSER_REQUEST = /(?:\bbrowser[_ -]?automation\b|\bopen (?:the )?(?:websi
 const VISUAL_REQUEST = /(?:\bgenerate_visual\b|\b(?:generate|create|draw|design|edit|modify|transform|enhance|upscale|animate|make)\b.{0,24}\b(?:image|picture|photo|illustration|poster|logo|video|animation)\b|\b(?:image|picture|photo|video)\b.{0,24}\b(?:generate|create|edit|modify|transform|enhance|upscale|animate)\b|(?:生成|创建|绘制|画|制作|编辑|修改|转换|增强|放大|修复|设计).{0,16}(?:图片|图像|照片|插画|海报|Logo|logo|视频|动画)|(?:图片|图像|照片|视频).{0,16}(?:生成|创建|编辑|修改|转换|增强|放大|修复))/i
 const IMAGE_EDIT_WITH_ATTACHMENT = /(?:去掉|移除|删除|替换|修改|编辑|增强|修复|裁剪|放大|换成|remove|replace|edit|enhance|retouch|crop|upscale)/i
 const MEMORY_SEARCH_REQUEST = /(?:\bmemory_search\b|\bsearch (?:your )?memor(?:y|ies)\b|\brecall (?:my|our|the)\b|\bdo you remember\b|搜索星忆|查找星忆|查询星忆|你还记得|还记得我|之前我说过|我的偏好)/i
-const MEMORY_REMEMBER_REQUEST = /(?:\bmemory_remember\b|\bremember (?:this|that|my)\b|\bsave (?:this|that) (?:as|to) memor(?:y|ies)\b|记住(?:这个|这点|我的|以后)|保存为星忆|加入星忆|创建星忆草稿)/i
+const MEMORY_REMEMBER_REQUEST = /(?:\bmemory_remember\b|\bremember (?:this|that|my)\b|\bsave (?:this|that) (?:as|to) memor(?:y|ies)\b|\bwrite (?:this|that)? ?(?:to|into) memor(?:y|ies)\b|\bstore (?:this|that) (?:in|as) memor(?:y|ies)\b|记住(?:这个|这点|我的|以后|这)|请记住|帮我记住|记一下|记下来|写入记忆|记入记忆|写入星忆|保存记忆|保存为星忆|加入星忆|创建星忆草稿)/i
 const MCP_REQUEST = /(?:\bmcp\b|mcp_list|mcp_manage)/i
 const MCP_CALL_REQUEST = /(?:使用|调用|通过|用|call|use|invoke).{0,16}\bmcp\b|\bmcp\b.{0,16}(?:调用|使用|call|use|invoke)/i
 const MULTI_AGENT_REQUEST = /(?:\bspawn_agent\b|\blist_agents\b|\bsend_message\b|\bfollowup_task\b|\bwait_agent\b|\binterrupt_agent\b|\bsubagents?\b|\bmulti[- ]agents?\b|\bspawn (?:an? )?agents?\b|\bdelegate (?:this|the task|work)\b|\bparallel agents?\b|子\s*Agent|子\s*agent|派.{0,10}Agent|派.{0,10}agent|委派.{0,10}(?:Agent|agent)|并行.{0,10}(?:Agent|agent)|查看.{0,8}(?:Agent|agent).{0,8}状态|等待.{0,8}(?:Agent|agent)|中断.{0,8}(?:Agent|agent))/i
@@ -60,8 +60,28 @@ function matchingMcpTools(text, mcpTools) {
   return matches
 }
 
+export function schemaOnlyToolDefinition(tool) {
+  const guidelines = Array.isArray(tool?.promptGuidelines)
+    ? tool.promptGuidelines.map((item) => String(item || '').trim()).filter(Boolean)
+    : []
+  return {
+    ...tool,
+    description: [String(tool?.description || '').trim(), ...guidelines].filter(Boolean).join('\n'),
+    promptSnippet: undefined,
+    promptGuidelines: [],
+  }
+}
+
+export function schemaOnlyToolDefinitions(tools = []) {
+  return tools.map(schemaOnlyToolDefinition)
+}
+
 export function hotToolNames(availableToolNames = []) {
   return availableToolNames.filter((name) => HOT_TOOL_SET.has(name))
+}
+
+export function isExplicitMemoryRememberRequest(message) {
+  return positiveMatch(normalizedText(message), MEMORY_REMEMBER_REQUEST)
 }
 
 export function explicitlyRequestedToolNames(message, {
