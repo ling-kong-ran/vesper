@@ -4,6 +4,7 @@ import {
   applySessionUpdate,
   DEFAULT_SESSION_STATE,
   isTaskListActive,
+  resolveQueuedInputs,
   resolveSessionTaskList,
   sessionStateChanged,
 } from '../../src/lib/session-state.js'
@@ -20,6 +21,13 @@ test('session state update returns a new object when fields change', () => {
   const next = applySessionUpdate(previous, (current) => ({ ...current, streaming: false }))
   assert.notEqual(next, previous)
   assert.equal(next.streaming, false)
+})
+
+test('an explicit empty queue clears stale composer guidance', () => {
+  const stale = [{ behavior: 'steer', text: 'Already processed' }]
+  assert.equal(resolveQueuedInputs(stale, undefined), stale)
+  assert.deepEqual(resolveQueuedInputs(stale, []), [])
+  assert.deepEqual(resolveQueuedInputs(stale, null), [])
 })
 
 test('cleared task lists do not fall back to stale session list data', () => {

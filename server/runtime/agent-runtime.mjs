@@ -1482,6 +1482,7 @@ export class AgentRuntimeService {
       queued: true,
       behavior: streamingBehavior,
       pendingMessageCount: value.session.pendingMessageCount || 0,
+      queuedInputs: queuedSessionInputs(value.session),
     }
   }
 
@@ -1538,6 +1539,7 @@ export class AgentRuntimeService {
       agents: live.agents,
       currentActivity: live.currentActivity,
       activityFeed: live.activityFeed,
+      queuedInputs: live.queuedInputs,
       contextUsage: live.contextUsage,
       startedAt: live.startedAt,
       lastActivityAt: live.lastActivityAt,

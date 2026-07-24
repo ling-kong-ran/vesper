@@ -23,10 +23,18 @@ function response() {
 
 test('running sessions accept steering and follow-up user messages through the Pi queue', async () => {
   const calls = []
+  const steering = []
+  const followUp = []
   const session = {
     isStreaming: true,
     pendingMessageCount: 2,
-    async prompt(message, options) { calls.push({ message, options }) },
+    getSteeringMessages: () => steering,
+    getFollowUpMessages: () => followUp,
+    async prompt(message, options) {
+      calls.push({ message, options })
+      if (options.streamingBehavior === 'followUp') followUp.push(message)
+      else steering.push(message)
+    },
   }
   const runtime = new AgentRuntimeService({ cwd: process.cwd(), dataDir: process.cwd() })
   runtime.sessions.set('session-1', { session, modified: '' })
@@ -34,7 +42,12 @@ test('running sessions accept steering and follow-up user messages through the P
   assert.deepEqual(await runtime.queueSessionMessage('session-1', {
     message: 'Focus on the Windows path.',
     behavior: 'steer',
-  }), { queued: true, behavior: 'steer', pendingMessageCount: 2 })
+  }), {
+    queued: true,
+    behavior: 'steer',
+    pendingMessageCount: 2,
+    queuedInputs: [{ behavior: 'steer', text: 'Focus on the Windows path.' }],
+  })
   assert.equal(calls[0].message, 'Focus on the Windows path.')
   assert.deepEqual(calls[0].options, { streamingBehavior: 'steer', source: 'interactive' })
 
@@ -53,7 +66,7 @@ test('session input API delegates queued messages without opening another SSE re
   const runtime = {
     async queueSessionMessage(id, input) {
       calls.push({ id, input })
-      return { queued: true, behavior: input.behavior, pendingMessageCount: 1 }
+      return { queued: true, behavior: input.behavior, pendingMessageCount: 1, queuedInputs: [] }
     },
   }
   const handler = createApiHandler(runtime)
@@ -64,7 +77,7 @@ test('session input API delegates queued messages without opening another SSE re
     new URL('http://localhost/api/sessions/session%201/input'),
   ), true)
   assert.equal(res.status, 200)
-  assert.deepEqual(JSON.parse(res.body), { queued: true, behavior: 'steer', pendingMessageCount: 1 })
+  assert.deepEqual(JSON.parse(res.body), { queued: true, behavior: 'steer', pendingMessageCount: 1, queuedInputs: [] })
   assert.deepEqual(calls, [{
     id: 'session 1',
     input: { message: 'Keep going, but skip packaging.', behavior: 'steer' },

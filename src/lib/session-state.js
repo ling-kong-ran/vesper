@@ -34,6 +34,11 @@ export function applySessionUpdate(previous, update) {
   return sessionStateChanged(base, next) ? next : base
 }
 
+export function resolveQueuedInputs(current, incoming) {
+  if (incoming === undefined) return current || []
+  return Array.isArray(incoming) ? incoming : []
+}
+
 /**
  * Prefer the live session-state task list once a session has been opened.
  * Important: `null` means “cleared”, and must NOT fall back to stale listSessions data.
