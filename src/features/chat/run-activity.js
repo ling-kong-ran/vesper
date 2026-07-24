@@ -14,6 +14,17 @@ export function latestRunningTool(tools = []) {
   return [...tools].reverse().find((tool) => tool?.status === 'running') || null
 }
 
+export function primaryRunActivity({ currentActivity, compaction, text, thinkingText, lastActivityAt } = {}) {
+  if (compaction?.active) return { type: 'compaction', compaction, updatedAt: compaction.startedAt || lastActivityAt }
+  if (['model', 'compaction', 'retry'].includes(currentActivity?.type)) return currentActivity
+  const stage = currentActivity?.type === 'tool'
+    ? currentActivity.status === 'running' ? 'working' : 'processing_result'
+    : String(thinkingText || '').trim()
+      ? 'thinking'
+      : String(text || '').trim() ? 'responding' : 'thinking'
+  return { type: 'model', stage, updatedAt: currentActivity?.updatedAt || lastActivityAt }
+}
+
 function activityKey(activity) {
   if (!activity?.type) return ''
   if (activity.type === 'tool') return `tool:${activity.id || activity.name || ''}`

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
 import { AgentRuntimeService } from '../runtime/agent-runtime.mjs'
+import { applyTextPatch } from '../../src/lib/api.js'
 
 test('live session snapshot restores partial assistant output and tool state', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vesper-live-session-'))
@@ -24,6 +25,7 @@ test('live session snapshot restores partial assistant output and tool state', a
   runtime.liveSessions.set('session-live', {
     streaming: true,
     text: '正在处理剩余测试…',
+    thinkingText: '先检查失败测试，再修复实现。',
     tools: [{ type: 'tool', id: 'tool-1', name: 'bash', args: { command: 'npm test' }, status: 'running' }],
     currentActivity: { type: 'tool', id: 'tool-1', name: 'bash', args: { command: 'npm test' }, status: 'running', updatedAt: '2026-07-20T10:00:05.000Z' },
     activityFeed: [{ type: 'tool', id: 'tool-1', name: 'bash', args: { command: 'npm test' }, status: 'running', updatedAt: '2026-07-20T10:00:05.000Z' }],
@@ -36,6 +38,7 @@ test('live session snapshot restores partial assistant output and tool state', a
   assert.equal(live.streaming, true)
   assert.equal(live.messages.at(-1).role, 'agent')
   assert.equal(live.messages.at(-1).text, '正在处理剩余测试…')
+  assert.equal(live.thinkingText, '先检查失败测试，再修复实现。')
   assert.deepEqual(live.tools, [{ type: 'tool', id: 'tool-1', name: 'bash', args: { command: 'npm test' }, status: 'running' }])
   assert.equal(live.currentActivity.args.command, 'npm test')
   assert.equal(live.activityFeed[0].args.command, 'npm test')
@@ -142,6 +145,7 @@ test('stream completion publishes an authoritative terminal snapshot', async (t)
         aborted: false,
         willRetry: false,
       })
+      for (const listener of listeners) listener({ type: 'message_update', assistantMessageEvent: { type: 'thinking_delta', delta: 'Inspecting the remaining tests before reading files.' } })
       for (const listener of listeners) listener({ type: 'tool_execution_start', toolCallId: 'tool-1', toolName: 'read', args: {} })
       const assistant = { role: 'assistant', content: [{ type: 'text', text: 'Final answer' }], timestamp: 2 }
       session.messages.push(assistant)
@@ -169,6 +173,9 @@ test('stream completion publishes an authoritative terminal snapshot', async (t)
   assert.equal(compactionEnd.estimatedTokensAfter, 18_500)
   assert.equal(compactionEnd.tokensSaved, 73_500)
   assert.equal(Object.hasOwn(compactionEnd, 'summary'), false)
+  let thinkingText = ''
+  for (const item of events.filter((event) => event.event === 'thinking_patch')) thinkingText = applyTextPatch(thinkingText, item.data)
+  assert.equal(thinkingText, 'Inspecting the remaining tests before reading files.')
   const done = events.find((item) => item.event === 'done')?.data
   assert.equal(done.text, 'Final answer')
   assert.equal(done.tools[0].status, 'done')

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { activityDurationMs, deriveRunActivity, formatRunDuration, groupToolCalls, latestUnrecoveredToolError, pushCurrentActivity, RUN_INACTIVITY_THRESHOLD_MS, settleToolCalls, taskListChanges } from '../../src/features/chat/run-activity.js'
+import { activityDurationMs, deriveRunActivity, formatRunDuration, groupToolCalls, latestUnrecoveredToolError, primaryRunActivity, pushCurrentActivity, RUN_INACTIVITY_THRESHOLD_MS, settleToolCalls, taskListChanges } from '../../src/features/chat/run-activity.js'
 
 test('chat activity derives meaningful stages and inactivity states', () => {
   const now = Date.parse('2026-07-20T10:00:20.000Z')
@@ -12,6 +12,20 @@ test('chat activity derives meaningful stages and inactivity states', () => {
   assert.equal(waiting.stage, 'waiting_tool')
   assert.equal(waiting.inactiveMs, RUN_INACTIVITY_THRESHOLD_MS)
   assert.equal(deriveRunActivity({ streaming: false, stopped: true }).stage, 'stopped')
+})
+
+test('primary Agent activity never duplicates the latest tool row', () => {
+  const tool = { type: 'tool', id: 'tool-1', name: 'read', status: 'running', updatedAt: '2026-07-20T10:00:01.000Z' }
+  assert.deepEqual(primaryRunActivity({ currentActivity: tool, thinkingText: 'Inspect the implementation.', lastActivityAt: tool.updatedAt }), {
+    type: 'model',
+    stage: 'working',
+    updatedAt: tool.updatedAt,
+  })
+  const completed = primaryRunActivity({ currentActivity: { ...tool, status: 'done' }, thinkingText: 'Review the result.' })
+  assert.equal(completed.type, 'model')
+  assert.equal(completed.stage, 'processing_result')
+  const retry = { type: 'retry', message: 'Retrying' }
+  assert.equal(primaryRunActivity({ currentActivity: retry }), retry)
 })
 
 test('chat activity groups completed tools while preserving running and failed calls', () => {

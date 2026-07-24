@@ -5,6 +5,7 @@ export const DEFAULT_SESSION_STATE = Object.freeze({
   agents: [],
   currentActivity: null,
   activityFeed: [],
+  thinkingText: '',
   queuedInputs: [],
   taskList: null,
   executionMode: null,

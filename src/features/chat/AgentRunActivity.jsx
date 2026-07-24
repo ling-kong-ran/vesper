@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { useI18n } from '../../app/use-i18n.js'
 import { formatTokenCount } from '../../lib/format.js'
-import { activityDurationMs, formatRunDuration, runDurationMs } from './run-activity.js'
+import { activityDurationMs, formatRunDuration, primaryRunActivity, runDurationMs } from './run-activity.js'
 
 const EMPTY_LIST = []
 
@@ -111,7 +111,7 @@ function compactionText(compaction, t) {
   return t('正在整理较早消息')
 }
 
-function activityPresentation(activity, { t, text, compaction, error, stopped, notice, lastActivityAt, now }) {
+function activityPresentation(activity, { t, text, thinkingText, compaction, error, stopped, notice, lastActivityAt, now }) {
   let tone = 'running'
   let title = t('正在理解任务')
   let detail = notice || ''
@@ -164,7 +164,9 @@ function activityPresentation(activity, { t, text, compaction, error, stopped, n
     else if (inactiveMs >= 10_000) { tone = 'waiting'; title = t('正在等待模型响应'); detail = t('{count} 秒无新进度', { count: Math.floor(inactiveMs / 1000) }) }
     else if (activity.stage === 'responding') title = t('正在整理回复')
     else if (activity.stage === 'processing_result') title = t('正在处理工具结果')
-    else title = t(String(text || '').trim() ? '正在整理回复' : '正在理解任务')
+    else if (activity.stage === 'working') title = t('正在推进任务')
+    else title = t(String(thinkingText || '').trim() ? '正在推理下一步' : String(text || '').trim() ? '正在整理回复' : '正在理解任务')
+    if (String(thinkingText || '').trim()) detail = cleanInline(thinkingText)
   }
 
   return { tone, title, detail, output, command, startedAt, changes }
@@ -177,15 +179,13 @@ function ActivityIcon({ tone }) {
   return <RefreshCw className="spin" size={14} />
 }
 
-function AgentRunActivity({ streaming, text, currentActivity, activityFeed = EMPTY_LIST, compaction, error, stopped, notice, startedAt, lastActivityAt, finishedAt, compact = false }) {
+function AgentRunActivity({ streaming, text, thinkingText, currentActivity, activityFeed = EMPTY_LIST, compaction, error, stopped, notice, startedAt, lastActivityAt, finishedAt, compact = false }) {
   const { t, language } = useI18n()
   const now = useRunActivityClock(streaming)
   if (!streaming) return null
 
-  const primaryActivity = currentActivity || (compaction?.active
-    ? { type: 'compaction', compaction, updatedAt: compaction.startedAt || lastActivityAt }
-    : { type: 'model', stage: String(text || '').trim() ? 'responding' : 'thinking', updatedAt: lastActivityAt })
-  const primary = activityPresentation(primaryActivity, { t, text, compaction, error, stopped, notice, lastActivityAt, now })
+  const primaryActivity = primaryRunActivity({ currentActivity, compaction, text, thinkingText, lastActivityAt })
+  const primary = activityPresentation(primaryActivity, { t, text, thinkingText, compaction, error, stopped, notice, lastActivityAt, now })
   const primaryDuration = formatRunDuration(runDurationMs(startedAt, finishedAt, now), language)
   const primaryDetail = primary.command && activityFeed.length
     ? t('{count} 项实时操作', { count: activityFeed.length })
@@ -199,7 +199,7 @@ function AgentRunActivity({ streaming, text, currentActivity, activityFeed = EMP
     </div>
     {activityFeed.length > 0 && <div className="agent-run-feed">
       {activityFeed.map((activity, index) => {
-        const presentation = activityPresentation(activity, { t, text, compaction, error, stopped, notice, lastActivityAt, now })
+        const presentation = activityPresentation(activity, { t, text, thinkingText, compaction, error, stopped, notice, lastActivityAt, now })
         const duration = formatRunDuration(activityDurationMs(activity, startedAt, now), language)
         const key = `${activity.type}-${activity.id || activity.agent?.id || activity.updatedAt || index}-${activity.status || activity.stage || activity.agent?.status || ''}`
         return <div className={`agent-run-summary ${presentation.tone} ${index === activityFeed.length - 1 ? 'current' : ''}`} key={key}>

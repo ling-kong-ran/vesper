@@ -1134,6 +1134,8 @@ const EN_EXTENDED_MESSAGES = Object.freeze({
   '中断 Agent': 'Interrupt Agent',
 
   '正在理解任务': 'Understanding the task',
+  '正在推理下一步': 'Reasoning about the next step',
+  '正在推进任务': 'Advancing the task',
   '正在读取文件': 'Reading a file',
   '正在搜索内容': 'Searching content',
   '正在查找文件': 'Finding files',

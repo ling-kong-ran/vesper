@@ -61,7 +61,7 @@ import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, applyTextPatch, consumeEventStream } from './lib/api.js'
 import { showBrowserSystemNotification } from './lib/browser-notifications.js'
 import { applySessionUpdate, DEFAULT_SESSION_STATE, resolveQueuedInputs } from './lib/session-state.js'
-import { createToolUpdateScheduler, createTypewriterDisplay } from './lib/streaming-ui.js'
+import { createStreamingTextScheduler, createToolUpdateScheduler, createTypewriterDisplay } from './lib/streaming-ui.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
 import { useAppUpdate } from './features/updates/useAppUpdate.js'
@@ -77,6 +77,7 @@ const SkillsPage = lazy(() => import('./features/skills/SkillsPage.jsx').then((m
 const WorkflowsPage = lazy(() => import('./features/workflows/WorkflowsPage.jsx').then((module) => ({ default: module.WorkflowsPage })))
 const WorkflowBuilder = lazy(() => import('./features/workflows/WorkflowsPage.jsx').then((module) => ({ default: module.WorkflowBuilder })))
 const EMPTY_LIST = []
+const MAX_LIVE_THINKING_CHARS = 6_000
 const USAGE_UPDATED_EVENT = 'vesper:usage-updated'
 const FOCUS_MESSAGE_PAGE_SIZE = 40
 
@@ -673,6 +674,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           agents: data.agents || [],
           currentActivity: data.streaming ? (data.currentActivity || current.currentActivity || null) : null,
           activityFeed: data.streaming ? (data.activityFeed || current.activityFeed || []) : [],
+          thinkingText: data.streaming ? (data.thinkingText ?? current.thinkingText ?? '') : '',
           queuedInputs: resolveQueuedInputs(current.queuedInputs, data.queuedInputs),
         }
       })
@@ -1014,7 +1016,16 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     const agentId = `agent-${Date.now()}`
     const runStartedAt = new Date().toISOString()
     let responseText = ''
+    let thinkingText = ''
     let queuedDuringRun = false
+    const thinkingScheduler = createStreamingTextScheduler((text, activityAt) => {
+      updateSessionState(sessionId, (current) => ({
+        ...current,
+        thinkingText: text,
+        lastActivityAt: activityAt || current.lastActivityAt,
+        currentActivity: { type: 'model', stage: 'thinking', updatedAt: activityAt || current.lastActivityAt },
+      }))
+    }, { intervalMs: 80 })
     const typewriter = createTypewriterDisplay((text, activityAt) => {
       updateSessionState(sessionId, (current) => {
         const activity = { type: 'model', stage: 'responding', updatedAt: activityAt || current.lastActivityAt }
@@ -1067,6 +1078,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         runNotice: '',
         currentActivity: { type: 'model', stage: 'thinking', updatedAt: runStartedAt },
         activityFeed: [],
+        thinkingText: '',
         compaction: null,
         // Explicit null means cleared; do not keep a previous turn's plan hanging around.
         taskList: keepTaskList ? current.taskList : null,
@@ -1100,6 +1112,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             agents: data.agents || current.agents || [],
             currentActivity: data.currentActivity || current.currentActivity || null,
             activityFeed: data.activityFeed || current.activityFeed || [],
+            thinkingText: data.thinkingText ?? current.thinkingText ?? '',
             queuedInputs: resolveQueuedInputs(current.queuedInputs, data.queuedInputs),
             contextUsage: data.contextUsage ?? current.contextUsage ?? null,
             runStartedAt: data.startedAt || current.runStartedAt,
@@ -1148,9 +1161,19 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         } else if (event === 'text_delta') {
           responseText += data.delta || ''
           typewriter.setTarget(responseText, eventAt)
-        } else if (event === 'thinking_delta') {
-          // Thinking tokens are high-frequency and only used for inactivity UI; ignore to avoid re-renders.
+        } else if (event === 'thinking_reset') {
+          thinkingText = ''
+          thinkingScheduler.cancel()
+          updateSessionState(sessionId, {
+            thinkingText: '',
+            currentActivity: { type: 'model', stage: 'thinking', updatedAt: data.updatedAt || eventAt },
+            lastActivityAt: data.updatedAt || eventAt,
+          })
+        } else if (event === 'thinking_patch') {
+          thinkingText = applyTextPatch(thinkingText, data)
+          thinkingScheduler.push(thinkingText.slice(-MAX_LIVE_THINKING_CHARS), eventAt)
         } else if (event === 'tool_start') {
+          thinkingScheduler.flush()
           typewriter.flush()
           toolScheduler.flush()
           updateSessionState(sessionId, (current) => {
@@ -1247,10 +1270,12 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           if (typeof data.text === 'string') responseText = data.text
           typewriter.setTarget(responseText, finishedAt)
           typewriter.flush()
+          thinkingScheduler.cancel()
           toolScheduler.cancel()
           updateSessionState(sessionId, (current) => ({
             ...current,
             streaming: false,
+            thinkingText: '',
             runFinishedAt: finishedAt,
             lastActivityAt: finishedAt,
             runNotice: '',
@@ -1284,10 +1309,12 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           if (typeof data.text === 'string') responseText = data.text
           typewriter.setTarget(responseText, finishedAt)
           typewriter.flush()
+          thinkingScheduler.cancel()
           toolScheduler.cancel()
           updateSessionState(sessionId, (current) => ({
             ...current,
             streaming: false,
+            thinkingText: '',
             runFinishedAt: finishedAt,
             lastActivityAt: finishedAt,
             currentActivity: null,
@@ -1309,13 +1336,14 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
       })
       typewriter.setTarget(responseText)
       typewriter.flush()
+      thinkingScheduler.flush()
       toolScheduler.flush()
       const fallbackFinishedAt = new Date().toISOString()
       const stillStreaming = Boolean(sessionStatesRef.current[sessionId]?.streaming)
       if (stillStreaming) {
         updateSessionState(sessionId, (current) => {
           const runFinishedAt = current.runFinishedAt || fallbackFinishedAt
-          return { ...current, streaming: false, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', currentActivity: null, activityFeed: [], approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, text: responseText || item.text } : item) }
+          return { ...current, streaming: false, thinkingText: '', runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', currentActivity: null, activityFeed: [], approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, text: responseText || item.text } : item) }
         })
       }
       // Steering and follow-up inputs can create multiple user/assistant turns inside one SSE run.
@@ -1334,9 +1362,10 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
       browserNotify?.('chat.completed', { chat: { title: completed?.name || t('{app} 对话', { app: APP_NAME }), summary: responseText.trim().slice(0, 260) || t('Agent 已完成回复。'), model: sessionStatesRef.current[sessionId]?.model || model } })
     } catch (caught) {
       typewriter.cancel()
+      thinkingScheduler.cancel()
       toolScheduler.cancel()
       const runFinishedAt = new Date().toISOString()
-      updateSessionState(sessionId, (current) => ({ ...current, streaming: false, error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', currentActivity: null, activityFeed: [], approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: caught.message }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || responseText || caught.message } : item) }))
+      updateSessionState(sessionId, (current) => ({ ...current, streaming: false, thinkingText: '', error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', currentActivity: null, activityFeed: [], approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: caught.message }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || responseText || caught.message } : item) }))
       if (queuedDuringRun || sessionStatesRef.current[sessionId]?.queuedInputs?.length) {
         try { await loadSessionMessages(sessionId, { force: true }) } catch {}
         updateSessionState(sessionId, { queuedInputs: [] })
@@ -1344,8 +1373,9 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
       setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false } : session))
     } finally {
       typewriter.cancel()
+      thinkingScheduler.cancel()
       toolScheduler.cancel()
-      updateSessionState(sessionId, { streaming: false })
+      updateSessionState(sessionId, { streaming: false, thinkingText: '' })
       window.dispatchEvent(new Event(USAGE_UPDATED_EVENT))
     }
   }
@@ -1375,7 +1405,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     if (!sessionId) return
     const result = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', body: '{}' })
     const runFinishedAt = new Date().toISOString()
-    updateSessionState(sessionId, (current) => ({ ...current, streaming: false, queuedInputs: [], goal: result.goal ?? null, compaction: current.compaction?.active ? { ...current.compaction, active: false, status: 'aborted', aborted: true, finishedAt: runFinishedAt } : current.compaction, runFinishedAt, lastActivityAt: runFinishedAt, runStopped: true, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: t('已停止') }), messages: current.messages.map((item) => item.streaming ? { ...item, streaming: false } : item) }))
+    updateSessionState(sessionId, (current) => ({ ...current, streaming: false, thinkingText: '', queuedInputs: [], goal: result.goal ?? null, compaction: current.compaction?.active ? { ...current.compaction, active: false, status: 'aborted', aborted: true, finishedAt: runFinishedAt } : current.compaction, runFinishedAt, lastActivityAt: runFinishedAt, runStopped: true, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: t('已停止') }), messages: current.messages.map((item) => item.streaming ? { ...item, streaming: false } : item) }))
     setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false, goal: result.goal ?? session.goal ?? null } : session))
     notify(t('已停止当前运行'), 'info')
   }
@@ -1629,6 +1659,7 @@ function SessionDockPanel({ params, api }) {
       goal={state.goal ?? session.goal ?? null}
       currentActivity={state.currentActivity}
       activityFeed={state.activityFeed || EMPTY_LIST}
+      thinkingText={state.thinkingText || ''}
       queuedInputs={state.queuedInputs || EMPTY_LIST}
       compaction={state.compaction}
       contextUsage={state.contextUsage}
@@ -1908,7 +1939,7 @@ function WorkspacePicker({ session, onClose, onSelect }) {
   )
 }
 
-function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, executionMode, sandboxStatus, goal, currentActivity, activityFeed, queuedInputs, compaction, contextUsage, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onExecutionModeChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onQueue, onAbort, onOpenRail }) {
+function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder, olderError, model, executionMode, sandboxStatus, goal, currentActivity, activityFeed, thinkingText, queuedInputs, compaction, contextUsage, cwd, availableModels, switchingModel, switchingCwd, switchingPermission, streaming, runStartedAt, lastActivityAt, runFinishedAt, runStopped, runNotice, approvals, error, pendingAsset, canSplit, onAssetConsumed, onLoadOlder, onModelChange, onExecutionModeChange, onGoalPause, onApproval, onWorkspace, onRename, onSplitLeft, onSplitRight, onClosePanel, onSend, onQueue, onAbort, onOpenRail }) {
   const { t, language } = useI18n()
   const [value, setValue] = useState('')
   const [goalArmed, setGoalArmed] = useState(false)
@@ -1928,6 +1959,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
     text: lastMessage?.role === 'agent' ? lastMessage.text : '',
     currentActivity,
     activityFeed,
+    thinkingText,
     compaction,
     error: error || (lastMessage?.role === 'agent' ? lastMessage.error : ''),
     stopped: runStopped,
@@ -1935,7 +1967,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
     startedAt: runStartedAt,
     lastActivityAt,
     finishedAt: runFinishedAt,
-  }), [streaming, lastMessage, currentActivity, activityFeed, compaction, error, runStopped, runNotice, runStartedAt, lastActivityAt, runFinishedAt])
+  }), [streaming, lastMessage, currentActivity, activityFeed, thinkingText, compaction, error, runStopped, runNotice, runStartedAt, lastActivityAt, runFinishedAt])
   const loadOlder = useCallback(async () => {
     const node = transcriptRef.current
     if (!node || !hasOlder || loadingOlder || prependSnapshot.current) return

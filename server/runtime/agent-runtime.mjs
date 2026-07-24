@@ -110,6 +110,11 @@ function textFromContent(content) {
 }
 
 const MAX_LIVE_ACTIVITY_ITEMS = 6
+const MAX_LIVE_THINKING_CHARS = 6_000
+
+function liveThinkingTail(value) {
+  return String(value || '').slice(-MAX_LIVE_THINKING_CHARS)
+}
 
 function liveActivityKey(activity) {
   if (!activity?.type) return ''
@@ -1192,6 +1197,7 @@ export class AgentRuntimeService {
       agents: redactSecretValue(live?.agents ?? this.multiAgents.summaries(id).filter((agent) => ['starting', 'running'].includes(agent.status))),
       currentActivity: redactSecretValue(live?.currentActivity || null),
       activityFeed: redactSecretValue(live?.activityFeed || []),
+      thinkingText: redactSecretText(live?.thinkingText || ''),
       queuedInputs: redactSecretValue(live?.queuedInputs ?? queuedSessionInputs(active?.session)),
       contextUsage: this.compactionAwareContextUsage(active?.session, live?.compaction) || page.contextUsage,
       compaction: redactSecretValue(live?.compaction || null),
@@ -1518,7 +1524,7 @@ export class AgentRuntimeService {
     if (!keepTaskList) await this.taskLists.replace(session.sessionId, [])
     const startedAt = new Date().toISOString()
     const initialActivity = { type: 'model', stage: 'thinking', updatedAt: startedAt }
-    const live = { streaming: true, text: '', tools: [], assets: [], error: '', goal, taskList: this.taskLists.get(session.sessionId), agents: this.multiAgents.summaries(session.sessionId).filter((agent) => ['starting', 'running'].includes(agent.status)), currentActivity: initialActivity, activityFeed: [], queuedInputs: queuedSessionInputs(session), contextUsage: this.compactionAwareContextUsage(session), compaction: null, startedAt, lastActivityAt: startedAt }
+    const live = { streaming: true, text: '', thinkingText: '', tools: [], assets: [], error: '', goal, taskList: this.taskLists.get(session.sessionId), agents: this.multiAgents.summaries(session.sessionId).filter((agent) => ['starting', 'running'].includes(agent.status)), currentActivity: initialActivity, activityFeed: [], queuedInputs: queuedSessionInputs(session), contextUsage: this.compactionAwareContextUsage(session), compaction: null, startedAt, lastActivityAt: startedAt }
     this.liveSessions.set(session.sessionId, live)
     this.goalEmitters.set(session.sessionId, emit)
     this.taskListEmitters.set(session.sessionId, emit)
@@ -1547,6 +1553,7 @@ export class AgentRuntimeService {
       agents: live.agents,
       currentActivity: live.currentActivity,
       activityFeed: live.activityFeed,
+      thinkingText: live.thinkingText,
       queuedInputs: live.queuedInputs,
       contextUsage: live.contextUsage,
       startedAt: live.startedAt,
@@ -1558,10 +1565,16 @@ export class AgentRuntimeService {
     let continuationQueued = false
     let budgetSummaryQueued = false
     const textRedactor = createStreamingSecretRedactor()
+    let thinkingRedactor = createStreamingSecretRedactor()
     const flushText = () => {
       const patch = textRedactor.flush()
       live.text = textRedactor.text()
       if (patch) emit('text_patch', patch)
+    }
+    const flushThinking = () => {
+      const patch = thinkingRedactor.flush()
+      live.thinkingText = liveThinkingTail(thinkingRedactor.text())
+      if (patch) emit('thinking_patch', patch)
     }
     const finishLiveRun = (error = '') => {
       const finishedAt = new Date().toISOString()
@@ -1585,7 +1598,12 @@ export class AgentRuntimeService {
           setLiveActivity(live, { type: 'model', stage: 'responding', updatedAt: live.lastActivityAt })
           if (patch) emit('text_patch', patch)
         }
-        if (update.type === 'thinking_delta') emit('thinking_delta', { delta: update.delta })
+        if (update.type === 'thinking_delta') {
+          const patch = thinkingRedactor.push(update.delta)
+          live.thinkingText = liveThinkingTail(thinkingRedactor.text())
+          setLiveActivity(live, { type: 'model', stage: 'thinking', updatedAt: live.lastActivityAt })
+          if (patch) emit('thinking_patch', patch)
+        }
       } else if (event.type === 'compaction_start') {
         live.compaction = startedCompaction(event.reason, live.lastActivityAt)
         setLiveActivity(live, { type: 'compaction', compaction: live.compaction, updatedAt: live.lastActivityAt })
@@ -1605,6 +1623,7 @@ export class AgentRuntimeService {
         ]
         emit('queue_update', { queuedInputs: live.queuedInputs })
       } else if (event.type === 'tool_execution_start') {
+        flushThinking()
         const toolStartedAt = live.lastActivityAt
         const tool = { type: 'tool', id: event.toolCallId, name: event.toolName, args: event.args, status: 'running', startedAt: toolStartedAt, updatedAt: toolStartedAt }
         live.tools.push(tool)
@@ -1657,6 +1676,11 @@ export class AgentRuntimeService {
           ...(resultAgent ? { agent: resultAgent } : {}),
         })
       } else if (event.type === 'turn_start') {
+        flushThinking()
+        thinkingRedactor = createStreamingSecretRedactor()
+        live.thinkingText = ''
+        setLiveActivity(live, { type: 'model', stage: 'thinking', updatedAt: live.lastActivityAt })
+        emit('thinking_reset', { updatedAt: live.lastActivityAt })
         const activeGoal = this.goals.get(session.sessionId)
         goalTurnId = activeGoal?.status === 'active' ? activeGoal.id : ''
         goalTurnStartedAt = Date.now()
@@ -1747,6 +1771,7 @@ export class AgentRuntimeService {
         }
       }
       flushText()
+      flushThinking()
       const last = [...session.messages].reverse().find((item) => item.role === 'assistant')
       if (last?.errorMessage) throw new Error(last.errorMessage)
       const assistantText = textFromContent(last?.content)
@@ -1792,6 +1817,7 @@ export class AgentRuntimeService {
       }
     } catch (error) {
       flushText()
+      flushThinking()
       session.clearQueue?.()
       live.queuedInputs = []
       live.error = error instanceof Error ? error.message : String(error)
