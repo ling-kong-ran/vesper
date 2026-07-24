@@ -7,6 +7,7 @@ export const DEFAULT_SESSION_STATE = Object.freeze({
   activityFeed: [],
   thinkingText: '',
   queuedInputs: [],
+  hadQueuedInput: false,
   taskList: null,
   executionMode: null,
   contextUsage: null,
@@ -38,6 +39,13 @@ export function applySessionUpdate(previous, update) {
 export function resolveQueuedInputs(current, incoming) {
   if (incoming === undefined) return current || []
   return Array.isArray(incoming) ? incoming : []
+}
+
+export function insertInteractiveUserMessage(messages = [], message) {
+  const current = Array.isArray(messages) ? messages : []
+  const activeAgentIndex = current.findLastIndex((item) => item?.role === 'agent' && item.streaming)
+  if (activeAgentIndex < 0) return [...current, message]
+  return [...current.slice(0, activeAgentIndex), message, ...current.slice(activeAgentIndex)]
 }
 
 /**

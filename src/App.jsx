@@ -60,7 +60,7 @@ import { useAutoScroll } from './hooks/useAutoScroll.js'
 import { usePagePrimaryAction } from './hooks/usePagePrimaryAction.js'
 import { apiJson, applyTextPatch, consumeEventStream } from './lib/api.js'
 import { showBrowserSystemNotification } from './lib/browser-notifications.js'
-import { applySessionUpdate, DEFAULT_SESSION_STATE, resolveQueuedInputs } from './lib/session-state.js'
+import { applySessionUpdate, DEFAULT_SESSION_STATE, insertInteractiveUserMessage, resolveQueuedInputs } from './lib/session-state.js'
 import { createStreamingTextScheduler, createToolUpdateScheduler, createTypewriterDisplay } from './lib/streaming-ui.js'
 import { formatFileSize, formatTokenCount, relativeTime, workspaceName } from './lib/format.js'
 import { useAppDialog } from './hooks/useAppDialog.js'
@@ -676,6 +676,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           activityFeed: data.streaming ? (data.activityFeed || current.activityFeed || []) : [],
           thinkingText: data.streaming ? (data.thinkingText ?? current.thinkingText ?? '') : '',
           queuedInputs: resolveQueuedInputs(current.queuedInputs, data.queuedInputs),
+          hadQueuedInput: data.streaming ? Boolean(current.hadQueuedInput || data.queuedInputs?.length) : false,
         }
       })
       setRemoteSessions((current) => current.map((session) => session.id === id ? { ...session, streaming: data.streaming, model: data.model || session.model, cwd: data.cwd || session.cwd, permissionMode: data.permissionMode || session.permissionMode, executionMode: data.executionMode || session.executionMode, goal: data.goal ?? session.goal ?? null, taskList: data.taskList ?? session.taskList ?? null } : session))
@@ -1079,6 +1080,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         currentActivity: { type: 'model', stage: 'thinking', updatedAt: runStartedAt },
         activityFeed: [],
         thinkingText: '',
+        hadQueuedInput: false,
         compaction: null,
         // Explicit null means cleared; do not keep a previous turn's plan hanging around.
         taskList: keepTaskList ? current.taskList : null,
@@ -1114,6 +1116,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             activityFeed: data.activityFeed || current.activityFeed || [],
             thinkingText: data.thinkingText ?? current.thinkingText ?? '',
             queuedInputs: resolveQueuedInputs(current.queuedInputs, data.queuedInputs),
+            hadQueuedInput: Boolean(current.hadQueuedInput || data.queuedInputs?.length),
             contextUsage: data.contextUsage ?? current.contextUsage ?? null,
             runStartedAt: data.startedAt || current.runStartedAt,
             lastActivityAt: data.lastActivityAt || eventAt,
@@ -1129,7 +1132,12 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             } : session))
           }
         } else if (event === 'queue_update') {
-          updateSessionState(sessionId, { queuedInputs: data.queuedInputs || [] })
+          if (data.queuedInputs?.length) queuedDuringRun = true
+          updateSessionState(sessionId, (current) => ({
+            ...current,
+            queuedInputs: data.queuedInputs || [],
+            hadQueuedInput: Boolean(current.hadQueuedInput || data.queuedInputs?.length),
+          }))
         } else if (event === 'agent_update') {
           updateSessionState(sessionId, (current) => {
             const activity = data.currentActivity || (data.agent ? { type: 'agent', agent: data.agent, updatedAt: data.agent.lastActivityAt || eventAt } : null)
@@ -1265,7 +1273,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
             return { ...current, runNotice: retryNotice, currentActivity: activity, activityFeed: pushCurrentActivity(current.activityFeed, activity), lastActivityAt: eventAt }
           })
         } else if (event === 'done') {
-          queuedDuringRun ||= Boolean(sessionStatesRef.current[sessionId]?.queuedInputs?.length)
+          queuedDuringRun ||= Boolean(sessionStatesRef.current[sessionId]?.hadQueuedInput || sessionStatesRef.current[sessionId]?.queuedInputs?.length)
           const finishedAt = data.finishedAt || eventAt
           if (typeof data.text === 'string') responseText = data.text
           typewriter.setTarget(responseText, finishedAt)
@@ -1304,7 +1312,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
           } : session))
           return false
         } else if (event === 'error') {
-          queuedDuringRun ||= Boolean(sessionStatesRef.current[sessionId]?.queuedInputs?.length)
+          queuedDuringRun ||= Boolean(sessionStatesRef.current[sessionId]?.hadQueuedInput || sessionStatesRef.current[sessionId]?.queuedInputs?.length)
           const finishedAt = data.finishedAt || eventAt
           if (typeof data.text === 'string') responseText = data.text
           typewriter.setTarget(responseText, finishedAt)
@@ -1348,9 +1356,9 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
       }
       // Steering and follow-up inputs can create multiple user/assistant turns inside one SSE run.
       // Reload the persisted transcript once the run settles so those turns render as separate bubbles.
-      if (goalMode || queuedDuringRun || sessionStatesRef.current[sessionId]?.goal || sessionStatesRef.current[sessionId]?.queuedInputs?.length) {
+      if (goalMode || queuedDuringRun || sessionStatesRef.current[sessionId]?.hadQueuedInput || sessionStatesRef.current[sessionId]?.goal || sessionStatesRef.current[sessionId]?.queuedInputs?.length) {
         await loadSessionMessages(sessionId, { force: true })
-        updateSessionState(sessionId, { queuedInputs: [] })
+        updateSessionState(sessionId, { queuedInputs: [], hadQueuedInput: false })
       }
       let completed
       try {
@@ -1366,16 +1374,16 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
       toolScheduler.cancel()
       const runFinishedAt = new Date().toISOString()
       updateSessionState(sessionId, (current) => ({ ...current, streaming: false, thinkingText: '', error: caught.message, runFinishedAt, lastActivityAt: runFinishedAt, runNotice: '', currentActivity: null, activityFeed: [], approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: caught.message }), messages: current.messages.map((item) => item.id === agentId ? { ...item, streaming: false, error: caught.message, text: item.text || responseText || caught.message } : item) }))
-      if (queuedDuringRun || sessionStatesRef.current[sessionId]?.queuedInputs?.length) {
+      if (queuedDuringRun || sessionStatesRef.current[sessionId]?.hadQueuedInput || sessionStatesRef.current[sessionId]?.queuedInputs?.length) {
         try { await loadSessionMessages(sessionId, { force: true }) } catch {}
-        updateSessionState(sessionId, { queuedInputs: [] })
+        updateSessionState(sessionId, { queuedInputs: [], hadQueuedInput: false })
       }
       setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false } : session))
     } finally {
       typewriter.cancel()
       thinkingScheduler.cancel()
       toolScheduler.cancel()
-      updateSessionState(sessionId, { streaming: false, thinkingText: '' })
+      updateSessionState(sessionId, { streaming: false, thinkingText: '', hadQueuedInput: false })
       window.dispatchEvent(new Event(USAGE_UPDATED_EVENT))
     }
   }
@@ -1389,9 +1397,18 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
         body: JSON.stringify({ message, behavior }),
       })
       const queuedAt = new Date().toISOString()
+      const queuedMessage = {
+        id: `interactive-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        role: 'user',
+        text: message,
+        queuedAt,
+        streamingBehavior: result.behavior || behavior,
+      }
       updateSessionState(sessionId, (current) => ({
         ...current,
+        messages: insertInteractiveUserMessage(current.messages, queuedMessage),
         queuedInputs: resolveQueuedInputs(current.queuedInputs, result.queuedInputs),
+        hadQueuedInput: true,
         lastActivityAt: queuedAt,
       }))
       return true
@@ -1405,7 +1422,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     if (!sessionId) return
     const result = await apiJson(`/api/sessions/${encodeURIComponent(sessionId)}/abort`, { method: 'POST', body: '{}' })
     const runFinishedAt = new Date().toISOString()
-    updateSessionState(sessionId, (current) => ({ ...current, streaming: false, thinkingText: '', queuedInputs: [], goal: result.goal ?? null, compaction: current.compaction?.active ? { ...current.compaction, active: false, status: 'aborted', aborted: true, finishedAt: runFinishedAt } : current.compaction, runFinishedAt, lastActivityAt: runFinishedAt, runStopped: true, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: t('已停止') }), messages: current.messages.map((item) => item.streaming ? { ...item, streaming: false } : item) }))
+    updateSessionState(sessionId, (current) => ({ ...current, streaming: false, thinkingText: '', queuedInputs: [], hadQueuedInput: false, goal: result.goal ?? null, compaction: current.compaction?.active ? { ...current.compaction, active: false, status: 'aborted', aborted: true, finishedAt: runFinishedAt } : current.compaction, runFinishedAt, lastActivityAt: runFinishedAt, runStopped: true, runNotice: '', approvals: [], tools: settleToolCalls(current.tools, { finishedAt: runFinishedAt, error: t('已停止') }), messages: current.messages.map((item) => item.streaming ? { ...item, streaming: false } : item) }))
     setRemoteSessions((current) => current.map((session) => session.id === sessionId ? { ...session, streaming: false, goal: result.goal ?? session.goal ?? null } : session))
     notify(t('已停止当前运行'), 'info')
   }
@@ -2016,6 +2033,7 @@ function FocusSession({ session, messages, messageStart, hasOlder, loadingOlder,
       if (!queued) return
       setValue('')
       setGoalArmed(false)
+      requestAnimationFrame(() => scrollToBottom('smooth'))
       if (promptRef.current) promptRef.current.style.height = 'auto'
       return
     }
