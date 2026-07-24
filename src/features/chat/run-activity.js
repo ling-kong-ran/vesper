@@ -144,7 +144,7 @@ export function activityDurationMs(activity, runStartedAt, now = Date.now()) {
   const startedAt = activity?.startedAt || agent.startedAt || activity?.updatedAt || runStartedAt
   let finishedAt = activity?.finishedAt || agent.completedAt || ''
   if (!finishedAt && activity?.type === 'tool' && activity.status && activity.status !== 'running') finishedAt = activity.updatedAt
-  if (!finishedAt && activity?.type === 'agent' && !['starting', 'running'].includes(agent.status)) finishedAt = agent.lastActivityAt || activity.updatedAt
+  if (!finishedAt && activity?.type === 'agent' && !['queued', 'starting', 'running'].includes(agent.status)) finishedAt = agent.lastActivityAt || activity.updatedAt
   if (!finishedAt && activity?.type === 'plan') finishedAt = activity.updatedAt
   return runDurationMs(startedAt, finishedAt, now)
 }

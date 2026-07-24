@@ -995,7 +995,7 @@ function ChatPage({ notify, browserNotify, registerPrimaryAction, pendingAsset, 
     const poll = () => {
       if (!active) return
       for (const [id, state] of Object.entries(sessionStatesRef.current)) {
-        const hasActiveAgents = state.agents?.some((agent) => ['starting', 'running'].includes(agent.status))
+        const hasActiveAgents = state.agents?.some((agent) => ['queued', 'starting', 'running'].includes(agent.status))
         if (state.recovering || state.approvals?.length || hasActiveAgents) void syncLiveSession(id)
       }
     }
