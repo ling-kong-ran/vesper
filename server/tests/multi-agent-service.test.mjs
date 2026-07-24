@@ -264,6 +264,23 @@ test('Codex-style Agent tools replace delegate_task and stay hidden from the plu
   assert.match(result.content[0].text, /Started \/root\/inspect_1 in the background/)
 })
 
+test('background Agents do not instruct the parent to poll or wait by default', () => {
+  const tools = createMultiAgentTools({ multiAgentRuntime: {} })
+  const spawn = tools.find((tool) => tool.name === 'spawn_agent')
+  const list = tools.find((tool) => tool.name === 'list_agents')
+  const wait = tools.find((tool) => tool.name === 'wait_agent')
+  const spawnGuidance = spawn.promptGuidelines.join('\n')
+  const listGuidance = list.promptGuidelines.join('\n')
+  const waitGuidance = wait.promptGuidelines.join('\n')
+
+  assert.match(spawnGuidance, /must not delay replying to the user/)
+  assert.match(spawnGuidance, /do not call list_agents or wait_agent merely to monitor progress/)
+  assert.match(spawnGuidance, /spawning other independent Agents/)
+  assert.match(listGuidance, /Do not call list_agents repeatedly/)
+  assert.match(waitGuidance, /Never call wait_agent repeatedly after a timeout/)
+  assert.match(waitGuidance, /reply while Agents continue in the background/)
+})
+
 test('new installations enable the complete tool catalog by default', () => {
   assert.deepEqual(toolsFromConfig({}), TOOL_PRESETS.full)
   assert.deepEqual(new Set(TOOL_PRESETS.full), new Set(TOOL_CATALOG.map((tool) => tool.id)))

@@ -71,7 +71,9 @@ function createSpawnAgentTool({ multiAgentRuntime }) {
       'Do not delegate the immediate critical-path step and then wait idly for it.',
       'Provide a self-contained message with every constraint and piece of context the Agent needs; Agents never inherit the parent transcript.',
       'Agents inherit the current model, current reasoning level, tools, permission mode, and workspace boundary. They cannot recursively spawn more Agents.',
-      'Continue useful non-overlapping work after spawning, then use wait_agent to collect every delegated result needed before giving the final answer.',
+      'A spawned Agent is a background task. Its running state must not delay replying to the user, handling later user instructions, or spawning other independent Agents.',
+      'After spawning, do not call list_agents or wait_agent merely to monitor progress. Completed results are persisted and delivered through the parent mailbox on a later parent turn.',
+      'Use wait_agent only when the user explicitly asks you to wait for a specific Agent result before replying.',
     ],
     parameters: Type.Object({
       taskName: Type.String({ minLength: 1, maxLength: 48, description: 'Stable short task name using letters, digits, hyphens, or underscores.' }),
@@ -90,7 +92,12 @@ function createListAgentsTool({ multiAgentRuntime }) {
   return defineTool({
     name: 'list_agents',
     label: 'List Agents',
-    description: 'List Agents created by the current primary session, including live and completed states.',
+    description: 'List Agents created by the current primary session, including live and completed states. Use only for an explicit status inspection, not periodic monitoring.',
+    promptSnippet: 'Inspect Subagent status only when the user explicitly requests it',
+    promptGuidelines: [
+      'Do not call list_agents repeatedly to monitor background Agents.',
+      'Running Agents do not block the parent from replying or starting other independent Agents.',
+    ],
     parameters: Type.Object({}),
     async execute() {
       const agents = await requireRuntime(multiAgentRuntime, 'list')()
@@ -135,7 +142,13 @@ function createWaitAgentTool({ multiAgentRuntime }) {
   return defineTool({
     name: 'wait_agent',
     label: 'Wait Agent',
-    description: 'Wait briefly for an Agent to reach a terminal state. This is not the Agent total-duration limit.',
+    description: 'Wait briefly for an Agent to reach a terminal state only when the user explicitly asks to wait. Never use this tool as a polling loop.',
+    promptSnippet: 'Wait for a Subagent only when the user explicitly requires its result before the current reply',
+    promptGuidelines: [
+      'Do not use wait_agent merely because an Agent is running.',
+      'Never call wait_agent repeatedly after a timeout to poll for completion.',
+      'The parent should normally reply while Agents continue in the background; their completed results are delivered through the parent mailbox on a later turn.',
+    ],
     parameters: Type.Object({
       target: Type.Optional(Type.String({ minLength: 1, description: 'Optional Agent id, task name, or canonical name. Without a target, returns when any currently active Agent finishes.' })),
       timeoutMs: Type.Optional(Type.Integer({ minimum: 250, maximum: 30_000, description: 'Maximum time to wait for completion. Defaults to 15000 ms.' })),
