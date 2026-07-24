@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { deriveRunActivity, formatRunDuration, groupToolCalls, latestUnrecoveredToolError, pushCurrentActivity, RUN_INACTIVITY_THRESHOLD_MS, settleToolCalls, taskListChanges } from '../../src/features/chat/run-activity.js'
+import { activityDurationMs, deriveRunActivity, formatRunDuration, groupToolCalls, latestUnrecoveredToolError, pushCurrentActivity, RUN_INACTIVITY_THRESHOLD_MS, settleToolCalls, taskListChanges } from '../../src/features/chat/run-activity.js'
 
 test('chat activity derives meaningful stages and inactivity states', () => {
   const now = Date.parse('2026-07-20T10:00:20.000Z')
@@ -53,6 +53,16 @@ test('chat activity formats short and long elapsed time', () => {
   assert.equal(formatRunDuration(9_900, 'zh-CN'), '9 秒')
   assert.equal(formatRunDuration(65_000, 'zh-CN'), '1:05')
   assert.equal(formatRunDuration(3_665_000, 'en-US'), '1:01:05')
+})
+
+test('completed activity durations freeze while running activities keep advancing', () => {
+  const startedAt = '2026-07-20T10:00:00.000Z'
+  const finishedAt = '2026-07-20T10:00:05.000Z'
+  const now = Date.parse('2026-07-20T10:01:00.000Z')
+  assert.equal(activityDurationMs({ type: 'tool', status: 'done', startedAt, finishedAt }, startedAt, now), 5_000)
+  assert.equal(activityDurationMs({ type: 'tool', status: 'done', startedAt, updatedAt: finishedAt }, startedAt, now), 5_000)
+  assert.equal(activityDurationMs({ type: 'tool', status: 'running', startedAt }, startedAt, now), 60_000)
+  assert.equal(activityDurationMs({ type: 'agent', agent: { status: 'completed', startedAt, completedAt: finishedAt } }, startedAt, now), 5_000)
 })
 
 test('current activity feed updates tools in place and evicts its oldest entries', () => {

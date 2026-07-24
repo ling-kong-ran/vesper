@@ -75,6 +75,41 @@ test('live activity replaces plan and Agent status without retaining terminal Ag
   assert.equal(update.data.currentActivity.taskList, taskList)
 })
 
+test('terminal background Agent results notify a running parent without visible queued input', async () => {
+  const runtime = new AgentRuntimeService({ cwd: process.cwd(), dataDir: process.cwd() })
+  const steering = []
+  const acknowledged = []
+  const session = {
+    isStreaming: true,
+    async steer(message) { steering.push(message) },
+    getSteeringMessages: () => steering,
+    getFollowUpMessages: () => [],
+  }
+  runtime.sessions.set('session-parent', { session })
+  runtime.liveSessions.set('session-parent', { streaming: true, queuedInputs: [] })
+  runtime.multiAgents = {
+    acknowledge: async (sessionId, agents) => acknowledged.push({ sessionId, agents }),
+  }
+  const agent = {
+    id: 'agent-terminal',
+    canonicalName: '/root/review_1',
+    status: 'failed',
+    message: 'Review the code.',
+    error: 'Review failed.',
+    resultVersion: 1,
+  }
+
+  assert.equal(await runtime.notifyParentOfAgentTerminal('session-parent', agent), true)
+  assert.match(steering[0], /background Agent reached a terminal state/)
+  assert.match(steering[0], /Review failed/)
+  assert.deepEqual(acknowledged, [{ sessionId: 'session-parent', agents: [agent] }])
+  assert.deepEqual(runtime.liveSessions.get('session-parent').queuedInputs, [])
+
+  session.isStreaming = false
+  assert.equal(await runtime.notifyParentOfAgentTerminal('session-parent', { ...agent, id: 'agent-idle' }), false)
+  assert.equal(steering.length, 1)
+})
+
 test('stream completion publishes an authoritative terminal snapshot', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vesper-live-terminal-'))
   t.after(() => rm(directory, { recursive: true, force: true }))

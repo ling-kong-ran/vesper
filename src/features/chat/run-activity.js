@@ -128,6 +128,16 @@ export function runDurationMs(startedAt, finishedAt, now = Date.now()) {
   return Math.max(0, end - start)
 }
 
+export function activityDurationMs(activity, runStartedAt, now = Date.now()) {
+  const agent = activity?.type === 'agent' ? activity.agent || {} : {}
+  const startedAt = activity?.startedAt || agent.startedAt || activity?.updatedAt || runStartedAt
+  let finishedAt = activity?.finishedAt || agent.completedAt || ''
+  if (!finishedAt && activity?.type === 'tool' && activity.status && activity.status !== 'running') finishedAt = activity.updatedAt
+  if (!finishedAt && activity?.type === 'agent' && !['starting', 'running'].includes(agent.status)) finishedAt = agent.lastActivityAt || activity.updatedAt
+  if (!finishedAt && activity?.type === 'plan') finishedAt = activity.updatedAt
+  return runDurationMs(startedAt, finishedAt, now)
+}
+
 export function formatRunDuration(milliseconds, language = 'zh-CN') {
   const totalSeconds = Math.max(0, Math.floor((Number(milliseconds) || 0) / 1000))
   if (totalSeconds < 60) return language === 'en-US' ? `${totalSeconds}s` : `${totalSeconds} 秒`

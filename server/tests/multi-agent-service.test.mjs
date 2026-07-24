@@ -233,6 +233,31 @@ test('wait_agent ignores progress noise, returns on terminal state, and abortPar
   await waitFor(() => secondService.list('parent-1')[0]?.status === 'interrupted', 'parent abort')
 })
 
+test('completed, failed, and interrupted Agents emit terminal callbacks without polling', async () => {
+  const terminal = []
+
+  const completedSession = createFakeSession({
+    onPrompt: async ({ session }) => session.messages.push({ role: 'assistant', content: [{ type: 'text', text: 'done' }] }),
+  })
+  const { service: completedService } = createService(completedSession)
+  await completedService.spawn(baseInput({ taskName: 'complete', onTerminal: (agent) => terminal.push(agent) }))
+  await waitFor(() => terminal.some((agent) => agent.status === 'completed'), 'completed terminal callback')
+
+  const failedSession = createFakeSession({ onPrompt: async () => { throw new Error('child failed') } })
+  const { service: failedService } = createService(failedSession)
+  await failedService.spawn(baseInput({ taskName: 'fail', onTerminal: (agent) => terminal.push(agent) }))
+  await waitFor(() => terminal.some((agent) => agent.status === 'failed'), 'failed terminal callback')
+
+  const gate = deferred()
+  const interruptedSession = createFakeSession({ onPrompt: async () => gate.promise })
+  const { service: interruptedService } = createService(interruptedSession)
+  const started = await interruptedService.spawn(baseInput({ taskName: 'interrupt', onTerminal: (agent) => terminal.push(agent) }))
+  await waitFor(() => interruptedService.list('parent-1')[0]?.status === 'running', 'running Agent')
+  interruptedService.interrupt('parent-1', started.id)
+  await waitFor(() => terminal.some((agent) => agent.status === 'interrupted'), 'interrupted terminal callback')
+  gate.resolve()
+})
+
 test('Agent output is UTF-8 safe and bounded to the tool-output limit', async () => {
   const largeOutput = '你'.repeat(20_000)
   const session = createFakeSession({

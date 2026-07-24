@@ -8,7 +8,7 @@ import {
 } from 'lucide-react'
 import { useI18n } from '../../app/use-i18n.js'
 import { formatTokenCount } from '../../lib/format.js'
-import { formatRunDuration, runDurationMs } from './run-activity.js'
+import { activityDurationMs, formatRunDuration, runDurationMs } from './run-activity.js'
 
 const EMPTY_LIST = []
 
@@ -200,7 +200,7 @@ function AgentRunActivity({ streaming, text, currentActivity, activityFeed = EMP
     {activityFeed.length > 0 && <div className="agent-run-feed">
       {activityFeed.map((activity, index) => {
         const presentation = activityPresentation(activity, { t, text, compaction, error, stopped, notice, lastActivityAt, now })
-        const duration = formatRunDuration(runDurationMs(presentation.startedAt || startedAt, finishedAt, now), language)
+        const duration = formatRunDuration(activityDurationMs(activity, startedAt, now), language)
         const key = `${activity.type}-${activity.id || activity.agent?.id || activity.updatedAt || index}-${activity.status || activity.stage || activity.agent?.status || ''}`
         return <div className={`agent-run-summary ${presentation.tone} ${index === activityFeed.length - 1 ? 'current' : ''}`} key={key}>
           <span className="agent-run-status-icon"><ActivityIcon tone={presentation.tone} /></span>

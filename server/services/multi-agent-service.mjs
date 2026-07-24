@@ -165,6 +165,7 @@ function restoredRecord(value) {
     onProgress: null,
     onSession: null,
     onCompleted: null,
+    onTerminal: null,
   }
 }
 
@@ -451,7 +452,7 @@ export class MultiAgentService {
     })
   }
 
-  async spawn({ parentSessionId, cwd, model, thinkingLevel, taskName, message, allowedTools, customTools, maxDurationSeconds, maxToolCalls, onProgress, onSession, onCompleted } = {}) {
+  async spawn({ parentSessionId, cwd, model, thinkingLevel, taskName, message, allowedTools, customTools, maxDurationSeconds, maxToolCalls, onProgress, onSession, onCompleted, onTerminal } = {}) {
     if (!parentSessionId) throw new Error('Agent requires a parent session.')
     if (!cwd) throw new Error('Agent requires a workspace directory.')
     if (!model) throw new Error('Agent requires an active parent model.')
@@ -505,6 +506,7 @@ export class MultiAgentService {
       onProgress,
       onSession,
       onCompleted,
+      onTerminal,
     }
     this.records.set(id, record)
     this.prune(parentSessionId)
@@ -623,7 +625,9 @@ export class MultiAgentService {
       record.resultVersion += 1
       this.emit(record, record.onProgress)
       await this.save()
-      try { await record.onCompleted?.(publicRecord(record)) } catch {}
+      const terminal = publicRecord(record)
+      try { await record.onCompleted?.(terminal) } catch {}
+      try { await record.onTerminal?.(terminal) } catch {}
     } catch (error) {
       if (!isCurrent()) return
       const wasTerminal = TERMINAL_AGENT_STATUSES.has(record.status) && Boolean(record.completedAt)
@@ -636,6 +640,9 @@ export class MultiAgentService {
       record.pendingMessages = []
       this.emit(record, record.onProgress)
       await this.save()
+      if (!wasTerminal) {
+        try { await record.onTerminal?.(publicRecord(record)) } catch {}
+      }
     } finally {
       this.clearRunTimer(record, generation)
     }
@@ -726,7 +733,12 @@ export class MultiAgentService {
       if (aborting?.catch) void aborting.catch(() => {})
     } catch {}
     this.emit(record, record.onProgress)
-    return publicRecord(record)
+    const terminal = publicRecord(record)
+    try {
+      const notifying = record.onTerminal?.(terminal)
+      if (notifying?.catch) void notifying.catch(() => {})
+    } catch {}
+    return terminal
   }
 
   abortParent(parentSessionId) {
