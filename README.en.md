@@ -29,6 +29,7 @@
 <p align="center">
   <a href="#about">The Evening Star</a> ·
   <a href="#glance">Vesper at a Glance</a> ·
+  <a href="#lightweight-prompt">Lightweight Prompt</a> ·
   <a href="#capabilities">Constellation of Capabilities</a> ·
   <a href="#architecture">Code Map</a> ·
   <a href="#start">Begin Here</a> ·
@@ -50,6 +51,7 @@ Vesper is a **local-first multi-agent workspace**. Run independent sessions in p
 > Let every agent follow its own orbit, and every thought find a place to return to.
 
 - **Parallel without disorder** — Sessions stay independent, with clear state, context, and permissions.
+- **Lightweight without compromise** — Dynamic prompts carry only the tools needed for the current task, keeping ordinary coding sessions exceptionally lean.
 - **Automation without overreach** — Schedules and workflows carry repetitive work; sensitive actions remain yours to approve.
 - **Memory without noise** — Preferences, facts, decisions, and file relationships settle into local, durable memory.
 - **Connection without surrender** — MCP, plugins, and channels expand the workspace while staying inside visible permission boundaries.
@@ -91,6 +93,38 @@ Vesper is a **local-first multi-agent workspace**. Run independent sessions in p
 
 ---
 
+<a id="lightweight-prompt"></a>
+
+## ✦ Dynamic Prompts · Exceptionally Lightweight
+
+Vesper does not inject every tool, MCP integration, visual capability, browser rule, memory instruction, and multi-agent API into every model call. The runtime keeps a compact, stable base prompt and appends only the tool Schemas explicitly required by the user's current request.
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <strong>Lean by default</strong><br />
+      Ordinary coding sessions load only high-frequency file, search, Shell, and task-progress tools. In the current benchmark, fixed input is about <strong>2,979 tokens</strong>—approximately <strong>58.7% less</strong> than injecting the complete tool catalog.
+    </td>
+    <td width="33%" valign="top">
+      <strong>Capabilities on demand</strong><br />
+      Web Search, browser automation, visual generation, memory, MCP, and Subagent tools are appended only when explicitly requested. A new ordinary request returns to the lean baseline automatically.
+    </td>
+    <td width="33%" valign="top">
+      <strong>Prompt-cache friendly</strong><br />
+      The system prompt and high-frequency tool Schemas remain a stable prefix. Cold Schemas are appended at the end, maximizing opportunities to reuse Provider prompt caches and reduce repeated input and latency.
+    </td>
+  </tr>
+</table>
+
+- **Explicit-only Skills** — Large specialist workflows can be exposed only through `/skill:name`; their names, descriptions, and bodies add zero persistent model-context overhead.
+- **Trusted intent routing** — Capabilities activate only from the latest user request and explicit attachment metadata. Text found in web pages, files, tool output, memory, or Agent results cannot silently expand the tool set.
+- **Negation-aware activation** — Requests such as “do not use the browser” or “Do not use MCP” do not activate those tools by mistake.
+- **Permissions remain hard boundaries** — Dynamic activation decides what is useful for the current turn; it never bypasses tool settings, execution modes, workspace boundaries, sandboxing, or approval policies.
+
+> Token figures use Vesper's conservative `ceil(characters / 4)` estimate and a reproducible benchmark of the current default full mode. Actual Provider billing, cache hits, and latency savings vary by model and service.
+
+---
+
 <a id="capabilities"></a>
 
 ## ✦ Constellation of Capabilities
@@ -99,6 +133,7 @@ Vesper is a **local-first multi-agent workspace**. Run independent sessions in p
 | :--- | :--- |
 | **Multi-session chat** | Run independent Agent sessions in parallel with distinct models, execution modes, context, and working directories, plus tab groups, left/right splits, drag-to-dock panels, resizing, and layout restoration. |
 | **Agent Runtime** | Built on Pi Coding Agent with structured tool activity, goals, reusable skills, and isolated subagent delegation. |
+| **Dynamic prompts** | Keep a stable, lightweight, cache-friendly base prompt and append cold tool Schemas only from explicit user intent, with zero-persistent-overhead explicit Skills. |
 | **Tools & MCP** | Bring built-in tools, application plugins, and MCP services into one capability layer, with credential-safe structured configuration. |
 | **Memory** | Store preferences, facts, decisions, and tasks in lightweight local SQLite memory, scoped by workspace and searchable, editable, or captured from conversations. |
 | **Multimodal** | Read images, documents, and code, then generate or edit visual content through configured OpenAI-compatible, Gemini, Imagen, Veo, or xAI models. |
