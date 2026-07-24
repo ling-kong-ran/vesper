@@ -38,6 +38,7 @@ import { createAppTools, createMultiAgentTools, TOOL_PRESETS, toolsFromConfig } 
 import { createGoalTools, GOAL_TOOL_NAMES } from '../tools/app/goal.mjs'
 import { createTaskListTools, TASK_LIST_TOOL_NAMES } from '../tools/app/task-list.mjs'
 import { createVesperBashTool } from '../tools/sandboxed-bash.mjs'
+import { explicitlyRequestedToolNames, selectedToolNames } from '../tools/tool-activation.mjs'
 import { DEFAULT_EXECUTION_MODE, EXECUTION_MODES, filterToolsForExecutionMode, migrateLegacyExecutionMode, normalizeExecutionMode, permissionModeForExecutionMode } from '../security/execution-mode.mjs'
 import { createStreamingSecretRedactor, installSessionPersistenceRedaction, redactPersistedSessionFiles, redactSecretText, redactSecretValue } from '../security/secret-redaction.mjs'
 import { applyVesperSystemPrompt, vesperPromptExtension } from '../prompts/vesper-system-prompt.mjs'
@@ -691,13 +692,41 @@ export class AgentRuntimeService {
   syncGoalTools(value, goal) {
     if (!value?.session) return
     const mode = this.getSessionExecutionMode(value.session.sessionId)
-    const names = filterToolsForExecutionMode([
+    const availableToolNames = [
       ...(value.baseToolNames || []),
       ...TASK_LIST_TOOL_NAMES,
       ...MULTI_AGENT_TOOL_NAMES,
-      ...(goal?.status === 'active' ? GOAL_TOOL_NAMES : []),
-    ], mode, (toolName) => this.mcp.getToolRisk(toolName))
-    value.session.setActiveToolsByName(names)
+      ...GOAL_TOOL_NAMES,
+    ]
+    const names = selectedToolNames({
+      availableToolNames,
+      requestedToolNames: value.requestedToolNames || [],
+      goalToolNames: GOAL_TOOL_NAMES,
+      goalActive: goal?.status === 'active',
+    })
+    value.session.setActiveToolsByName(filterToolsForExecutionMode(
+      names,
+      mode,
+      (toolName) => this.mcp.getToolRisk(toolName),
+    ))
+  }
+
+  selectToolsForMessage(value, message, { attachments = [], preserveRequested = false } = {}) {
+    if (!value?.session) return []
+    const requested = explicitlyRequestedToolNames(message, {
+      availableToolNames: [
+        ...(value.baseToolNames || []),
+        ...MULTI_AGENT_TOOL_NAMES,
+      ],
+      mcpTools: value.mcpTools || [],
+      attachments,
+    })
+    value.requestedToolNames = preserveRequested
+      ? [...new Set([...(value.requestedToolNames || []), ...requested])]
+      : requested
+    this.syncGoalTools(value, this.goals.get(value.session.sessionId))
+    applyVesperSystemPrompt(value.session, value.session.model)
+    return value.session.getActiveToolNames()
   }
 
   async pauseSessionGoal(id) {
@@ -1443,11 +1472,14 @@ export class AgentRuntimeService {
       this.emitGoalUpdate(runtimeSession.sessionId, updatedGoal)
       await accounting
     }
-    const parentActiveToolNames = () => filterToolsForExecutionMode(
-      baseToolNames,
-      this.getSessionExecutionMode(runtimeSessionId),
-      (toolName) => this.mcp.getToolRisk(toolName),
-    )
+    const parentActiveToolNames = () => {
+      const active = new Set(runtimeSession?.getActiveToolNames?.() || [])
+      return filterToolsForExecutionMode(
+        baseToolNames.filter((name) => active.has(name)),
+        this.getSessionExecutionMode(runtimeSessionId),
+        (toolName) => this.mcp.getToolRisk(toolName),
+      )
+    }
     const multiAgentRuntime = {
       spawn: (input) => {
         if (!runtimeSession?.model) throw new Error('当前会话没有可用模型，无法启动 Agent。')
@@ -1523,6 +1555,8 @@ export class AgentRuntimeService {
       cwd: effectiveCwd,
       baseToolNames,
       enabledTools,
+      mcpTools: mcpTools.map((tool) => ({ name: tool.name, label: tool.label || '' })),
+      requestedToolNames: [],
       runtimeVersion: this.sessionRuntimeVersion,
     }
     runtimeValue = value
@@ -1542,6 +1576,7 @@ export class AgentRuntimeService {
     if (text.length > 12_000) throw new Error('运行中追加消息不能超过 12000 个字符。')
     if (!value.session.isStreaming) throw new Error('当前会话已经结束运行，请作为新消息发送。')
     const streamingBehavior = behavior === 'followUp' ? 'followUp' : 'steer'
+    this.selectToolsForMessage(value, text, { preserveRequested: true })
     await value.session.prompt(text, { streamingBehavior, source: 'interactive' })
     value.modified = new Date().toISOString()
     return {
@@ -1570,7 +1605,7 @@ export class AgentRuntimeService {
         ? await this.goals.resume(session.sessionId)
         : await this.goals.start(session.sessionId, { objective: message })
     }
-    this.syncGoalTools(value, goal)
+    this.selectToolsForMessage(value, message, { attachments })
     // Drop stale plans from previous turns unless a Goal is actively driving multi-turn work.
     const keepTaskList = goal?.status === 'active' || isGoalContinuationMessage(message)
     if (!keepTaskList) await this.taskLists.replace(session.sessionId, [])

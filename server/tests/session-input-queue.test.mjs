@@ -37,6 +37,8 @@ test('running sessions accept steering and follow-up user messages through the P
     },
   }
   const runtime = new AgentRuntimeService({ cwd: process.cwd(), dataDir: process.cwd() })
+  const selections = []
+  runtime.selectToolsForMessage = (_value, message, options) => { selections.push({ message, options }) }
   runtime.sessions.set('session-1', { session, modified: '' })
 
   assert.deepEqual(await runtime.queueSessionMessage('session-1', {
@@ -50,6 +52,7 @@ test('running sessions accept steering and follow-up user messages through the P
   })
   assert.equal(calls[0].message, 'Focus on the Windows path.')
   assert.deepEqual(calls[0].options, { streamingBehavior: 'steer', source: 'interactive' })
+  assert.deepEqual(selections[0], { message: 'Focus on the Windows path.', options: { preserveRequested: true } })
 
   await runtime.queueSessionMessage('session-1', { message: 'Then update the tests.', behavior: 'followUp' })
   assert.equal(calls[1].options.streamingBehavior, 'followUp')

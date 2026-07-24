@@ -7,7 +7,7 @@ import { defineTool, SessionManager } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
 import { AgentRuntimeService } from '../runtime/agent-runtime.mjs'
 
-test('main and child Agent runtimes receive filtered Pi skills while MCP definitions become active tools', async (t) => {
+test('main runtime keeps cold MCP tools dormant until explicitly requested while child resources remain available', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'vesper-runtime-resources-'))
   let runtime
   t.after(async () => {
@@ -35,9 +35,21 @@ test('main and child Agent runtimes receive filtered Pi skills while MCP definit
   assert.match(value.session.agent.state.systemPrompt, /Application: Vesper/)
   assert.match(value.session.agent.state.systemPrompt, /Active model:/)
   assert.doesNotMatch(value.session.agent.state.systemPrompt, /You are Vesper/i)
+  assert.equal(value.session.getActiveToolNames().includes('mcp_fixture_echo_12345678'), false)
+  assert.equal(value.session.getActiveToolNames().includes('mcp_list'), false)
+  assert.equal(value.session.getActiveToolNames().includes('mcp_manage'), false)
+  assert.ok(value.session.getActiveToolNames().includes('read'))
+  assert.ok(value.session.getActiveToolNames().includes('update_task_list'))
+
+  runtime.selectToolsForMessage(value, 'Use the MCP fixture echo tool for this task.')
   assert.ok(value.session.getActiveToolNames().includes('mcp_fixture_echo_12345678'))
   assert.ok(value.session.getActiveToolNames().includes('mcp_list'))
   assert.ok(value.session.getActiveToolNames().includes('mcp_manage'))
+
+  runtime.selectToolsForMessage(value, 'Now update the local source file.')
+  assert.equal(value.session.getActiveToolNames().includes('mcp_fixture_echo_12345678'), false)
+  assert.equal(value.session.getActiveToolNames().includes('mcp_list'), false)
+  assert.equal(value.session.getActiveToolNames().includes('mcp_manage'), false)
   assert.equal(value.session.hasExtensionHandlers('tool_result'), false)
   assert.equal(value.session.hasExtensionHandlers('message_end'), false)
 
